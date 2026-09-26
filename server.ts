@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { Type } from '@google/genai';
 import {
@@ -19,8 +21,117 @@ const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3-flash-p
 
 app.use(express.json({ limit: '25mb' }));
 
-// Runtime Gemini API key configured by user in UI (falls back to process.env.GEMINI_API_KEY)
-let runtimeGeminiApiKey: string = '';
+// Persistent Cloud Workspace Storage (shared across all browsers and devices)
+interface ServerCloudWorkspace {
+  version: number;
+  updatedAtMs: number;
+  updatedBy?: string;
+  initialized: boolean;
+  categories?: string[];
+  debtors?: string[];
+  rolePermissions?: Record<string, any>;
+  products: any[];
+  bills: any[];
+  billItems: any[];
+  deductions: any[];
+  returns: any[];
+  staffAccounts?: any[];
+  geminiApiKey?: string;
+}
+
+const DATA_DIR = path.join(process.cwd(), '.data');
+const PRIMARY_DB_FILE = path.join(DATA_DIR, 'vqbill_cloud_db.json');
+const FALLBACK_DB_FILE = path.join(os.tmpdir(), 'vqbill_cloud_db.json');
+
+function loadCloudWorkspaceFromDisk(): ServerCloudWorkspace {
+  const candidates = [PRIMARY_DB_FILE, FALLBACK_DB_FILE];
+  for (const filePath of candidates) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            version: Number(parsed.version) || 0,
+            updatedAtMs: Number(parsed.updatedAtMs) || 0,
+            updatedBy: parsed.updatedBy || 'system',
+            initialized: Boolean(parsed.initialized),
+            categories: Array.isArray(parsed.categories) ? parsed.categories : undefined,
+            debtors: Array.isArray(parsed.debtors) ? parsed.debtors : undefined,
+            rolePermissions: parsed.rolePermissions || undefined,
+            products: Array.isArray(parsed.products) ? parsed.products : [],
+            bills: Array.isArray(parsed.bills) ? parsed.bills : [],
+            billItems: Array.isArray(parsed.billItems) ? parsed.billItems : [],
+            deductions: Array.isArray(parsed.deductions) ? parsed.deductions : [],
+            returns: Array.isArray(parsed.returns) ? parsed.returns : [],
+            staffAccounts: Array.isArray(parsed.staffAccounts)
+              ? parsed.staffAccounts
+              : undefined,
+            geminiApiKey:
+              typeof parsed.geminiApiKey === 'string' ? parsed.geminiApiKey : '',
+          };
+        }
+      }
+    } catch {
+      // Try next candidate
+    }
+  }
+  return {
+    version: 0,
+    updatedAtMs: 0,
+    initialized: false,
+    products: [],
+    bills: [],
+    billItems: [],
+    deductions: [],
+    returns: [],
+    geminiApiKey: '',
+  };
+}
+
+let cloudWorkspace: ServerCloudWorkspace = loadCloudWorkspaceFromDisk();
+
+function saveCloudWorkspaceToDisk(state: ServerCloudWorkspace): void {
+  const payload = JSON.stringify(state);
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(PRIMARY_DB_FILE, payload, 'utf-8');
+  } catch {
+    // Ignore if primary dir is read-only
+  }
+  try {
+    fs.writeFileSync(FALLBACK_DB_FILE, payload, 'utf-8');
+  } catch {
+    // Ignore tmp error
+  }
+}
+
+function mergeById<T extends { id: string; updatedAtMs?: number }>(
+  serverList: T[],
+  clientList: T[],
+  excludeSeedPrefix?: string
+): T[] {
+  const map = new Map<string, T>();
+  for (const item of serverList || []) {
+    if (item && item.id) map.set(item.id, item);
+  }
+  for (const item of clientList || []) {
+    if (!item || !item.id) continue;
+    if (excludeSeedPrefix && item.id.startsWith(excludeSeedPrefix) && map.size > 0) {
+      continue;
+    }
+    const existing = map.get(item.id);
+    if (!existing || (item.updatedAtMs || 0) > (existing.updatedAtMs || 0)) {
+      map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
+// Runtime Gemini API key configured by user in UI (falls back to cloudWorkspace or process.env.GEMINI_API_KEY)
+let runtimeGeminiApiKey: string = cloudWorkspace.geminiApiKey || '';
 
 function resolveApiKey(reqKey?: unknown): string {
   if (typeof reqKey === 'string' && reqKey.trim()) {
@@ -361,6 +472,200 @@ function sanitizeExtractedBill(
   };
 }
 
+// 0. Cloud Workspace Multi-Device / Multi-Browser Sync Endpoints
+app.get('/api/workspace/version', (_req, res) => {
+  res.json({
+    ok: true,
+    version: cloudWorkspace.version,
+    updatedAtMs: cloudWorkspace.updatedAtMs,
+    updatedBy: cloudWorkspace.updatedBy || 'system',
+    initialized: cloudWorkspace.initialized,
+    billsCount: cloudWorkspace.bills?.length || 0,
+    productsCount: cloudWorkspace.products?.length || 0,
+  });
+});
+
+app.get('/api/workspace', (_req, res) => {
+  const { geminiApiKey: _hidden, ...publicWorkspace } = cloudWorkspace;
+  res.json({
+    ok: true,
+    workspace: publicWorkspace,
+  });
+});
+
+app.post('/api/workspace', (req, res) => {
+  try {
+    const { snapshot, mode = 'replace', updatedBy = 'client' } = req.body || {};
+    if (!snapshot || typeof snapshot !== 'object') {
+      res.status(400).json({ ok: false, error: 'Snapshot không hợp lệ.' });
+      return;
+    }
+
+    const now = Date.now();
+
+    if (mode === 'merge_initial') {
+      if (!cloudWorkspace.initialized) {
+        if (snapshot.initialized) {
+          cloudWorkspace = {
+            ...cloudWorkspace,
+            version: (cloudWorkspace.version || 0) + 1,
+            updatedAtMs: now,
+            updatedBy,
+            initialized: true,
+            categories: Array.isArray(snapshot.categories)
+              ? snapshot.categories
+              : cloudWorkspace.categories,
+            debtors: Array.isArray(snapshot.debtors)
+              ? snapshot.debtors
+              : cloudWorkspace.debtors,
+            rolePermissions:
+              snapshot.rolePermissions || cloudWorkspace.rolePermissions,
+            products: Array.isArray(snapshot.products) ? snapshot.products : [],
+            bills: Array.isArray(snapshot.bills) ? snapshot.bills : [],
+            billItems: Array.isArray(snapshot.billItems) ? snapshot.billItems : [],
+            deductions: Array.isArray(snapshot.deductions) ? snapshot.deductions : [],
+            returns: Array.isArray(snapshot.returns) ? snapshot.returns : [],
+            staffAccounts: Array.isArray(snapshot.staffAccounts)
+              ? snapshot.staffAccounts
+              : cloudWorkspace.staffAccounts,
+          };
+          saveCloudWorkspaceToDisk(cloudWorkspace);
+        }
+      } else if (snapshot.initialized) {
+        // Server already initialized, merge any non-seed user records from this browser's first connect
+        const mergedBills = mergeById(
+          cloudWorkspace.bills,
+          snapshot.bills || [],
+          'bill_seed_'
+        );
+        const validBillIds = new Set(mergedBills.map((b: any) => b.id));
+        const clientNonSeedItems = (snapshot.billItems || []).filter(
+          (it: any) =>
+            it &&
+            validBillIds.has(it.billId) &&
+            !String(it.id || '').startsWith('bill_seed_')
+        );
+        const mergedBillItems = mergeById(
+          cloudWorkspace.billItems,
+          clientNonSeedItems
+        );
+        const mergedProducts = mergeById(
+          cloudWorkspace.products,
+          snapshot.products || [],
+          'prod_seed_'
+        );
+        const mergedDeductions = mergeById(
+          cloudWorkspace.deductions,
+          snapshot.deductions || [],
+          'ded_seed_'
+        );
+        const mergedReturns = mergeById(
+          cloudWorkspace.returns,
+          snapshot.returns || [],
+          'ret_seed_'
+        );
+        const mergedStaff = mergeById(
+          cloudWorkspace.staffAccounts || [],
+          snapshot.staffAccounts || []
+        );
+        const mergedCategories = Array.from(
+          new Set([
+            ...(cloudWorkspace.categories || []),
+            ...(Array.isArray(snapshot.categories) ? snapshot.categories : []),
+          ])
+        );
+        const mergedDebtors = Array.from(
+          new Set([
+            ...(cloudWorkspace.debtors || []),
+            ...(Array.isArray(snapshot.debtors) ? snapshot.debtors : []),
+          ])
+        );
+
+        const hasChanges =
+          mergedBills.length !== cloudWorkspace.bills.length ||
+          mergedProducts.length !== cloudWorkspace.products.length ||
+          mergedDeductions.length !== cloudWorkspace.deductions.length ||
+          mergedReturns.length !== cloudWorkspace.returns.length;
+
+        if (hasChanges) {
+          cloudWorkspace = {
+            ...cloudWorkspace,
+            version: (cloudWorkspace.version || 0) + 1,
+            updatedAtMs: now,
+            updatedBy,
+            initialized: true,
+            categories:
+              mergedCategories.length > 0
+                ? mergedCategories
+                : cloudWorkspace.categories,
+            debtors:
+              mergedDebtors.length > 0 ? mergedDebtors : cloudWorkspace.debtors,
+            rolePermissions:
+              cloudWorkspace.rolePermissions || snapshot.rolePermissions,
+            products: mergedProducts,
+            bills: mergedBills,
+            billItems: mergedBillItems,
+            deductions: mergedDeductions,
+            returns: mergedReturns,
+            staffAccounts:
+              mergedStaff.length > 0 ? mergedStaff : cloudWorkspace.staffAccounts,
+          };
+          saveCloudWorkspaceToDisk(cloudWorkspace);
+        }
+      }
+    } else {
+      // Standard replace mode when user saves/updates/deletes data
+      cloudWorkspace = {
+        ...cloudWorkspace,
+        version: (cloudWorkspace.version || 0) + 1,
+        updatedAtMs: now,
+        updatedBy,
+        initialized: Boolean(snapshot.initialized ?? true),
+        categories: Array.isArray(snapshot.categories)
+          ? snapshot.categories
+          : cloudWorkspace.categories,
+        debtors: Array.isArray(snapshot.debtors)
+          ? snapshot.debtors
+          : cloudWorkspace.debtors,
+        rolePermissions:
+          snapshot.rolePermissions || cloudWorkspace.rolePermissions,
+        products: Array.isArray(snapshot.products)
+          ? snapshot.products
+          : cloudWorkspace.products,
+        bills: Array.isArray(snapshot.bills)
+          ? snapshot.bills
+          : cloudWorkspace.bills,
+        billItems: Array.isArray(snapshot.billItems)
+          ? snapshot.billItems
+          : cloudWorkspace.billItems,
+        deductions: Array.isArray(snapshot.deductions)
+          ? snapshot.deductions
+          : cloudWorkspace.deductions,
+        returns: Array.isArray(snapshot.returns)
+          ? snapshot.returns
+          : cloudWorkspace.returns,
+        staffAccounts: Array.isArray(snapshot.staffAccounts)
+          ? snapshot.staffAccounts
+          : cloudWorkspace.staffAccounts,
+      };
+      saveCloudWorkspaceToDisk(cloudWorkspace);
+    }
+
+    const { geminiApiKey: _hidden, ...publicWorkspace } = cloudWorkspace;
+    res.json({
+      ok: true,
+      version: cloudWorkspace.version,
+      updatedAtMs: cloudWorkspace.updatedAtMs,
+      workspace: publicWorkspace,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      error: err?.message || 'Lỗi khi đồng bộ dữ liệu Cloud.',
+    });
+  }
+});
+
 // 1. GET Gemini Key Status
 app.get('/api/gemini-status', (_req, res) => {
   const custom = runtimeGeminiApiKey.trim();
@@ -377,6 +682,8 @@ app.get('/api/gemini-status', (_req, res) => {
 app.post('/api/gemini-key', (req, res) => {
   const { apiKey } = req.body || {};
   runtimeGeminiApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+  cloudWorkspace.geminiApiKey = runtimeGeminiApiKey;
+  saveCloudWorkspaceToDisk(cloudWorkspace);
   const active = resolveApiKey();
   res.json({
     ok: true,

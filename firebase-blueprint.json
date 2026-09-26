@@ -556,6 +556,33 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "WorkspaceMeta": {
+      "title": "WorkspaceMeta",
+      "description": "Shared restaurant workspace metadata including categories, debtors, and initialization state.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "initialized": {
+          "type": "boolean"
+        },
+        "categories": {
+          "type": "array"
+        },
+        "debtors": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "initialized", "categories", "debtors", "updatedAt"]
     }
   },
   "firestore": {
@@ -586,6 +613,10 @@
     "/returns/{returnId}": {
       "schema": { "$ref": "#/entities/Return" },
       "description": "Stores returned beer/dish items from bills."
+    },
+    "/workspace_meta/{workspaceId}": {
+      "schema": { "$ref": "#/entities/WorkspaceMeta" },
+      "description": "Stores shared restaurant workspace categories, debtors, and initialization flag."
     }
   }
 }

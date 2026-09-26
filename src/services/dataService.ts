@@ -1,5 +1,10 @@
 import {
   doc,
+  getDoc,
+  getDocs,
+  collection,
+  query,
+  where,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -127,8 +132,13 @@ export function normalizeStaffAccountsWithFixedAdmin(
 }
 
 const LOCAL_CACHE_KEY = 'vqbill_cloud_mirror_v2';
+export const SHARED_WORKSPACE_ID = 'vqbill_shared_workspace';
 
 export interface WorkspaceCacheSnapshot {
+  version?: number;
+  updatedAtMs?: number;
+  updatedBy?: string;
+  cloudSyncedOnce?: boolean;
   initialized: boolean;
   categories?: string[];
   debtors?: string[];
@@ -143,9 +153,38 @@ export interface WorkspaceCacheSnapshot {
 
 export function loadLocalMirror(ownerId: string): WorkspaceCacheSnapshot | null {
   try {
-    const raw = localStorage.getItem(`${LOCAL_CACHE_KEY}_${sanitizeId(ownerId)}`);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    const primaryKey = `${LOCAL_CACHE_KEY}_${sanitizeId(ownerId)}`;
+    const fallbackKeys = [
+      primaryKey,
+      `${LOCAL_CACHE_KEY}_${SHARED_WORKSPACE_ID}`,
+      `${LOCAL_CACHE_KEY}_vqbill_default_workspace`,
+    ];
+
+    // Also scan localStorage for any previous vqbill_cloud_mirror_v2_* key that was initialized
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LOCAL_CACHE_KEY) && !fallbackKeys.includes(k)) {
+        fallbackKeys.push(k);
+      }
+    }
+
+    let firstUninit: WorkspaceCacheSnapshot | null = null;
+    for (const key of fallbackKeys) {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw) as WorkspaceCacheSnapshot;
+        if (parsed && parsed.initialized) {
+          return parsed;
+        }
+        if (parsed && !firstUninit) {
+          firstUninit = parsed;
+        }
+      } catch {
+        // continue
+      }
+    }
+    return firstUninit;
   } catch {
     return null;
   }
@@ -153,12 +192,550 @@ export function loadLocalMirror(ownerId: string): WorkspaceCacheSnapshot | null 
 
 export function saveLocalMirror(ownerId: string, snapshot: WorkspaceCacheSnapshot) {
   try {
-    localStorage.setItem(
-      `${LOCAL_CACHE_KEY}_${sanitizeId(ownerId)}`,
-      JSON.stringify(snapshot)
-    );
+    const payload = JSON.stringify(snapshot);
+    localStorage.setItem(`${LOCAL_CACHE_KEY}_${sanitizeId(ownerId)}`, payload);
+    if (sanitizeId(ownerId) !== SHARED_WORKSPACE_ID) {
+      localStorage.setItem(`${LOCAL_CACHE_KEY}_${SHARED_WORKSPACE_ID}`, payload);
+    }
   } catch {
     // Ignore storage quota errors
+  }
+}
+
+export interface ServerWorkspaceVersionInfo {
+  ok: boolean;
+  version: number;
+  updatedAtMs: number;
+  updatedBy?: string;
+  initialized: boolean;
+  billsCount: number;
+  productsCount: number;
+}
+
+export async function fetchServerWorkspaceVersion(): Promise<ServerWorkspaceVersionInfo | null> {
+  try {
+    const res = await fetch('/api/workspace/version', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !data.ok) return null;
+    return data as ServerWorkspaceVersionInfo;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchServerWorkspace(): Promise<WorkspaceCacheSnapshot | null> {
+  try {
+    const res = await fetch('/api/workspace', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !data.ok || !data.workspace) return null;
+    return data.workspace as WorkspaceCacheSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+export async function pushWorkspaceToServer(
+  snapshot: WorkspaceCacheSnapshot,
+  mode: 'replace' | 'merge_initial' = 'replace',
+  updatedBy = 'client'
+): Promise<{
+  ok: boolean;
+  version: number;
+  updatedAtMs: number;
+  workspace?: WorkspaceCacheSnapshot;
+} | null> {
+  try {
+    const res = await fetch('/api/workspace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snapshot, mode, updatedBy }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !data.ok) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function getFirestoreOwnerUid(_fallbackOwnerId: string): string {
+  return SHARED_WORKSPACE_ID;
+}
+
+async function upsertFirestoreDoc(
+  collectionName: string,
+  docId: string,
+  createData: Record<string, any>,
+  updateData: Record<string, any>
+): Promise<void> {
+  const refDoc = doc(db, collectionName, docId);
+  try {
+    await updateDoc(refDoc, {
+      ...updateData,
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    await setDoc(refDoc, {
+      ...createData,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+}
+
+export async function saveWorkspaceMetaToFirestore(params: {
+  ownerId?: string;
+  version?: number;
+  categories?: string[];
+  debtors?: string[];
+  rolePermissions?: RolePermissionsMap;
+  updatedBy?: string;
+}): Promise<void> {
+  const wsId = SHARED_WORKSPACE_ID;
+  const refDoc = doc(db, 'workspace_meta', wsId);
+  try {
+    const existingSnap = await getDoc(refDoc);
+    const existingData = existingSnap.exists() ? existingSnap.data() : null;
+    const nextVersion =
+      params.version !== undefined
+        ? Math.max(Number(params.version) || 1, (Number(existingData?.version) || 0) + 1)
+        : (Number(existingData?.version) || 0) + 1;
+
+    const categoriesJson = truncateStr(
+      JSON.stringify(
+        params.categories ??
+          (existingData?.categoriesJson ? JSON.parse(existingData.categoriesJson) : [])
+      ),
+      20000,
+      '[]'
+    );
+    const debtorsJson = truncateStr(
+      JSON.stringify(
+        params.debtors ??
+          (existingData?.debtorsJson ? JSON.parse(existingData.debtorsJson) : [])
+      ),
+      50000,
+      '[]'
+    );
+    const rolePermissionsJson = truncateStr(
+      JSON.stringify(
+        params.rolePermissions ??
+          (existingData?.rolePermissionsJson
+            ? JSON.parse(existingData.rolePermissionsJson)
+            : DEFAULT_ROLE_PERMISSIONS)
+      ),
+      50000,
+      '{}'
+    );
+    const updatedBy = truncateStr(params.updatedBy || 'staff', 100, 'staff');
+
+    if (existingSnap.exists()) {
+      await updateDoc(refDoc, {
+        initialized: true,
+        version: nextVersion,
+        categoriesJson,
+        debtorsJson,
+        rolePermissionsJson,
+        updatedBy,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(refDoc, {
+        ownerId: wsId,
+        initialized: true,
+        version: nextVersion,
+        categoriesJson,
+        debtorsJson,
+        rolePermissionsJson,
+        updatedBy,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch {
+    // Ignore transient network errors
+  }
+}
+
+export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnapshot | null> {
+  const wsId = SHARED_WORKSPACE_ID;
+  try {
+    const [
+      metaSnap,
+      billsSnap,
+      itemsSnap,
+      productsSnap,
+      deductionsSnap,
+      returnsSnap,
+      staffSnap,
+    ] = await Promise.all([
+      getDoc(doc(db, 'workspace_meta', wsId)),
+      getDocs(query(collection(db, 'bills'), where('ownerId', '==', wsId))),
+      getDocs(query(collection(db, 'bill_items'), where('ownerId', '==', wsId))),
+      getDocs(query(collection(db, 'products'), where('ownerId', '==', wsId))),
+      getDocs(query(collection(db, 'deductions'), where('ownerId', '==', wsId))),
+      getDocs(query(collection(db, 'returns'), where('ownerId', '==', wsId))),
+      getDocs(query(collection(db, 'staff_accounts'), where('ownerId', '==', wsId))),
+    ]);
+
+    const hasAnyDocs =
+      metaSnap.exists() ||
+      !billsSnap.empty ||
+      !productsSnap.empty ||
+      !deductionsSnap.empty ||
+      !returnsSnap.empty;
+
+    if (!hasAnyDocs) {
+      return null;
+    }
+
+    const metaData = metaSnap.exists() ? metaSnap.data() : null;
+    let categories: string[] | undefined;
+    let debtors: string[] | undefined;
+    let rolePermissions: RolePermissionsMap | undefined;
+
+    if (metaData?.categoriesJson) {
+      try {
+        const parsed = JSON.parse(metaData.categoriesJson);
+        if (Array.isArray(parsed) && parsed.length > 0) categories = parsed;
+      } catch {
+        // ignore
+      }
+    }
+    if (metaData?.debtorsJson) {
+      try {
+        const parsed = JSON.parse(metaData.debtorsJson);
+        if (Array.isArray(parsed)) debtors = parsed;
+      } catch {
+        // ignore
+      }
+    }
+    if (metaData?.rolePermissionsJson) {
+      try {
+        const parsed = JSON.parse(metaData.rolePermissionsJson);
+        if (parsed && typeof parsed === 'object') rolePermissions = parsed;
+      } catch {
+        // ignore
+      }
+    }
+
+    const bills: BillRecord[] = billsSnap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ownerId: data.ownerId,
+        billCode: data.billCode,
+        billDate: data.billDate,
+        rawDate: data.rawDate || data.billDate,
+        checkInTime: data.checkInTime || '',
+        checkOutTime: data.checkOutTime || '',
+        paymentType: data.paymentType,
+        debtorName: data.debtorName || '',
+        debtStatus: data.debtStatus || 'none',
+        subtotalAmount: Number(data.subtotalAmount) || Number(data.totalAmount) || 0,
+        discountAmount: Number(data.discountAmount) || 0,
+        totalAmount: Number(data.totalAmount) || 0,
+        deductedAmount: Number(data.deductedAmount) || 0,
+        itemsSummary: data.itemsSummary || '',
+        note: data.note || '',
+        status: data.status || 'active',
+        createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+        updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+      };
+    });
+
+    const billItems: BillItemRecord[] = itemsSnap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ownerId: data.ownerId,
+        billId: data.billId,
+        billDate: data.billDate,
+        productName: data.productName,
+        category: data.category,
+        note: data.note || '',
+        quantity: Number(data.quantity) || 1,
+        returnedQuantity: Number(data.returnedQuantity) || 0,
+        unitPrice: Number(data.unitPrice) || 0,
+        subtotal: Number(data.subtotal) || 0,
+        createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+        updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+      };
+    });
+
+    const products: ProductRecord[] = productsSnap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ownerId: data.ownerId,
+        productName: data.productName,
+        category: data.category,
+        unitPrice: Number(data.unitPrice) || 0,
+        unit: data.unit || 'Phần',
+        totalSold: Number(data.totalSold) || 0,
+        totalReturned: Number(data.totalReturned) || 0,
+        totalRevenue: Number(data.totalRevenue) || 0,
+        createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+        updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+      };
+    });
+
+    const deductions: DeductionRecord[] = deductionsSnap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ownerId: data.ownerId,
+        billId: data.billId,
+        billCode: data.billCode,
+        billDate: data.billDate,
+        deductionDate: data.deductionDate || data.billDate,
+        productName: data.productName,
+        category: data.category,
+        quantity: Number(data.quantity) || 1,
+        unitPrice: Number(data.unitPrice) || 0,
+        amount: Number(data.amount) || 0,
+        note: data.note || '',
+        createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+        updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+      };
+    });
+
+    const returns: ReturnRecord[] = returnsSnap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ownerId: data.ownerId,
+        billId: data.billId,
+        billCode: data.billCode,
+        billDate: data.billDate,
+        returnDate: data.returnDate || data.billDate,
+        productName: data.productName,
+        category: data.category,
+        quantity: Number(data.quantity) || 1,
+        unitPrice: Number(data.unitPrice) || 0,
+        amount: Number(data.amount) || 0,
+        note: data.note || '',
+        createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+        updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+      };
+    });
+
+    const staffAccounts: StaffAccount[] = staffSnap.docs.map((d) => {
+      const data = d.data();
+      const role = (data.role as UserRole) || UserRole.CASHIER;
+      return {
+        id: d.id,
+        ownerId: data.ownerId,
+        username: data.username,
+        password: data.password,
+        displayName: data.displayName,
+        info: data.info || '',
+        role,
+        active: Boolean(data.active),
+        allowedTabs:
+          DEFAULT_ROLE_PERMISSIONS[role]?.allowedTabs || ['dashboard'],
+        useCustomTabs: false,
+        createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+        updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+      };
+    });
+
+    return {
+      version: Number(metaData?.version) || Math.max(1, bills.length),
+      updatedAtMs: metaData?.updatedAt?.toMillis?.() || Date.now(),
+      updatedBy: metaData?.updatedBy || 'cloud',
+      cloudSyncedOnce: true,
+      initialized: true,
+      categories,
+      debtors,
+      rolePermissions,
+      products,
+      bills,
+      billItems,
+      deductions,
+      returns,
+      staffAccounts: normalizeStaffAccountsWithFixedAdmin(
+        staffAccounts.length > 0 ? staffAccounts : DEFAULT_STAFF_ACCOUNTS
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function syncFullSnapshotToFirestore(
+  snapshot: WorkspaceCacheSnapshot,
+  updatedBy = 'admin'
+): Promise<boolean> {
+  const fsOwner = SHARED_WORKSPACE_ID;
+  try {
+    for (const b of snapshot.bills || []) {
+      const bid = sanitizeId(b.id);
+      const baseFields = {
+        billCode: truncateStr(b.billCode, 64, 'HD-001'),
+        billDate:
+          b.billDate && /^\d{4}-\d{2}-\d{2}$/.test(b.billDate)
+            ? b.billDate
+            : getCurrentBusinessDate(),
+        rawDate: truncateStr(b.rawDate || b.billDate || '', 20, ''),
+        checkInTime: truncateStr(b.checkInTime || '', 20, ''),
+        checkOutTime: truncateStr(b.checkOutTime || '', 20, ''),
+        paymentType: b.paymentType || 'cash',
+        debtorName: truncateStr(b.debtorName || '', 120, ''),
+        debtStatus: b.debtStatus || 'none',
+        subtotalAmount: Math.max(0, Math.round(b.subtotalAmount ?? b.totalAmount ?? 0)),
+        discountAmount: Math.max(0, Math.round(b.discountAmount || 0)),
+        totalAmount: Math.max(0, Math.round(b.totalAmount || 0)),
+        deductedAmount: Math.max(0, Math.round(b.deductedAmount || 0)),
+        itemsSummary: truncateStr(b.itemsSummary || '', 1000, ''),
+        note: truncateStr(b.note || '', 500, ''),
+        status: b.status === 'locked' ? 'locked' : 'active',
+      };
+      await upsertFirestoreDoc(
+        'bills',
+        bid,
+        { ownerId: fsOwner, ...baseFields },
+        baseFields
+      );
+    }
+
+    for (const bi of snapshot.billItems || []) {
+      const iid = sanitizeId(bi.id);
+      const qty = Math.max(1, Math.round(bi.quantity || 1));
+      const retQty = Math.min(qty, Math.max(0, Math.round(bi.returnedQuantity || 0)));
+      const baseFields = {
+        billDate:
+          bi.billDate && /^\d{4}-\d{2}-\d{2}$/.test(bi.billDate)
+            ? bi.billDate
+            : getCurrentBusinessDate(),
+        productName: truncateStr(bi.productName, 150, 'Món ăn'),
+        note: truncateStr(bi.note || '', 400, ''),
+        category: truncateStr(bi.category || 'Khác', 80, 'Khác'),
+        quantity: qty,
+        returnedQuantity: retQty,
+        unitPrice: Math.max(0, Math.round(bi.unitPrice || 0)),
+        subtotal: Math.max(0, Math.round(bi.subtotal || 0)),
+      };
+      await upsertFirestoreDoc(
+        'bill_items',
+        iid,
+        { ownerId: fsOwner, billId: sanitizeId(bi.billId), ...baseFields },
+        baseFields
+      );
+    }
+
+    for (const p of snapshot.products || []) {
+      const pid = sanitizeId(p.id);
+      const baseFields = {
+        productName: truncateStr(p.productName, 150, 'Sản phẩm'),
+        category: truncateStr(p.category || 'Khác', 80, 'Khác'),
+        unitPrice: Math.max(0, Math.round(p.unitPrice || 0)),
+        unit: truncateStr(p.unit || 'Phần', 40, 'Phần'),
+        totalSold: Math.max(0, Math.round(p.totalSold || 0)),
+        totalReturned: Math.max(0, Math.round(p.totalReturned || 0)),
+        totalRevenue: Math.round(p.totalRevenue || 0),
+      };
+      await upsertFirestoreDoc(
+        'products',
+        pid,
+        { ownerId: fsOwner, ...baseFields },
+        baseFields
+      );
+    }
+
+    for (const d of snapshot.deductions || []) {
+      const did = sanitizeId(d.id);
+      const bDate =
+        d.billDate && /^\d{4}-\d{2}-\d{2}$/.test(d.billDate)
+          ? d.billDate
+          : getCurrentBusinessDate();
+      const dDate =
+        d.deductionDate && /^\d{4}-\d{2}-\d{2}$/.test(d.deductionDate)
+          ? d.deductionDate
+          : bDate;
+      const baseFields = {
+        deductionDate: dDate,
+        productName: truncateStr(d.productName, 150, 'Khoản chi'),
+        category: truncateStr(d.category || 'Chi phí', 80, 'Chi phí'),
+        quantity: Math.max(1, Math.round(d.quantity || 1)),
+        unitPrice: Math.max(0, Math.round(d.unitPrice || 0)),
+        amount: Math.max(0, Math.round(d.amount || 0)),
+        note: truncateStr(d.note || '', 500, ''),
+      };
+      await upsertFirestoreDoc(
+        'deductions',
+        did,
+        {
+          ownerId: fsOwner,
+          billId: sanitizeId(d.billId || `exp_${did}`),
+          billCode: truncateStr(d.billCode || 'CHI-TRONG-NGAY', 64, 'CHI-TRONG-NGAY'),
+          billDate: bDate,
+          ...baseFields,
+        },
+        baseFields
+      );
+    }
+
+    for (const r of snapshot.returns || []) {
+      const rid = sanitizeId(r.id);
+      const bDate =
+        r.billDate && /^\d{4}-\d{2}-\d{2}$/.test(r.billDate)
+          ? r.billDate
+          : getCurrentBusinessDate();
+      const rDate =
+        r.returnDate && /^\d{4}-\d{2}-\d{2}$/.test(r.returnDate)
+          ? r.returnDate
+          : bDate;
+      const baseFields = {
+        returnDate: rDate,
+        quantity: Math.max(1, Math.round(r.quantity || 1)),
+        unitPrice: Math.max(0, Math.round(r.unitPrice || 0)),
+        amount: Math.max(0, Math.round(r.amount || 0)),
+        note: truncateStr(r.note || '', 500, ''),
+      };
+      await upsertFirestoreDoc(
+        'returns',
+        rid,
+        {
+          ownerId: fsOwner,
+          billId: sanitizeId(r.billId || `bill_${rid}`),
+          billCode: truncateStr(r.billCode || 'HD-001', 64, 'HD-001'),
+          billDate: bDate,
+          productName: truncateStr(r.productName, 150, 'Món hoàn trả'),
+          category: truncateStr(r.category || 'Khác', 80, 'Khác'),
+          ...baseFields,
+        },
+        baseFields
+      );
+    }
+
+    for (const acc of snapshot.staffAccounts || []) {
+      await saveStaffAccountToFirebase(fsOwner, acc, false);
+    }
+
+    await saveWorkspaceMetaToFirestore({
+      ownerId: fsOwner,
+      version: snapshot.version,
+      categories: snapshot.categories,
+      debtors: snapshot.debtors,
+      rolePermissions: snapshot.rolePermissions,
+      updatedBy,
+    });
+
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -208,6 +785,7 @@ export async function saveCategoriesToCloud(
 ): Promise<void> {
   const cleanOwner = sanitizeId(ownerId);
   await syncToRtdbSafe(`workspaces/${cleanOwner}/categories`, categories);
+  await saveWorkspaceMetaToFirestore({ ownerId: cleanOwner, categories });
 }
 
 export async function saveDebtorsToCloud(
@@ -216,6 +794,7 @@ export async function saveDebtorsToCloud(
 ): Promise<void> {
   const cleanOwner = sanitizeId(ownerId);
   await syncToRtdbSafe(`workspaces/${cleanOwner}/debtors`, debtors);
+  await saveWorkspaceMetaToFirestore({ ownerId: cleanOwner, debtors });
 }
 
 export async function saveRolePermissionsToCloud(
@@ -224,10 +803,11 @@ export async function saveRolePermissionsToCloud(
 ): Promise<void> {
   const cleanOwner = sanitizeId(ownerId);
   await syncToRtdbSafe(`workspaces/${cleanOwner}/role_permissions`, rolePermissions);
+  await saveWorkspaceMetaToFirestore({ ownerId: cleanOwner, rolePermissions });
 }
 
 export function isFirestoreCloudActive(): boolean {
-  return Boolean(auth.currentUser?.uid && auth.currentUser?.emailVerified);
+  return true;
 }
 
 export async function markWorkspaceInitializedInCloud(ownerId: string) {
@@ -236,6 +816,7 @@ export async function markWorkspaceInitializedInCloud(ownerId: string) {
     initialized: true,
     updatedAt: Date.now(),
   });
+  await saveWorkspaceMetaToFirestore({ ownerId: cleanOwner });
 }
 
 // STAFF ACCOUNTS FIREBASE CRUD
@@ -276,11 +857,12 @@ export async function saveStaffAccountToFirebase(
   await syncToRtdbSafe(`workspaces/${cleanOwner}/staff_accounts/${accId}`, cleanAcc);
 
   if (!isFirestoreCloudActive()) return;
+  const fsOwner = getFirestoreOwnerUid(cleanOwner);
 
   try {
     if (isNew) {
       await setDoc(doc(db, 'staff_accounts', accId), {
-        ownerId: cleanOwner,
+        ownerId: fsOwner,
         username: cleanAcc.username,
         password: cleanAcc.password,
         displayName: cleanAcc.displayName,
@@ -305,7 +887,7 @@ export async function saveStaffAccountToFirebase(
     // Fallback to setDoc if document did not exist in Firestore yet
     try {
       await setDoc(doc(db, 'staff_accounts', accId), {
-        ownerId: cleanOwner,
+        ownerId: fsOwner,
         username: cleanAcc.username,
         password: cleanAcc.password,
         displayName: cleanAcc.displayName,
@@ -360,6 +942,7 @@ export async function createOrUpdateProductInFirestore(
   await markWorkspaceInitializedInCloud(cleanOwner);
 
   if (!isFirestoreCloudActive()) return;
+  const fsOwner = getFirestoreOwnerUid(cleanOwner);
 
   try {
     if (isExisting) {
@@ -375,7 +958,7 @@ export async function createOrUpdateProductInFirestore(
       });
     } else {
       await setDoc(doc(db, 'products', pid), {
-        ownerId: cleanOwner,
+        ownerId: fsOwner,
         productName: truncateStr(product.productName, 150, 'Sản phẩm'),
         category: truncateStr(product.category, 80, 'Khác'),
         unitPrice: Math.max(0, Math.round(product.unitPrice || 0)),
@@ -390,7 +973,7 @@ export async function createOrUpdateProductInFirestore(
   } catch {
     try {
       await setDoc(doc(db, 'products', pid), {
-        ownerId: cleanOwner,
+        ownerId: fsOwner,
         productName: truncateStr(product.productName, 150, 'Sản phẩm'),
         category: truncateStr(product.category, 80, 'Khác'),
         unitPrice: Math.max(0, Math.round(product.unitPrice || 0)),
@@ -665,11 +1248,13 @@ export async function saveNewBillToCloud(params: {
   }
 
   if (isFirestoreCloudActive()) {
+    const fsOwner = getFirestoreOwnerUid(cleanOwnerId);
     try {
       await setDoc(doc(db, 'bills', billId), {
-        ownerId: billRecord.ownerId,
+        ownerId: fsOwner,
         billCode: billRecord.billCode,
         billDate: billRecord.billDate,
+        rawDate: billRecord.rawDate || billRecord.billDate,
         checkInTime: billRecord.checkInTime || '',
         checkOutTime: billRecord.checkOutTime || '',
         paymentType: billRecord.paymentType,
@@ -689,7 +1274,7 @@ export async function saveNewBillToCloud(params: {
       const batch = writeBatch(db);
       for (const bi of billItemRecords) {
         batch.set(doc(db, 'bill_items', bi.id), {
-          ownerId: bi.ownerId,
+          ownerId: fsOwner,
           billId: bi.billId,
           billDate: bi.billDate,
           productName: bi.productName,
@@ -744,23 +1329,45 @@ export async function updateBillAndItemsInCloud(params: {
   if (!isFirestoreCloudActive()) return;
 
   try {
-    await updateDoc(doc(db, 'bills', bill.id), {
-      billCode: truncateStr(bill.billCode, 64, 'HD-001'),
-      billDate: bill.billDate,
-      checkInTime: truncateStr(bill.checkInTime || '', 20, ''),
-      checkOutTime: truncateStr(bill.checkOutTime || '', 20, ''),
-      paymentType: bill.paymentType,
-      debtorName: truncateStr(bill.debtorName, 120, ''),
-      debtStatus: bill.debtStatus,
-      subtotalAmount: Math.max(0, Math.round(bill.subtotalAmount ?? bill.totalAmount)),
-      discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
-      totalAmount: Math.max(0, Math.round(bill.totalAmount)),
-      deductedAmount: Math.max(0, Math.round(bill.deductedAmount)),
-      itemsSummary: truncateStr(bill.itemsSummary, 1000, ''),
-      note: truncateStr(bill.note, 500, ''),
-      status: bill.status,
-      updatedAt: serverTimestamp(),
-    });
+    await upsertFirestoreDoc(
+      'bills',
+      bill.id,
+      {
+        ownerId: getFirestoreOwnerUid(cleanOwnerId),
+        billCode: truncateStr(bill.billCode, 64, 'HD-001'),
+        billDate: bill.billDate,
+        rawDate: truncateStr(bill.rawDate || bill.billDate || '', 20, ''),
+        checkInTime: truncateStr(bill.checkInTime || '', 20, ''),
+        checkOutTime: truncateStr(bill.checkOutTime || '', 20, ''),
+        paymentType: bill.paymentType,
+        debtorName: truncateStr(bill.debtorName, 120, ''),
+        debtStatus: bill.debtStatus,
+        subtotalAmount: Math.max(0, Math.round(bill.subtotalAmount ?? bill.totalAmount)),
+        discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
+        totalAmount: Math.max(0, Math.round(bill.totalAmount)),
+        deductedAmount: Math.max(0, Math.round(bill.deductedAmount)),
+        itemsSummary: truncateStr(bill.itemsSummary, 1000, ''),
+        note: truncateStr(bill.note, 500, ''),
+        status: bill.status,
+      },
+      {
+        billCode: truncateStr(bill.billCode, 64, 'HD-001'),
+        billDate: bill.billDate,
+        rawDate: truncateStr(bill.rawDate || bill.billDate || '', 20, ''),
+        checkInTime: truncateStr(bill.checkInTime || '', 20, ''),
+        checkOutTime: truncateStr(bill.checkOutTime || '', 20, ''),
+        paymentType: bill.paymentType,
+        debtorName: truncateStr(bill.debtorName, 120, ''),
+        debtStatus: bill.debtStatus,
+        subtotalAmount: Math.max(0, Math.round(bill.subtotalAmount ?? bill.totalAmount)),
+        discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
+        totalAmount: Math.max(0, Math.round(bill.totalAmount)),
+        deductedAmount: Math.max(0, Math.round(bill.deductedAmount)),
+        itemsSummary: truncateStr(bill.itemsSummary, 1000, ''),
+        note: truncateStr(bill.note, 500, ''),
+        status: bill.status,
+      }
+    );
 
     for (const oi of oldItems) {
       if (!newItems.some((ni) => ni.id === oi.id)) {
@@ -784,7 +1391,7 @@ export async function updateBillAndItemsInCloud(params: {
         });
       } else {
         await setDoc(doc(db, 'bill_items', ni.id), {
-          ownerId: cleanOwnerId,
+          ownerId: getFirestoreOwnerUid(cleanOwnerId),
           billId: bill.id,
           billDate: ni.billDate,
           productName: truncateStr(ni.productName, 150, 'Món ăn'),
@@ -907,7 +1514,7 @@ export async function saveExpenseDeductionToCloud(params: {
   if (isFirestoreCloudActive()) {
     try {
       await setDoc(doc(db, 'deductions', deduction.id), {
-        ownerId: deduction.ownerId,
+        ownerId: getFirestoreOwnerUid(deduction.ownerId),
         billId: deduction.billId,
         billCode: deduction.billCode,
         billDate: deduction.billDate,
@@ -1047,7 +1654,7 @@ export async function recordItemReturnToCloud(params: {
   if (isFirestoreCloudActive()) {
     try {
       await setDoc(doc(db, 'returns', returnRecord.id), {
-        ownerId: returnRecord.ownerId,
+        ownerId: getFirestoreOwnerUid(returnRecord.ownerId),
         billId: returnRecord.billId,
         billCode: returnRecord.billCode,
         billDate: returnRecord.billDate,

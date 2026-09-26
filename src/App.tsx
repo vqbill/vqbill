@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -34,6 +34,10 @@ import {
   KeyRound,
   Lock,
   Receipt,
+  Cloud,
+  RefreshCw,
+  UploadCloud,
+  DownloadCloud,
 } from 'lucide-react';
 import {
   auth,
@@ -81,10 +85,17 @@ import {
   DEFAULT_STAFF_ACCOUNTS,
   FIXED_ADMIN_USERNAME,
   FIXED_ADMIN_PASSWORD,
+  SHARED_WORKSPACE_ID,
+  WorkspaceCacheSnapshot,
   normalizeStaffAccountsWithFixedAdmin,
   buildInitialSeedDataset,
   loadLocalMirror,
   saveLocalMirror,
+  fetchServerWorkspace,
+  fetchServerWorkspaceVersion,
+  pushWorkspaceToServer,
+  fetchFirestoreWorkspaceOnce,
+  syncFullSnapshotToFirestore,
   fetchRtdbWorkspaceOnce,
   saveCategoriesToCloud,
   saveDebtorsToCloud,
@@ -141,13 +152,17 @@ export default function App() {
   const [authReady, setAuthReady] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const ownerId = firebaseUser?.uid || 'vqbill_default_workspace';
+  // Unified restaurant workspace ID so all devices, browsers, staff accounts, and Google Auth share the same cloud data
+  const ownerId = SHARED_WORKSPACE_ID;
 
   // Load initial snapshot from local mirror or seed dataset
   const initialWorkspaceData = useMemo(() => {
     const cached = loadLocalMirror(ownerId);
     if (cached && cached.initialized) {
       return {
+        version: Number(cached.version) || 0,
+        updatedAtMs: Number(cached.updatedAtMs) || 0,
+        cloudSyncedOnce: Boolean(cached.cloudSyncedOnce),
         initialized: true,
         categories:
           cached.categories && cached.categories.length > 0
@@ -167,6 +182,9 @@ export default function App() {
     }
     const seed = buildInitialSeedDataset(ownerId);
     return {
+      version: 0,
+      updatedAtMs: 0,
+      cloudSyncedOnce: false,
       initialized: false,
       categories: Array.from(STANDARD_CATEGORIES),
       rolePermissions: DEFAULT_ROLE_PERMISSIONS,
@@ -183,6 +201,24 @@ export default function App() {
   const [workspaceInitialized, setWorkspaceInitialized] = useState<boolean>(
     initialWorkspaceData.initialized
   );
+  const [cloudSyncedOnce, setCloudSyncedOnce] = useState<boolean>(
+    initialWorkspaceData.cloudSyncedOnce
+  );
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<
+    'connecting' | 'synced' | 'syncing' | 'offline'
+  >('connecting');
+  const [cloudVersion, setCloudVersion] = useState<number>(
+    initialWorkspaceData.version
+  );
+  const [lastCloudSyncAt, setLastCloudSyncAt] = useState<number | null>(
+    initialWorkspaceData.updatedAtMs || null
+  );
+  const [showCloudSyncModal, setShowCloudSyncModal] = useState<boolean>(false);
+
+  const lastKnownServerVersionRef = useRef<number>(initialWorkspaceData.version);
+  const isApplyingRemoteSnapshotRef = useRef<boolean>(false);
+  const initialCloudHandshakeDoneRef = useRef<boolean>(false);
+  const isPushingToServerRef = useRef<boolean>(false);
   const [categories, setCategories] = useState<string[]>(
     initialWorkspaceData.categories
   );
@@ -388,9 +424,282 @@ export default function App() {
     await handleSaveGeminiKey('');
   };
 
-  // Keep local mirror synced whenever data changes
+  const markRemoteStateUpdate = useCallback(() => {
+    isApplyingRemoteSnapshotRef.current = true;
+    setTimeout(() => {
+      isApplyingRemoteSnapshotRef.current = false;
+    }, 250);
+  }, []);
+
+  // Apply a remote Cloud Workspace snapshot cleanly without triggering a push loop
+  const applyRemoteWorkspaceSnapshot = useCallback(
+    (remoteSnap: Partial<WorkspaceCacheSnapshot>, markSyncedOnce = true) => {
+      markRemoteStateUpdate();
+      const nextVersion =
+        Number(remoteSnap.version) || lastKnownServerVersionRef.current || 1;
+      const nextUpdatedAt = Number(remoteSnap.updatedAtMs) || Date.now();
+      lastKnownServerVersionRef.current = Math.max(
+        lastKnownServerVersionRef.current,
+        nextVersion
+      );
+      setCloudVersion(lastKnownServerVersionRef.current);
+      setLastCloudSyncAt(nextUpdatedAt);
+      if (markSyncedOnce) {
+        setCloudSyncedOnce(true);
+      }
+
+      const nextInit = Boolean(remoteSnap.initialized ?? true);
+      const nextCats =
+        remoteSnap.categories && remoteSnap.categories.length > 0
+          ? remoteSnap.categories
+          : Array.from(STANDARD_CATEGORIES);
+      const nextRoles = {
+        ...DEFAULT_ROLE_PERMISSIONS,
+        ...(remoteSnap.rolePermissions || {}),
+      };
+      const nextProducts = Array.isArray(remoteSnap.products)
+        ? remoteSnap.products
+        : [];
+      const nextBills = Array.isArray(remoteSnap.bills) ? remoteSnap.bills : [];
+      const nextBillItems = Array.isArray(remoteSnap.billItems)
+        ? remoteSnap.billItems
+        : [];
+      const nextDeductions = Array.isArray(remoteSnap.deductions)
+        ? remoteSnap.deductions
+        : [];
+      const nextReturns = Array.isArray(remoteSnap.returns)
+        ? remoteSnap.returns
+        : [];
+      const nextDebtors = Array.isArray(remoteSnap.debtors)
+        ? remoteSnap.debtors
+        : [];
+      const nextStaff = normalizeStaffAccountsWithFixedAdmin(
+        remoteSnap.staffAccounts
+      );
+
+      setWorkspaceInitialized(nextInit);
+      setCategories(nextCats);
+      setRolePermissions(nextRoles);
+      setProducts(nextProducts);
+      setBills(nextBills);
+      setBillItems(nextBillItems);
+      setDeductions(nextDeductions);
+      setReturns(nextReturns);
+      setDebtors(nextDebtors);
+      setStaffAccounts(nextStaff);
+
+      saveLocalMirror(ownerId, {
+        version: lastKnownServerVersionRef.current,
+        updatedAtMs: nextUpdatedAt,
+        cloudSyncedOnce: markSyncedOnce,
+        initialized: nextInit,
+        categories: nextCats,
+        rolePermissions: nextRoles,
+        products: nextProducts,
+        bills: nextBills,
+        billItems: nextBillItems,
+        deductions: nextDeductions,
+        returns: nextReturns,
+        debtors: nextDebtors,
+        staffAccounts: nextStaff,
+      });
+    },
+    [ownerId, markRemoteStateUpdate]
+  );
+
+  // Initial Cloud Handshake on Boot (syncs across all browsers & devices via Firebase Firestore + Cloud Server)
   useEffect(() => {
-    saveLocalMirror(ownerId, {
+    let mounted = true;
+    const performInitialCloudSync = async () => {
+      setCloudSyncStatus('connecting');
+      const localCached = loadLocalMirror(ownerId);
+      const [firestoreSnap, serverSnap] = await Promise.all([
+        fetchFirestoreWorkspaceOnce(),
+        fetchServerWorkspace(),
+      ]);
+
+      if (!mounted) return;
+
+      // Determine if localCached has unsynced real bills that aren't in Firestore yet
+      const fsBillIds = new Set((firestoreSnap?.bills || []).map((b) => b.id));
+      const localUnsyncedBills = (localCached?.bills || []).filter(
+        (b) => !b.id.startsWith('bill_seed_') && !fsBillIds.has(b.id)
+      );
+
+      // Pick the best remote source (prefer Firestore if it has bills or is initialized)
+      const bestRemote =
+        firestoreSnap &&
+        (firestoreSnap.bills.length > 0 || !serverSnap?.initialized)
+          ? firestoreSnap
+          : serverSnap?.initialized
+          ? serverSnap
+          : firestoreSnap || serverSnap;
+
+      if (bestRemote && bestRemote.initialized) {
+        if (localCached?.initialized && localUnsyncedBills.length > 0) {
+          // Merge local unsynced bills into remote snapshot and push to both Firestore & Server
+          const mergedBillsMap = new Map<string, BillRecord>();
+          for (const b of bestRemote.bills || []) mergedBillsMap.set(b.id, b);
+          for (const b of localCached.bills || []) {
+            if (!b.id.startsWith('bill_seed_') || mergedBillsMap.size === 0) {
+              mergedBillsMap.set(b.id, b);
+            }
+          }
+
+          const mergedItemsMap = new Map<string, BillItemRecord>();
+          for (const it of bestRemote.billItems || []) mergedItemsMap.set(it.id, it);
+          for (const it of localCached.billItems || []) {
+            if (mergedBillsMap.has(it.billId)) {
+              mergedItemsMap.set(it.id, it);
+            }
+          }
+
+          const mergedProdsMap = new Map<string, ProductRecord>();
+          for (const p of bestRemote.products || []) mergedProdsMap.set(p.id, p);
+          for (const p of localCached.products || []) {
+            if (!mergedProdsMap.has(p.id)) mergedProdsMap.set(p.id, p);
+          }
+
+          const mergedDedsMap = new Map<string, DeductionRecord>();
+          for (const d of bestRemote.deductions || []) mergedDedsMap.set(d.id, d);
+          for (const d of localCached.deductions || []) mergedDedsMap.set(d.id, d);
+
+          const mergedRetsMap = new Map<string, ReturnRecord>();
+          for (const r of bestRemote.returns || []) mergedRetsMap.set(r.id, r);
+          for (const r of localCached.returns || []) mergedRetsMap.set(r.id, r);
+
+          const mergedSnapshot: WorkspaceCacheSnapshot = {
+            version: Math.max(bestRemote.version || 1, localCached.version || 1) + 1,
+            updatedAtMs: Date.now(),
+            cloudSyncedOnce: true,
+            initialized: true,
+            categories: Array.from(
+              new Set([
+                ...(bestRemote.categories || STANDARD_CATEGORIES),
+                ...(localCached.categories || []),
+              ])
+            ),
+            debtors: Array.from(
+              new Set([
+                ...(bestRemote.debtors || []),
+                ...(localCached.debtors || []),
+              ])
+            ),
+            rolePermissions:
+              localCached.rolePermissions ||
+              bestRemote.rolePermissions ||
+              DEFAULT_ROLE_PERMISSIONS,
+            products: Array.from(mergedProdsMap.values()),
+            bills: Array.from(mergedBillsMap.values()),
+            billItems: Array.from(mergedItemsMap.values()),
+            deductions: Array.from(mergedDedsMap.values()),
+            returns: Array.from(mergedRetsMap.values()),
+            staffAccounts: normalizeStaffAccountsWithFixedAdmin(
+              localCached.staffAccounts || bestRemote.staffAccounts
+            ),
+          };
+
+          applyRemoteWorkspaceSnapshot(mergedSnapshot, true);
+          await Promise.all([
+            syncFullSnapshotToFirestore(
+              mergedSnapshot,
+              loggedInStaff?.username || 'migration'
+            ),
+            pushWorkspaceToServer(
+              mergedSnapshot,
+              'replace',
+              loggedInStaff?.username || 'migration'
+            ),
+          ]);
+        } else {
+          applyRemoteWorkspaceSnapshot(bestRemote, true);
+          // Ensure Firestore has the data if bestRemote came from serverSnap while firestoreSnap was empty
+          if (!firestoreSnap && bestRemote.bills.length > 0) {
+            await syncFullSnapshotToFirestore(bestRemote, 'server_to_firestore');
+          }
+          // Ensure Server has the data if bestRemote came from Firestore
+          if (firestoreSnap && (!serverSnap || !serverSnap.initialized)) {
+            await pushWorkspaceToServer(bestRemote, 'replace', 'firestore_to_server');
+          }
+        }
+
+        if (mounted) {
+          initialCloudHandshakeDoneRef.current = true;
+          setCloudSyncStatus('synced');
+          if (!lastCloudSyncAt) {
+            setLastCloudSyncAt(Date.now());
+          }
+        }
+      } else if (localCached?.initialized) {
+        // Neither Firestore nor Server had initialized data yet, push local data up to both
+        await Promise.all([
+          syncFullSnapshotToFirestore(
+            localCached,
+            loggedInStaff?.username || 'initial_push'
+          ),
+          pushWorkspaceToServer(
+            localCached,
+            'replace',
+            loggedInStaff?.username || 'initial_push'
+          ),
+        ]);
+        if (mounted) {
+          applyRemoteWorkspaceSnapshot(
+            { ...localCached, version: (localCached.version || 0) + 1 },
+            true
+          );
+          initialCloudHandshakeDoneRef.current = true;
+          setCloudSyncStatus('synced');
+        }
+      } else {
+        // Check RTDB fallback or initialize seed data to Firestore & Server
+        const rtdbSnap = await fetchRtdbWorkspaceOnce(ownerId);
+        if (mounted && rtdbSnap?.initialized) {
+          const fullRtdb: WorkspaceCacheSnapshot = {
+            version: 1,
+            updatedAtMs: Date.now(),
+            cloudSyncedOnce: true,
+            initialized: true,
+            categories: rtdbSnap.categories || Array.from(STANDARD_CATEGORIES),
+            rolePermissions: {
+              ...DEFAULT_ROLE_PERMISSIONS,
+              ...(rtdbSnap.rolePermissions || {}),
+            },
+            products: rtdbSnap.products || [],
+            bills: rtdbSnap.bills || [],
+            billItems: rtdbSnap.billItems || [],
+            deductions: rtdbSnap.deductions || [],
+            returns: rtdbSnap.returns || [],
+            debtors: rtdbSnap.debtors || [],
+            staffAccounts: normalizeStaffAccountsWithFixedAdmin(
+              rtdbSnap.staffAccounts
+            ),
+          };
+          applyRemoteWorkspaceSnapshot(fullRtdb, true);
+          await Promise.all([
+            syncFullSnapshotToFirestore(fullRtdb, 'rtdb_migration'),
+            pushWorkspaceToServer(fullRtdb, 'replace', 'rtdb_migration'),
+          ]);
+        }
+        if (mounted) {
+          initialCloudHandshakeDoneRef.current = true;
+          setCloudSyncStatus('synced');
+        }
+      }
+    };
+
+    performInitialCloudSync();
+    return () => {
+      mounted = false;
+    };
+  }, [ownerId, applyRemoteWorkspaceSnapshot]);
+
+  // Keep local mirror AND Cloud Server synced whenever data changes locally
+  useEffect(() => {
+    const currentSnapshot: WorkspaceCacheSnapshot = {
+      version: lastKnownServerVersionRef.current,
+      updatedAtMs: Date.now(),
+      cloudSyncedOnce,
       initialized: workspaceInitialized,
       categories,
       rolePermissions,
@@ -401,7 +710,55 @@ export default function App() {
       returns,
       debtors,
       staffAccounts,
-    });
+    };
+
+    saveLocalMirror(ownerId, currentSnapshot);
+
+    if (isApplyingRemoteSnapshotRef.current) {
+      return;
+    }
+
+    if (!initialCloudHandshakeDoneRef.current || !workspaceInitialized) {
+      return;
+    }
+
+    let cancelled = false;
+    isPushingToServerRef.current = true;
+    setCloudSyncStatus('syncing');
+
+    pushWorkspaceToServer(
+      currentSnapshot,
+      'replace',
+      currentStaffAccount?.username || 'user'
+    )
+      .then((res) => {
+        if (cancelled) return;
+        if (res && res.ok) {
+          lastKnownServerVersionRef.current = Math.max(
+            lastKnownServerVersionRef.current,
+            res.version
+          );
+          setCloudVersion(res.version);
+          setLastCloudSyncAt(res.updatedAtMs || Date.now());
+          setCloudSyncedOnce(true);
+          setCloudSyncStatus('synced');
+          saveLocalMirror(ownerId, {
+            ...currentSnapshot,
+            version: res.version,
+            updatedAtMs: res.updatedAtMs || Date.now(),
+            cloudSyncedOnce: true,
+          });
+        } else {
+          setCloudSyncStatus('offline');
+        }
+      })
+      .finally(() => {
+        isPushingToServerRef.current = false;
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     ownerId,
     workspaceInitialized,
@@ -416,44 +773,155 @@ export default function App() {
     staffAccounts,
   ]);
 
-  // Fetch from Firebase Realtime Database on boot
-  useEffect(() => {
-    let mounted = true;
-    fetchRtdbWorkspaceOnce(ownerId).then((cloudSnap) => {
-      if (!mounted || !cloudSnap) return;
-      if (cloudSnap.initialized) {
-        setWorkspaceInitialized(true);
-        if (cloudSnap.categories && cloudSnap.categories.length > 0) {
-          setCategories(cloudSnap.categories);
-        }
-        if (cloudSnap.rolePermissions) {
-          setRolePermissions({
-            ...DEFAULT_ROLE_PERMISSIONS,
-            ...cloudSnap.rolePermissions,
-          });
-        }
-        if (cloudSnap.products) setProducts(cloudSnap.products);
-        if (cloudSnap.bills) setBills(cloudSnap.bills);
-        if (cloudSnap.billItems) setBillItems(cloudSnap.billItems);
-        if (cloudSnap.deductions) setDeductions(cloudSnap.deductions);
-        if (cloudSnap.returns) setReturns(cloudSnap.returns);
-        if (cloudSnap.debtors) setDebtors(cloudSnap.debtors);
-      } else if (cloudSnap.rolePermissions) {
-        setRolePermissions({
-          ...DEFAULT_ROLE_PERMISSIONS,
-          ...cloudSnap.rolePermissions,
-        });
+  // Real-Time Multi-Device & Multi-Browser Sync (Firestore + Server)
+  const handlePullFromCloud = useCallback(
+    async (manualNotify = false) => {
+      if (isPushingToServerRef.current && !manualNotify) return;
+      if (manualNotify) {
+        setCloudSyncStatus('syncing');
       }
-      if (cloudSnap.staffAccounts && cloudSnap.staffAccounts.length > 0) {
-        setStaffAccounts(
-          normalizeStaffAccountsWithFixedAdmin(cloudSnap.staffAccounts)
-        );
+
+      if (manualNotify) {
+        const [fsSnap, srvSnap] = await Promise.all([
+          fetchFirestoreWorkspaceOnce(),
+          fetchServerWorkspace(),
+        ]);
+        const bestSnap =
+          fsSnap && (fsSnap.bills.length >= (srvSnap?.bills?.length || 0))
+            ? fsSnap
+            : srvSnap?.initialized
+            ? srvSnap
+            : fsSnap;
+
+        if (bestSnap && bestSnap.initialized) {
+          applyRemoteWorkspaceSnapshot(bestSnap, true);
+          setCloudSyncStatus('synced');
+          showToast(
+            `Đã đồng bộ dữ liệu Cloud mới nhất (${
+              bestSnap.bills?.length || 0
+            } bill, ${bestSnap.products?.length || 0} món)!`
+          );
+          return;
+        }
       }
-    });
-    return () => {
-      mounted = false;
+
+      const verInfo = await fetchServerWorkspaceVersion();
+      if (!verInfo) {
+        if (manualNotify) {
+          setCloudSyncStatus('synced');
+          showToast('Đã đồng bộ trực tiếp với Firebase Cloud!');
+        }
+        return;
+      }
+
+      if (
+        verInfo.initialized &&
+        (verInfo.version > lastKnownServerVersionRef.current || manualNotify)
+      ) {
+        const remoteSnap = await fetchServerWorkspace();
+        if (remoteSnap && remoteSnap.initialized) {
+          applyRemoteWorkspaceSnapshot(remoteSnap, true);
+          setCloudSyncStatus('synced');
+          if (manualNotify) {
+            showToast(
+              `Đã đồng bộ dữ liệu Cloud mới nhất (v${remoteSnap.version || 1} · ${
+                remoteSnap.bills?.length || 0
+              } bill, ${remoteSnap.products?.length || 0} món)!`
+            );
+          }
+          return;
+        }
+      }
+
+      setCloudSyncStatus('synced');
+      if (manualNotify) {
+        showToast('Thiết bị này đã có dữ liệu mới nhất trên Cloud!');
+      }
+    },
+    [applyRemoteWorkspaceSnapshot]
+  );
+
+  const handleForcePushToCloud = async () => {
+    setCloudSyncStatus('syncing');
+    setWorkspaceInitialized(true);
+    const nextVer = lastKnownServerVersionRef.current + 1;
+    const snapshotToPush: WorkspaceCacheSnapshot = {
+      version: nextVer,
+      updatedAtMs: Date.now(),
+      cloudSyncedOnce: true,
+      initialized: true,
+      categories,
+      rolePermissions,
+      products,
+      bills,
+      billItems,
+      deductions,
+      returns,
+      debtors,
+      staffAccounts,
     };
-  }, [ownerId]);
+    const [fsOk, srvRes] = await Promise.all([
+      syncFullSnapshotToFirestore(
+        snapshotToPush,
+        currentStaffAccount?.username || 'manual_push'
+      ),
+      pushWorkspaceToServer(
+        snapshotToPush,
+        'replace',
+        currentStaffAccount?.username || 'manual_push'
+      ),
+    ]);
+    const finalVersion = srvRes?.version || nextVer;
+    if (fsOk || (srvRes && srvRes.ok)) {
+      lastKnownServerVersionRef.current = finalVersion;
+      setCloudVersion(finalVersion);
+      setLastCloudSyncAt(Date.now());
+      setCloudSyncedOnce(true);
+      setCloudSyncStatus('synced');
+      saveLocalMirror(ownerId, {
+        ...snapshotToPush,
+        version: finalVersion,
+        updatedAtMs: Date.now(),
+      });
+      showToast(
+        `Đã đồng bộ toàn bộ dữ liệu máy này (${bills.length} bill, ${products.length} món) lên Firebase Cloud (v${finalVersion})! Mọi máy tính và điện thoại khác đều xem được ngay.`
+      );
+    } else {
+      setCloudSyncStatus('offline');
+      showToast('Lỗi khi đẩy dữ liệu lên Cloud.');
+    }
+  };
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (initialCloudHandshakeDoneRef.current) {
+        handlePullFromCloud(false);
+      }
+    }, 3000);
+
+    const onFocus = () => {
+      if (initialCloudHandshakeDoneRef.current) {
+        handlePullFromCloud(false);
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (
+        document.visibilityState === 'visible' &&
+        initialCloudHandshakeDoneRef.current
+      ) {
+        handlePullFromCloud(false);
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [handlePullFromCloud]);
 
   // Track Firebase Auth State
   useEffect(() => {
@@ -504,22 +972,86 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Attach Firestore Real-Time Listeners when authenticated with Firebase Auth
+  // Attach Firestore Real-Time Listeners for the shared restaurant workspace across ALL accounts and devices
   useEffect(() => {
-    if (!authReady || !firebaseUser?.uid) return;
+    const wsId = SHARED_WORKSPACE_ID;
+    const qMeta = doc(db, 'workspace_meta', wsId);
+    const qBills = query(collection(db, 'bills'), where('ownerId', '==', wsId));
+    const qItems = query(collection(db, 'bill_items'), where('ownerId', '==', wsId));
+    const qProducts = query(collection(db, 'products'), where('ownerId', '==', wsId));
+    const qDeductions = query(collection(db, 'deductions'), where('ownerId', '==', wsId));
+    const qReturns = query(collection(db, 'returns'), where('ownerId', '==', wsId));
+    const qStaff = query(collection(db, 'staff_accounts'), where('ownerId', '==', wsId));
 
-    const uid = firebaseUser.uid;
-    const qBills = query(collection(db, 'bills'), where('ownerId', '==', uid));
-    const qItems = query(collection(db, 'bill_items'), where('ownerId', '==', uid));
-    const qProducts = query(collection(db, 'products'), where('ownerId', '==', uid));
-    const qDeductions = query(collection(db, 'deductions'), where('ownerId', '==', uid));
-    const qReturns = query(collection(db, 'returns'), where('ownerId', '==', uid));
-    const qStaff = query(collection(db, 'staff_accounts'), where('ownerId', '==', uid));
+    const unsubMeta = onSnapshot(
+      qMeta,
+      (snap) => {
+        if (!snap.exists()) return;
+        const data = snap.data();
+        markRemoteStateUpdate();
+        setWorkspaceInitialized(true);
+        setCloudSyncedOnce(true);
+        setCloudSyncStatus('synced');
+        if (data.version) {
+          const v = Number(data.version) || 1;
+          lastKnownServerVersionRef.current = Math.max(
+            lastKnownServerVersionRef.current,
+            v
+          );
+          setCloudVersion(lastKnownServerVersionRef.current);
+        }
+        setLastCloudSyncAt(data.updatedAt?.toMillis?.() || Date.now());
+
+        if (data.categoriesJson) {
+          try {
+            const parsed = JSON.parse(data.categoriesJson);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setCategories(parsed);
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (data.debtorsJson) {
+          try {
+            const parsed = JSON.parse(data.debtorsJson);
+            if (Array.isArray(parsed)) {
+              setDebtors(parsed);
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (data.rolePermissionsJson) {
+          try {
+            const parsed = JSON.parse(data.rolePermissionsJson);
+            if (parsed && typeof parsed === 'object') {
+              setRolePermissions((prev) => ({
+                ...DEFAULT_ROLE_PERMISSIONS,
+                ...prev,
+                ...parsed,
+              }));
+            }
+          } catch {
+            // ignore
+          }
+        }
+      },
+      () => {
+        // Ignore transient listener error
+      }
+    );
 
     const unsubBills = onSnapshot(
       qBills,
       (snap) => {
-        if (!snap.empty || workspaceInitialized) {
+        if (!snap.empty || initialCloudHandshakeDoneRef.current) {
+          if (snap.empty && !workspaceInitialized) return;
+          markRemoteStateUpdate();
+          setWorkspaceInitialized(true);
+          setCloudSyncedOnce(true);
+          setCloudSyncStatus('synced');
+          setLastCloudSyncAt(Date.now());
           const loaded: BillRecord[] = snap.docs.map((d) => {
             const data = d.data();
             return {
@@ -553,7 +1085,9 @@ export default function App() {
     const unsubItems = onSnapshot(
       qItems,
       (snap) => {
-        if (!snap.empty || workspaceInitialized) {
+        if (!snap.empty || initialCloudHandshakeDoneRef.current) {
+          if (snap.empty && !workspaceInitialized) return;
+          markRemoteStateUpdate();
           const loaded: BillItemRecord[] = snap.docs.map((d) => {
             const data = d.data();
             return {
@@ -581,7 +1115,9 @@ export default function App() {
     const unsubProducts = onSnapshot(
       qProducts,
       (snap) => {
-        if (!snap.empty || workspaceInitialized) {
+        if (!snap.empty || initialCloudHandshakeDoneRef.current) {
+          if (snap.empty && !workspaceInitialized) return;
+          markRemoteStateUpdate();
           const loaded: ProductRecord[] = snap.docs.map((d) => {
             const data = d.data();
             return {
@@ -607,7 +1143,9 @@ export default function App() {
     const unsubDeductions = onSnapshot(
       qDeductions,
       (snap) => {
-        if (!snap.empty || workspaceInitialized) {
+        if (!snap.empty || initialCloudHandshakeDoneRef.current) {
+          if (snap.empty && !workspaceInitialized) return;
+          markRemoteStateUpdate();
           const loaded: DeductionRecord[] = snap.docs.map((d) => {
             const data = d.data();
             return {
@@ -636,7 +1174,9 @@ export default function App() {
     const unsubReturns = onSnapshot(
       qReturns,
       (snap) => {
-        if (!snap.empty || workspaceInitialized) {
+        if (!snap.empty || initialCloudHandshakeDoneRef.current) {
+          if (snap.empty && !workspaceInitialized) return;
+          markRemoteStateUpdate();
           const loaded: ReturnRecord[] = snap.docs.map((d) => {
             const data = d.data();
             return {
@@ -666,6 +1206,7 @@ export default function App() {
       qStaff,
       (snap) => {
         if (!snap.empty) {
+          markRemoteStateUpdate();
           setStaffAccounts((prev) => {
             const prevMap = new Map<string, StaffAccount>(
               prev.map((p) => [p.id, p])
@@ -714,6 +1255,7 @@ export default function App() {
     );
 
     return () => {
+      unsubMeta();
       unsubBills();
       unsubItems();
       unsubProducts();
@@ -721,7 +1263,7 @@ export default function App() {
       unsubReturns();
       unsubStaff();
     };
-  }, [authReady, firebaseUser?.uid, workspaceInitialized]);
+  }, [workspaceInitialized, markRemoteStateUpdate]);
 
   // Date Range Helper
   const isDateInPeriod = (dateStr: string): boolean => {
@@ -891,6 +1433,10 @@ export default function App() {
     setAuthError(null);
     const eff = getEffectiveRolePermissions(acc, rolePermissions);
     setActiveTab(eff.allowedTabs[0] || 'dashboard');
+    // Immediately synchronize latest bills & workspace from Firebase Cloud upon login
+    setTimeout(() => {
+      handlePullFromCloud(false);
+    }, 50);
   };
 
   const handleGoogleSignIn = async () => {
@@ -1878,6 +2424,32 @@ export default function App() {
 
         {/* Primary Actions */}
         <div className="flex items-center gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            onClick={() => setShowCloudSyncModal(true)}
+            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+              cloudSyncStatus === 'synced'
+                ? 'border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                : cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting'
+                ? 'border-blue-200 dark:border-blue-800/80 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                : 'border-amber-200 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+            }`}
+            title="Trạng thái Đồng bộ Cloud đa thiết bị & trình duyệt"
+          >
+            {cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting' ? (
+              <RefreshCw className="w-3.5 h-3.5 shrink-0 animate-spin" />
+            ) : (
+              <Cloud className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="hidden md:inline">
+              {cloudSyncStatus === 'synced'
+                ? `Cloud: Đồng bộ (v${cloudVersion || 1})`
+                : cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting'
+                ? 'Đang đồng bộ...'
+                : 'Cloud: Offline'}
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowGeminiKeyModal(true)}
@@ -2877,6 +3449,121 @@ export default function App() {
           );
         })}
       </nav>
+
+      {/* Multi-Device Cloud Sync Status & Control Modal */}
+      {showCloudSyncModal && (
+        <div className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="w-full max-w-xl rounded-t-2xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
+            <div className="px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Cloud className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Đồng Bộ Dữ Liệu Cloud Đa Thiết Bị & Đa Trình Duyệt
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCloudSyncModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-5 space-y-4 text-xs">
+              <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/70 dark:bg-emerald-950/30 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>
+                      {cloudSyncStatus === 'synced'
+                        ? 'Đã kết nối & Đồng bộ Cloud Thời Gian Thực'
+                        : cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting'
+                        ? 'Đang đồng bộ dữ liệu với Cloud...'
+                        : 'Đang dùng bộ nhớ đệm (Chờ kết nối mạng)'}
+                    </span>
+                  </span>
+                  <span className="font-mono font-bold px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[11px]">
+                    Phiên bản Cloud v{cloudVersion || 1}
+                  </span>
+                </div>
+                <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Mọi hóa đơn, thực đơn, danh mục, công nợ, hoàn trả và tài khoản nhân sự đều được lưu trực tiếp trên Cloud chung của quán. Dù bạn đăng nhập bằng tài khoản{' '}
+                  <strong>@admin</strong>, tài khoản nhân viên hay Google trên bất kỳ trình duyệt hoặc điện thoại/máy tính nào cũng sẽ tự động thấy cùng một dữ liệu.
+                </p>
+                {lastCloudSyncAt && (
+                  <div className="text-[11px] font-mono text-slate-500 pt-1">
+                    Cập nhật lần cuối:{' '}
+                    {new Date(lastCloudSyncAt).toLocaleTimeString('vi-VN')} · Tự động kiểm tra mỗi 3 giây
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                  <div className="text-[11px] text-slate-500">Hóa đơn đã lưu</div>
+                  <div className="mt-0.5 text-base font-bold font-mono text-slate-900 dark:text-white">
+                    {bills.length} bill
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                  <div className="text-[11px] text-slate-500">Món trong Menu</div>
+                  <div className="mt-0.5 text-base font-bold font-mono text-slate-900 dark:text-white">
+                    {products.length} món
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                  <div className="text-[11px] text-slate-500">Danh mục nhóm</div>
+                  <div className="mt-0.5 text-base font-bold font-mono text-slate-900 dark:text-white">
+                    {effectiveCategories.length} nhóm
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                  <div className="text-[11px] text-slate-500">Tài khoản NS</div>
+                  <div className="mt-0.5 text-base font-bold font-mono text-slate-900 dark:text-white">
+                    {staffAccounts.length} TK
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => handlePullFromCloud(true)}
+                  className="p-3 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <DownloadCloud className="w-4 h-4 shrink-0" />
+                  <span>Tải dữ liệu mới nhất từ Cloud</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleForcePushToCloud}
+                  className="p-3 rounded-xl border border-blue-300 dark:border-blue-800 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 dark:hover:bg-blue-900/50 text-blue-800 dark:text-blue-200 font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <UploadCloud className="w-4 h-4 shrink-0" />
+                  <span>Đẩy dữ liệu máy này lên Cloud</span>
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500">
+                  {firebaseUser
+                    ? `Đã liên kết Google Firestore (${firebaseUser.email})`
+                    : 'Đang dùng Cloud Server trung tâm (Hỗ trợ mọi tài khoản @admin / nhân viên)'}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCloudSyncModal(false)}
+                  className="px-3.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer"
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Gemini API Key Popup Modal */}
       {showGeminiKeyModal && (

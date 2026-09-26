@@ -39,6 +39,18 @@ service cloud.firestore {
       );
     }
 
+    function isSharedWorkspace(ownerId) {
+      return ownerId is string && ownerId in ['vqbill_shared_workspace', 'vqbill_default_workspace'];
+    }
+
+    function canReadWorkspace(ownerId) {
+      return isSharedWorkspace(ownerId) || (isSignedIn() && (request.auth.uid == ownerId || isAdmin()));
+    }
+
+    function canWriteWorkspace(ownerId) {
+      return isSharedWorkspace(ownerId) || (isVerified() && (request.auth.uid == ownerId || isAdmin()));
+    }
+
     // 3. Entity Validation Blueprints (Anti-Update-Gap)
     function isValidAdminDoc(data) {
       return data.keys().hasAll(['uid', 'createdAt']) &&
@@ -68,7 +80,7 @@ service cloud.firestore {
           'ownerId', 'username', 'password', 'displayName',
           'info', 'role', 'active', 'createdAt', 'updatedAt'
         ]) &&
-        data.ownerId == request.auth.uid &&
+        canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.username is string && data.username.size() >= 1 && data.username.size() <= 64 &&
         data.password is string && data.password.size() >= 1 && data.password.size() <= 100 &&
@@ -89,7 +101,7 @@ service cloud.firestore {
           'ownerId', 'productName', 'category', 'unitPrice', 'unit',
           'totalSold', 'totalReturned', 'totalRevenue', 'createdAt', 'updatedAt'
         ]) &&
-        data.ownerId == request.auth.uid &&
+        canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
         data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
@@ -114,13 +126,18 @@ service cloud.firestore {
           'totalAmount', 'deductedAmount', 'itemsSummary',
           'note', 'status', 'createdAt', 'updatedAt'
         ]) &&
-        data.ownerId == request.auth.uid &&
+        canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&
         data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        (!('rawDate' in data) || (data.rawDate is string && data.rawDate.size() <= 20)) &&
+        (!('checkInTime' in data) || (data.checkInTime is string && data.checkInTime.size() <= 20)) &&
+        (!('checkOutTime' in data) || (data.checkOutTime is string && data.checkOutTime.size() <= 20)) &&
         data.paymentType is string && data.paymentType in ['cash', 'transfer', 'debt'] &&
         data.debtorName is string && data.debtorName.size() <= 120 &&
         data.debtStatus is string && data.debtStatus in ['none', 'unpaid', 'paid'] &&
+        (!('subtotalAmount' in data) || (data.subtotalAmount is number && data.subtotalAmount >= 0)) &&
+        (!('discountAmount' in data) || (data.discountAmount is number && data.discountAmount >= 0)) &&
         data.totalAmount is number && data.totalAmount >= 0 &&
         data.deductedAmount is number && data.deductedAmount >= 0 &&
         data.itemsSummary is string && data.itemsSummary.size() <= 1000 &&
@@ -139,7 +156,7 @@ service cloud.firestore {
           'ownerId', 'billId', 'billDate', 'productName', 'note', 'category',
           'quantity', 'returnedQuantity', 'unitPrice', 'subtotal', 'createdAt', 'updatedAt'
         ]) &&
-        data.ownerId == request.auth.uid &&
+        canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billId is string && data.billId.size() >= 1 && data.billId.size() <= 128 && data.billId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
@@ -165,7 +182,7 @@ service cloud.firestore {
           'productName', 'category', 'quantity', 'unitPrice', 'amount',
           'note', 'createdAt', 'updatedAt'
         ]) &&
-        data.ownerId == request.auth.uid &&
+        canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billId is string && data.billId.size() >= 1 && data.billId.size() <= 128 && data.billId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&
@@ -192,7 +209,7 @@ service cloud.firestore {
           'productName', 'category', 'quantity', 'unitPrice', 'amount',
           'note', 'createdAt', 'updatedAt'
         ]) &&
-        data.ownerId == request.auth.uid &&
+        canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billId is string && data.billId.size() >= 1 && data.billId.size() <= 128 && data.billId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&
@@ -204,6 +221,27 @@ service cloud.firestore {
         data.unitPrice is number && data.unitPrice >= 0 &&
         data.amount is number && data.amount >= 0 &&
         data.note is string && data.note.size() <= 500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceMeta(data) {
+      return data.keys().hasAll([
+          'ownerId', 'initialized', 'version', 'categoriesJson',
+          'debtorsJson', 'rolePermissionsJson', 'updatedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'initialized', 'version', 'categoriesJson',
+          'debtorsJson', 'rolePermissionsJson', 'updatedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        canWriteWorkspace(data.ownerId) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.initialized is bool &&
+        data.version is number && data.version >= 0 &&
+        data.categoriesJson is string && data.categoriesJson.size() <= 20000 &&
+        data.debtorsJson is string && data.debtorsJson.size() <= 50000 &&
+        data.rolePermissionsJson is string && data.rolePermissionsJson.size() <= 50000 &&
+        data.updatedBy is string && data.updatedBy.size() <= 100 &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -239,144 +277,143 @@ service cloud.firestore {
       allow delete: if isVerified() && isValidId(userId) && isAdmin();
     }
 
-    match /staff_accounts/{accountId} {
-      allow get: if isSignedIn() && isValidId(accountId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow create: if isVerified() && isValidId(accountId) && isValidStaffAccount(incoming()) &&
+    match /workspace_meta/{workspaceId} {
+      allow get: if isValidId(workspaceId) && canReadWorkspace(workspaceId);
+      allow list: if canReadWorkspace(resource.data.ownerId);
+      allow create: if isValidId(workspaceId) && incoming().ownerId == workspaceId &&
+        isValidWorkspaceMeta(incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isVerified() && isValidId(accountId) && isValidStaffAccount(incoming()) &&
+      allow update: if isValidId(workspaceId) && isValidWorkspaceMeta(incoming()) &&
         incoming().ownerId == existing().ownerId &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() || (
-            existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'username', 'password', 'displayName', 'info', 'role', 'active', 'updatedAt'
-            ])
-          )
-        );
-      allow delete: if isVerified() && isValidId(accountId) && (existing().ownerId == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        canWriteWorkspace(existing().ownerId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'initialized', 'version', 'categoriesJson',
+          'debtorsJson', 'rolePermissionsJson', 'updatedBy', 'updatedAt'
+        ]);
+      allow delete: if isValidId(workspaceId) && isAdmin();
+    }
+
+    match /staff_accounts/{accountId} {
+      allow get: if isValidId(accountId) && canReadWorkspace(existing().ownerId);
+      allow list: if canReadWorkspace(resource.data.ownerId);
+      allow create: if isValidId(accountId) && isValidStaffAccount(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(accountId) && isValidStaffAccount(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        canWriteWorkspace(existing().ownerId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'username', 'password', 'displayName', 'info', 'role', 'active', 'updatedAt'
+        ]);
+      allow delete: if isValidId(accountId) && canWriteWorkspace(existing().ownerId);
     }
 
     match /products/{productId} {
-      allow get: if isSignedIn() && isValidId(productId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow create: if isVerified() && isValidId(productId) && isValidProduct(incoming()) &&
+      allow get: if isValidId(productId) && canReadWorkspace(existing().ownerId);
+      allow list: if canReadWorkspace(resource.data.ownerId);
+      allow create: if isValidId(productId) && isValidProduct(incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isVerified() && isValidId(productId) && isValidProduct(incoming()) &&
+      allow update: if isValidId(productId) && isValidProduct(incoming()) &&
         incoming().ownerId == existing().ownerId &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() || (
-            existing().ownerId == request.auth.uid && (
-              incoming().diff(existing()).affectedKeys().hasOnly(['productName', 'category', 'unitPrice', 'unit', 'updatedAt']) ||
-              incoming().diff(existing()).affectedKeys().hasOnly(['totalSold', 'totalReturned', 'totalRevenue', 'unitPrice', 'updatedAt']) ||
-              incoming().diff(existing()).affectedKeys().hasOnly([
-                'productName', 'category', 'unitPrice', 'unit',
-                'totalSold', 'totalReturned', 'totalRevenue', 'updatedAt'
-              ])
-            )
-          )
+        incoming().updatedAt == request.time &&
+        canWriteWorkspace(existing().ownerId) && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['productName', 'category', 'unitPrice', 'unit', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['totalSold', 'totalReturned', 'totalRevenue', 'unitPrice', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'productName', 'category', 'unitPrice', 'unit',
+            'totalSold', 'totalReturned', 'totalRevenue', 'updatedAt'
+          ])
         );
-      allow delete: if isVerified() && isValidId(productId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow delete: if isValidId(productId) && canWriteWorkspace(existing().ownerId);
     }
 
     match /bills/{billId} {
-      allow get: if isSignedIn() && isValidId(billId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow create: if isVerified() && isValidId(billId) && isValidBill(incoming()) &&
+      allow get: if isValidId(billId) && canReadWorkspace(existing().ownerId);
+      allow list: if canReadWorkspace(resource.data.ownerId);
+      allow create: if isValidId(billId) && isValidBill(incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isVerified() && isValidId(billId) && isValidBill(incoming()) &&
+      allow update: if isValidId(billId) && isValidBill(incoming()) &&
         incoming().ownerId == existing().ownerId &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() || (
-            existing().ownerId == request.auth.uid &&
-            existing().status != 'locked' && (
-              incoming().diff(existing()).affectedKeys().hasOnly(['debtStatus', 'paymentType', 'note', 'updatedAt']) ||
-              incoming().diff(existing()).affectedKeys().hasOnly(['deductedAmount', 'itemsSummary', 'note', 'updatedAt']) ||
-              incoming().diff(existing()).affectedKeys().hasOnly([
-                'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime',
-                'paymentType', 'debtorName', 'debtStatus', 'subtotalAmount', 'discountAmount',
-                'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'updatedAt'
-              ])
-            )
-          )
+        incoming().updatedAt == request.time &&
+        canWriteWorkspace(existing().ownerId) &&
+        (isAdmin() || existing().status != 'locked') && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['debtStatus', 'paymentType', 'note', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['deductedAmount', 'itemsSummary', 'note', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime',
+            'paymentType', 'debtorName', 'debtStatus', 'subtotalAmount', 'discountAmount',
+            'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'updatedAt'
+          ])
         );
-      allow delete: if isVerified() && isValidId(billId) && (
-        isAdmin() || (existing().ownerId == request.auth.uid && existing().status != 'locked')
+      allow delete: if isValidId(billId) && canWriteWorkspace(existing().ownerId) && (
+        isAdmin() || existing().status != 'locked'
       );
     }
 
     match /bill_items/{itemId} {
-      allow get: if isSignedIn() && isValidId(itemId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow create: if isVerified() && isValidId(itemId) && isValidBillItem(incoming()) &&
+      allow get: if isValidId(itemId) && canReadWorkspace(existing().ownerId);
+      allow list: if canReadWorkspace(resource.data.ownerId);
+      allow create: if isValidId(itemId) && isValidBillItem(incoming()) &&
         incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time &&
-        exists(/databases/$(database)/documents/bills/$(incoming().billId)) &&
-        get(/databases/$(database)/documents/bills/$(incoming().billId)).data.ownerId == request.auth.uid;
-      allow update: if isVerified() && isValidId(itemId) && isValidBillItem(incoming()) &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(itemId) && isValidBillItem(incoming()) &&
         incoming().ownerId == existing().ownerId &&
         incoming().billId == existing().billId &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() || (
-            existing().ownerId == request.auth.uid && (
-              incoming().diff(existing()).affectedKeys().hasOnly(['returnedQuantity', 'updatedAt']) ||
-              incoming().diff(existing()).affectedKeys().hasOnly([
-                'billDate', 'productName', 'note', 'category', 'quantity',
-                'returnedQuantity', 'unitPrice', 'subtotal', 'updatedAt'
-              ])
-            )
-          )
+        incoming().updatedAt == request.time &&
+        canWriteWorkspace(existing().ownerId) && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['returnedQuantity', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'billDate', 'productName', 'note', 'category', 'quantity',
+            'returnedQuantity', 'unitPrice', 'subtotal', 'updatedAt'
+          ])
         );
-      allow delete: if isVerified() && isValidId(itemId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow delete: if isValidId(itemId) && canWriteWorkspace(existing().ownerId);
     }
 
     match /deductions/{deductionId} {
-      allow get: if isSignedIn() && isValidId(deductionId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow create: if isVerified() && isValidId(deductionId) && isValidDeduction(incoming()) &&
+      allow get: if isValidId(deductionId) && canReadWorkspace(existing().ownerId);
+      allow list: if canReadWorkspace(resource.data.ownerId);
+      allow create: if isValidId(deductionId) && isValidDeduction(incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isVerified() && isValidId(deductionId) && isValidDeduction(incoming()) &&
+      allow update: if isValidId(deductionId) && isValidDeduction(incoming()) &&
         incoming().ownerId == existing().ownerId &&
         incoming().billId == existing().billId &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() || (
-            existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'deductionDate', 'productName', 'category', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
-            ])
-          )
-        );
-      allow delete: if isVerified() && isValidId(deductionId) && (existing().ownerId == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        canWriteWorkspace(existing().ownerId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'deductionDate', 'productName', 'category', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
+        ]);
+      allow delete: if isValidId(deductionId) && canWriteWorkspace(existing().ownerId);
     }
 
     match /returns/{returnId} {
-      allow get: if isSignedIn() && isValidId(returnId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow create: if isVerified() && isValidId(returnId) && isValidReturn(incoming()) &&
+      allow get: if isValidId(returnId) && canReadWorkspace(existing().ownerId);
+      allow list: if canReadWorkspace(resource.data.ownerId);
+      allow create: if isValidId(returnId) && isValidReturn(incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isVerified() && isValidId(returnId) && isValidReturn(incoming()) &&
+      allow update: if isValidId(returnId) && isValidReturn(incoming()) &&
         incoming().ownerId == existing().ownerId &&
         incoming().billId == existing().billId &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() || (
-            existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'returnDate', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
-            ])
-          )
-        );
-      allow delete: if isVerified() && isValidId(returnId) && (existing().ownerId == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        canWriteWorkspace(existing().ownerId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'returnDate', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
+        ]);
+      allow delete: if isValidId(returnId) && canWriteWorkspace(existing().ownerId);
     }
   }
 }

@@ -1,12 +1,16 @@
 import React, { useState, useMemo } from 'react';
 import {
   ChevronRight,
+  ChevronDown,
   Layers,
   BarChart3,
   Trash2,
   FolderPlus,
   Edit3,
   X,
+  Filter,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react';
 import {
   BillItemRecord,
@@ -84,6 +88,41 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
   const [newCatInput, setNewCatInput] = useState('');
   const [renamingCat, setRenamingCat] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+
+  // Dropdown & Accordion states for mobile-optimized category drilldown
+  const [summaryExpandedCats, setSummaryExpandedCats] = useState<Record<string, boolean>>({});
+  const [matrixFilterCategory, setMatrixFilterCategory] = useState<string>('all');
+  const [matrixExpandedCats, setMatrixExpandedCats] = useState<Record<string, boolean>>({});
+
+  const toggleSummaryCat = (catName: string) => {
+    setSelectedCategory(catName);
+    setSummaryExpandedCats((prev) => ({
+      ...prev,
+      [catName]: !(prev[catName] ?? catName === selectedCategory),
+    }));
+  };
+
+  const isMatrixCatOpen = (catName: string, hasSales: boolean, idx: number) => {
+    if (matrixFilterCategory !== 'all') return true;
+    if (catName in matrixExpandedCats) return matrixExpandedCats[catName];
+    // Default: open active category or first category with sales
+    return catName === activeCategoryData.category || (hasSales && idx < 2);
+  };
+
+  const toggleMatrixCat = (catName: string, currentOpen: boolean) => {
+    setMatrixExpandedCats((prev) => ({
+      ...prev,
+      [catName]: !currentOpen,
+    }));
+  };
+
+  const handleExpandAllMatrix = (open: boolean) => {
+    const next: Record<string, boolean> = {};
+    for (const c of categoryStats) {
+      next[c.category] = open;
+    }
+    setMatrixExpandedCats(next);
+  };
 
   const allCategories = useMemo(() => {
     const set = new Set<string>();
@@ -429,9 +468,9 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
 
       {/* Overview Chart: All Categories */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
-        {/* Left: Category Column Chart & Selector */}
+        {/* Left: Category Column Chart, Dropdown & Collapsible Selector */}
         <div className="lg:col-span-6 p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -439,120 +478,223 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
               </h3>
             </div>
             <span className="text-[11px] text-slate-500 dark:text-slate-400">
-              Bấm chọn để xem chi tiết
+              Chọn danh mục từ dropdown hoặc bấm vào nhóm để xổ mục con bên dưới
             </span>
           </div>
 
-          <div className="space-y-2.5">
+          {/* Quick Category Dropdown Selector (Optimized for Mobile & Desktop) */}
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Chọn nhanh Danh mục (Dropdown):</span>
+              </label>
+              <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
+                {activeCategoryData.products.length} mặt hàng
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <select
+                value={activeCategoryData.category}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedCategory(val);
+                  setSummaryExpandedCats((prev) => ({ ...prev, [val]: true }));
+                }}
+                className="flex-1 px-3 py-2.5 text-xs sm:text-sm font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+              >
+                {categoryStats.map((cat) => (
+                  <option key={cat.category} value={cat.category}>
+                    {cat.category} — SL: {formatNumber(cat.netQty)} · {formatVND(cat.netRevenue)} ({cat.products.length} món)
+                  </option>
+                ))}
+              </select>
+
+              {canWrite && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenamingCat(activeCategoryData.category);
+                      setRenameValue(activeCategoryData.category);
+                    }}
+                    className="p-2 text-slate-500 hover:text-emerald-600 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl cursor-pointer"
+                    title="Đổi tên danh mục đang chọn"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmDeleteCat(activeCategoryData.category)}
+                    className="p-2 text-slate-500 hover:text-rose-600 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl cursor-pointer"
+                    title="Xóa danh mục đang chọn"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Inline rename input when triggered from dropdown or row */}
+            {renamingCat === activeCategoryData.category && (
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="text"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  placeholder="Nhập tên danh mục mới..."
+                  className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => handleConfirmRename(activeCategoryData.category)}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
+                >
+                  Lưu tên
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRenamingCat(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Collapsible Category Rows with Inline Child Items Dropdown */}
+          <div className="space-y-2">
             {categoryStats.map((cat) => {
               const val = metricMode === 'quantity' ? cat.netQty : cat.netRevenue;
               const widthPct = Math.max(2, Math.round((val / maxCatMetric) * 100));
               const isSelected = cat.category === activeCategoryData.category;
+              const isExpanded = summaryExpandedCats[cat.category] ?? isSelected;
               const isRenaming = renamingCat === cat.category;
 
               return (
                 <div
                   key={cat.category}
-                  onClick={() => setSelectedCategory(cat.category)}
-                  className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer ${
+                  className={`rounded-xl border transition-all overflow-hidden ${
                     isSelected
-                      ? 'border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/25 shadow-2xs'
-                      : 'border-slate-200/80 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                      ? 'border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 shadow-2xs'
+                      : 'border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900'
                   }`}
                 >
-                  <div className="flex flex-wrap items-center justify-between text-xs mb-2 gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {isRenaming ? (
-                        <div
-                          className="flex items-center gap-1"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            type="text"
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            className="px-2 py-1 text-xs rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white w-32"
-                            autoFocus
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleConfirmRename(cat.category)}
-                            className="px-2 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
+                  <div
+                    onClick={() => toggleSummaryCat(cat.category)}
+                    className="w-full text-left p-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between text-xs mb-2 gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <ChevronDown
+                          className={`w-4 h-4 shrink-0 transition-transform duration-200 ${
+                            isExpanded
+                              ? 'rotate-0 text-emerald-600 dark:text-emerald-400'
+                              : '-rotate-90 text-slate-400'
+                          }`}
+                        />
+                        {isRenaming ? (
+                          <div
+                            className="flex items-center gap-1"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            Lưu
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setRenamingCat(null)}
-                            className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <span className="font-bold text-slate-900 dark:text-white truncate">
-                            {cat.category}
-                          </span>
-                          <span className="text-slate-400">·</span>
-                          <span className="text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                            {cat.products.length} món
-                          </span>
-                        </>
-                      )}
+                            <input
+                              type="text"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              className="px-2 py-1 text-xs rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white w-28 sm:w-36"
+                              autoFocus
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleConfirmRename(cat.category)}
+                              className="px-2 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
+                            >
+                              Lưu
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRenamingCat(null)}
+                              className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="font-bold text-slate-900 dark:text-white truncate">
+                              {cat.category}
+                            </span>
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 whitespace-nowrap shrink-0">
+                              {cat.products.length} món
+                            </span>
+                          </>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 font-mono shrink-0 ml-auto">
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                          SL: {formatNumber(cat.netQty)}
+                        </span>
+                        <span className="text-slate-300 dark:text-slate-700">|</span>
+                        <span className="font-semibold text-slate-800 dark:text-slate-200">
+                          {formatVND(cat.netRevenue)}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2 font-mono shrink-0 ml-auto">
-                      <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                        SL: {formatNumber(cat.netQty)}
-                      </span>
-                      <span className="text-slate-300 dark:text-slate-700">|</span>
-                      <span className="font-semibold text-slate-800 dark:text-slate-200">
-                        {formatVND(cat.netRevenue)}
-                      </span>
-                      {canWrite && !isRenaming && (
-                        <div
-                          className="flex items-center gap-0.5 ml-1"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRenamingCat(cat.category);
-                              setRenameValue(cat.category);
-                            }}
-                            className="p-1 text-slate-400 hover:text-emerald-600 rounded cursor-pointer"
-                            title="Sửa tên danh mục"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleConfirmDeleteCat(cat.category)}
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
-                            title="Xóa danh mục"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
-                      <ChevronRight
-                        className={`w-4 h-4 transition-transform ${
-                          isSelected ? 'text-emerald-500 translate-x-0.5' : 'text-slate-400'
+                    <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        style={{ width: `${val > 0 ? widthPct : 0}%` }}
+                        className={`h-full rounded-full transition-all ${
+                          isSelected
+                            ? 'bg-emerald-600 dark:bg-emerald-500'
+                            : 'bg-slate-400 dark:bg-slate-600'
                         }`}
                       />
                     </div>
                   </div>
-                  <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      style={{ width: `${val > 0 ? widthPct : 0}%` }}
-                      className={`h-full rounded-full transition-all ${
-                        isSelected
-                          ? 'bg-emerald-600 dark:bg-emerald-500'
-                          : 'bg-slate-400 dark:bg-slate-600'
-                      }`}
-                    />
-                  </div>
+
+                  {/* Dropdown Child Items List right underneath Category */}
+                  {isExpanded && (
+                    <div className="border-t border-slate-200/70 dark:border-slate-800 bg-white dark:bg-slate-950/50 px-3 py-2.5 space-y-1.5">
+                      {cat.products.length === 0 ? (
+                        <div className="py-3 text-center text-xs text-slate-400">
+                          Chưa có mặt hàng nào trong danh mục "{cat.category}"
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-100 dark:divide-slate-800/70">
+                          {cat.products.map((prod) => (
+                            <div
+                              key={prod.productName}
+                              className="py-2 flex items-center justify-between gap-2 text-xs"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                  {prod.productName}
+                                </p>
+                                <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                  Đơn giá: {formatVND(prod.unitPrice)} · Bán: {formatNumber(prod.soldQty)}
+                                  {prod.returnedQty > 0 ? ` · Trả: -${formatNumber(prod.returnedQty)}` : ''}
+                                </p>
+                              </div>
+                              <div className="text-right font-mono shrink-0">
+                                <span className="inline-block px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-bold text-xs">
+                                  SL: {formatNumber(prod.netQty)}
+                                </span>
+                                <p className="font-bold text-slate-900 dark:text-white mt-0.5">
+                                  {formatVND(prod.netRevenue)}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -694,79 +836,156 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
         </div>
       </div>
 
-      {/* Full Matrix Cards: All Categories & Their Products */}
+      {/* Full Matrix Cards: All Categories & Their Products (Dropdown & Collapsible Accordion) */}
       <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
-        <div>
-          <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-            Bảng Tổng Hợp Toàn Bộ Danh Mục & Mặt Hàng
-          </h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Đối soát nhanh số lượng thực bán và doanh thu từng món trong mọi nhóm hàng
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+              Bảng Tổng Hợp Toàn Bộ Danh Mục & Mặt Hàng
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Chọn danh mục từ dropdown hoặc bấm vào từng nhóm để xổ xem các mặt hàng con bên dưới
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={matrixFilterCategory}
+              onChange={(e) => {
+                const val = e.target.value;
+                setMatrixFilterCategory(val);
+                if (val !== 'all') {
+                  setMatrixExpandedCats((prev) => ({ ...prev, [val]: true }));
+                }
+              }}
+              className="flex-1 sm:flex-initial min-w-[210px] px-3 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+            >
+              <option value="all">
+                Tất cả danh mục ({categoryStats.length} nhóm)
+              </option>
+              {categoryStats.map((cat) => (
+                <option key={cat.category} value={cat.category}>
+                  {cat.category} ({cat.products.length} món · SL: {formatNumber(cat.netQty)})
+                </option>
+              ))}
+            </select>
+
+            {matrixFilterCategory === 'all' && (
+              <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => handleExpandAllMatrix(true)}
+                  className="flex-1 sm:flex-initial justify-center px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <ChevronsUpDown className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Mở tất cả</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExpandAllMatrix(false)}
+                  className="flex-1 sm:flex-initial justify-center px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <ChevronsDownUp className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Thu gọn</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {categoryStats.map((cat) => {
-            const sharePct = Math.round((cat.netRevenue / totalAllNetRevenue) * 100);
-            return (
-              <div
-                key={cat.category}
-                className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-hidden flex flex-col justify-between"
-              >
-                <div>
-                  <div className="px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 items-start">
+          {categoryStats
+            .filter(
+              (cat) =>
+                matrixFilterCategory === 'all' ||
+                cat.category === matrixFilterCategory
+            )
+            .map((cat, idx) => {
+              const sharePct = Math.round((cat.netRevenue / totalAllNetRevenue) * 100);
+              const isOpen = isMatrixCatOpen(cat.category, cat.netQty > 0, idx);
+
+              return (
+                <div
+                  key={cat.category}
+                  className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900 transition-all"
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleMatrixCat(cat.category, isOpen)}
+                    className="w-full px-3.5 py-3 bg-slate-50 dark:bg-slate-800/70 hover:bg-slate-100/80 dark:hover:bg-slate-800 flex items-center justify-between gap-2 text-left cursor-pointer transition-colors"
+                  >
                     <div className="flex items-center gap-2 text-xs min-w-0">
+                      <ChevronDown
+                        className={`w-4 h-4 shrink-0 transition-transform duration-200 ${
+                          isOpen
+                            ? 'rotate-0 text-emerald-600 dark:text-emerald-400'
+                            : '-rotate-90 text-slate-400'
+                        }`}
+                      />
                       <span className="font-bold text-slate-900 dark:text-white truncate">
                         {cat.category}
                       </span>
-                      <span className="text-slate-400">·</span>
+                      <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700 text-slate-600 dark:text-slate-400 shrink-0">
+                        {cat.products.length} món
+                      </span>
                       <span className="font-mono text-slate-500 dark:text-slate-400 shrink-0">
                         SL: {formatNumber(cat.netQty)}
                       </span>
                     </div>
-                    <div className="text-xs font-mono shrink-0">
+                    <div className="text-xs font-mono shrink-0 flex items-center gap-1">
                       <span className="font-bold text-emerald-600 dark:text-emerald-400">
                         {formatVND(cat.netRevenue)}
                       </span>
-                      <span className="text-slate-400 ml-1">({sharePct}%)</span>
+                      <span className="text-slate-400 hidden sm:inline">({sharePct}%)</span>
                     </div>
-                  </div>
+                  </button>
 
-                  {cat.products.length === 0 ? (
-                    <div className="p-4 text-xs text-slate-400 text-center">
-                      Chưa có món bán ra
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
-                      {cat.products.map((p) => (
-                        <div
-                          key={p.productName}
-                          className="px-3.5 py-2.5 flex items-center justify-between gap-2 hover:bg-slate-50/50 dark:hover:bg-slate-800/30"
-                        >
-                          <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
-                            {p.productName}
-                          </span>
-                          <div className="flex items-center gap-3 font-mono text-xs shrink-0">
-                            <span className="text-slate-500">
-                              SL: <strong className="text-slate-900 dark:text-white">{p.netQty}</strong>
-                              {p.returnedQty > 0 && (
-                                <span className="text-rose-500 ml-1">
-                                  (-{p.returnedQty})
-                                </span>
-                              )}
-                            </span>
-                            <span className="w-24 text-right font-semibold text-slate-900 dark:text-white">
-                              {formatVND(p.netRevenue)}
-                            </span>
-                          </div>
+                  {isOpen && (
+                    <div className="border-t border-slate-200 dark:border-slate-800">
+                      {cat.products.length === 0 ? (
+                        <div className="p-4 text-xs text-slate-400 text-center">
+                          Chưa có món bán ra trong nhóm này
                         </div>
-                      ))}
+                      ) : (
+                        <div className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
+                          {cat.products.map((p) => (
+                            <div
+                              key={p.productName}
+                              className="px-3.5 py-2.5 flex items-center justify-between gap-2 hover:bg-slate-50/50 dark:hover:bg-slate-800/30"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <span className="font-medium text-slate-800 dark:text-slate-200 block truncate">
+                                  {p.productName}
+                                </span>
+                                <span className="text-[11px] font-mono text-slate-400">
+                                  Đ.Giá: {formatVND(p.unitPrice)}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2.5 sm:gap-3 font-mono text-xs shrink-0">
+                                <span className="text-slate-500">
+                                  SL:{' '}
+                                  <strong className="text-slate-900 dark:text-white">
+                                    {p.netQty}
+                                  </strong>
+                                  {p.returnedQty > 0 && (
+                                    <span className="text-rose-500 ml-1">
+                                      (-{p.returnedQty})
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="min-w-[80px] sm:w-24 text-right font-semibold text-slate-900 dark:text-white">
+                                  {formatVND(p.netRevenue)}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
         </div>
       </div>
     </div>
