@@ -1,15 +1,32 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronRight, Layers, BarChart3, Trash2 } from 'lucide-react';
-import { BillItemRecord, ProductRecord, STANDARD_CATEGORIES } from '../types';
+import {
+  ChevronRight,
+  Layers,
+  BarChart3,
+  Trash2,
+  FolderPlus,
+  Edit3,
+  X,
+} from 'lucide-react';
+import {
+  BillItemRecord,
+  ProductRecord,
+  ConfirmRequestOptions,
+} from '../types';
 import { formatVND, formatNumber } from '../utils/parser';
 
 interface CategoryAnalyticsTabProps {
   billItems: BillItemRecord[];
   products: ProductRecord[];
+  categories: string[];
   periodLabel: string;
   canWrite: boolean;
+  onAddCategory: (categoryName: string) => Promise<void>;
+  onRenameCategory: (oldName: string, newName: string) => Promise<void>;
+  onDeleteCategory: (categoryName: string) => Promise<void>;
   onDeleteAllMenuProducts: () => void;
   onDeleteCategoryMenuProducts: (category: string) => void;
+  requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
 
 interface ProductAgg {
@@ -36,18 +53,29 @@ interface CategoryAgg {
 export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
   billItems,
   products,
+  categories,
   periodLabel,
   canWrite,
+  onAddCategory,
+  onRenameCategory,
+  onDeleteCategory,
   onDeleteAllMenuProducts,
   onDeleteCategoryMenuProducts,
+  requestConfirm,
 }) => {
-  const [selectedCategory, setSelectedCategory] = useState<string>('Bia');
+  const [selectedCategory, setSelectedCategory] = useState<string>(
+    categories[0] || 'Bia'
+  );
   const [metricMode, setMetricMode] = useState<'quantity' | 'revenue'>('quantity');
+
+  const [newCatInput, setNewCatInput] = useState('');
+  const [renamingCat, setRenamingCat] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   const categoryStats = useMemo<CategoryAgg[]>(() => {
     const catMap = new Map<string, Map<string, ProductAgg>>();
 
-    for (const cat of STANDARD_CATEGORIES) {
+    for (const cat of categories) {
       catMap.set(cat, new Map());
     }
 
@@ -90,14 +118,14 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
 
     const result: CategoryAgg[] = [];
     for (const [category, prodMap] of catMap.entries()) {
-      const products = Array.from(prodMap.values()).sort((a, b) =>
+      const prods = Array.from(prodMap.values()).sort((a, b) =>
         metricMode === 'quantity' ? b.netQty - a.netQty : b.netRevenue - a.netRevenue
       );
-      const soldQty = products.reduce((s, p) => s + p.soldQty, 0);
-      const returnedQty = products.reduce((s, p) => s + p.returnedQty, 0);
-      const netQty = products.reduce((s, p) => s + p.netQty, 0);
-      const grossRevenue = products.reduce((s, p) => s + p.grossRevenue, 0);
-      const netRevenue = products.reduce((s, p) => s + p.netRevenue, 0);
+      const soldQty = prods.reduce((s, p) => s + p.soldQty, 0);
+      const returnedQty = prods.reduce((s, p) => s + p.returnedQty, 0);
+      const netQty = prods.reduce((s, p) => s + p.netQty, 0);
+      const grossRevenue = prods.reduce((s, p) => s + p.grossRevenue, 0);
+      const netRevenue = prods.reduce((s, p) => s + p.netRevenue, 0);
 
       result.push({
         category,
@@ -106,12 +134,12 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
         netQty,
         grossRevenue,
         netRevenue,
-        products,
+        products: prods,
       });
     }
 
     return result;
-  }, [billItems, metricMode]);
+  }, [billItems, categories, metricMode]);
 
   const totalAllNetRevenue = useMemo(
     () => Math.max(1, categoryStats.reduce((s, c) => s + c.netRevenue, 0)),
@@ -129,7 +157,7 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
     return (
       categoryStats.find((c) => c.category === selectedCategory) ||
       categoryStats[0] || {
-        category: 'Bia',
+        category: categories[0] || 'Bia',
         soldQty: 0,
         returnedQty: 0,
         netQty: 0,
@@ -138,7 +166,7 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
         products: [],
       }
     );
-  }, [categoryStats, selectedCategory]);
+  }, [categoryStats, selectedCategory, categories]);
 
   const maxProductMetric = useMemo(() => {
     return Math.max(
@@ -149,59 +177,142 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
     );
   }, [activeCategoryData, metricMode]);
 
+  const handleQuickAddCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canWrite) return;
+    const trimmed = newCatInput.trim();
+    if (!trimmed) return;
+    if (categories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) return;
+
+    requestConfirm({
+      title: 'Xác nhận Thêm Danh Mục Sản Phẩm',
+      message: `Bạn có chắc chắn muốn thêm danh mục "${trimmed}" vào hệ thống không?`,
+      confirmLabel: 'Thêm danh mục',
+      variant: 'primary',
+      onConfirm: async () => {
+        await onAddCategory(trimmed);
+        setNewCatInput('');
+        setSelectedCategory(trimmed);
+      },
+    });
+  };
+
+  const handleConfirmRename = (oldName: string) => {
+    if (!canWrite) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed || trimmed === oldName) {
+      setRenamingCat(null);
+      return;
+    }
+    requestConfirm({
+      title: 'Xác nhận Sửa Tên Danh Mục',
+      message: `Bạn có chắc chắn muốn đổi tên danh mục "${oldName}" thành "${trimmed}" không?`,
+      confirmLabel: 'Lưu tên mới',
+      variant: 'warning',
+      onConfirm: async () => {
+        await onRenameCategory(oldName, trimmed);
+        if (selectedCategory === oldName) setSelectedCategory(trimmed);
+        setRenamingCat(null);
+      },
+    });
+  };
+
+  const handleConfirmDeleteCat = (catName: string) => {
+    if (!canWrite || categories.length <= 1) return;
+    requestConfirm({
+      title: 'Xác nhận Xóa Danh Mục Sản Phẩm',
+      message: `Bạn có chắc chắn muốn xóa danh mục "${catName}" khỏi hệ thống không?`,
+      confirmLabel: 'Xóa danh mục',
+      variant: 'danger',
+      onConfirm: async () => {
+        await onDeleteCategory(catName);
+        if (selectedCategory === catName) {
+          setSelectedCategory(categories.find((c) => c !== catName) || 'Khác');
+        }
+      },
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Control Header */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-            Quản Lý Số Lượng Bán Theo Danh Mục & Từng Loại Hàng
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Kỳ thống kê: <strong className="text-slate-800 dark:text-slate-200">{periodLabel}</strong> · Bấm vào từng danh mục (Bia, Nước ngọt, Khai vị, Ếch, Gà...) để xem biểu đồ chi tiết từng mặt hàng bên trong.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 self-start">
-          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
-            <button
-              type="button"
-              onClick={() => setMetricMode('quantity')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                metricMode === 'quantity'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              Biểu đồ theo Số lượng bán
-            </button>
-            <button
-              type="button"
-              onClick={() => setMetricMode('revenue')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                metricMode === 'revenue'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              Biểu đồ theo Doanh thu (₫)
-            </button>
+      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+              Quản Lý Số Lượng Bán Theo Danh Mục & Từng Loại Hàng
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Kỳ thống kê: <strong className="text-slate-800 dark:text-slate-200">{periodLabel}</strong> · Có thể thêm, sửa tên hoặc xóa danh mục sản phẩm ngay tại đây.
+            </p>
           </div>
 
-          {canWrite && products.length > 0 && (
-            <button
-              type="button"
-              onClick={onDeleteAllMenuProducts}
-              className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Xóa tất cả sản phẩm trong Menu ({products.length})</span>
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2 self-start">
+            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setMetricMode('quantity')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                  metricMode === 'quantity'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                Biểu đồ theo Số lượng bán
+              </button>
+              <button
+                type="button"
+                onClick={() => setMetricMode('revenue')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                  metricMode === 'revenue'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                Biểu đồ theo Doanh thu (₫)
+              </button>
+            </div>
+
+            {canWrite && products.length > 0 && (
+              <button
+                type="button"
+                onClick={onDeleteAllMenuProducts}
+                className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Xóa tất cả sản phẩm trong Menu ({products.length})</span>
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Quick Add Category Bar */}
+        {canWrite && (
+          <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+              Danh mục hiện có ({categories.length}): {categories.join(' · ')}
+            </span>
+            <form onSubmit={handleQuickAddCategory} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newCatInput}
+                onChange={(e) => setNewCatInput(e.target.value)}
+                placeholder="Tên danh mục mới..."
+                className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white w-48"
+              />
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+                <span>Thêm danh mục</span>
+              </button>
+            </form>
+          </div>
+        )}
       </div>
 
-      {/* Overview Chart: All 8 Categories */}
+      {/* Overview Chart: All Categories */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left: Category Column Chart & Selector */}
         <div className="lg:col-span-6 p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
@@ -213,7 +324,7 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
               </h3>
             </div>
             <span className="text-xs text-slate-500 dark:text-slate-400">
-              Bấm chọn danh mục để lọc
+              Bấm chọn hoặc sửa/xóa danh mục
             </span>
           </div>
 
@@ -222,11 +333,11 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
               const val = metricMode === 'quantity' ? cat.netQty : cat.netRevenue;
               const widthPct = Math.max(2, Math.round((val / maxCatMetric) * 100));
               const isSelected = cat.category === activeCategoryData.category;
+              const isRenaming = renamingCat === cat.category;
 
               return (
-                <button
+                <div
                   key={cat.category}
-                  type="button"
                   onClick={() => setSelectedCategory(cat.category)}
                   className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer ${
                     isSelected
@@ -234,17 +345,48 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
                       : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
                   }`}
                 >
-                  <div className="flex items-center justify-between text-xs mb-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-900 dark:text-white">
-                        {cat.category}
-                      </span>
-                      <span className="text-slate-400">·</span>
-                      <span className="text-slate-500 dark:text-slate-400">
-                        {cat.products.length} mặt hàng
-                      </span>
+                  <div className="flex items-center justify-between text-xs mb-1.5 gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {isRenaming ? (
+                        <div
+                          className="flex items-center gap-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="text"
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            className="px-2 py-0.5 text-xs rounded border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white w-32"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmRename(cat.category)}
+                            className="px-2 py-0.5 rounded bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
+                          >
+                            Lưu
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRenamingCat(null)}
+                            className="p-0.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="font-bold text-slate-900 dark:text-white truncate">
+                            {cat.category}
+                          </span>
+                          <span className="text-slate-400">·</span>
+                          <span className="text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                            {cat.products.length} mặt hàng
+                          </span>
+                        </>
+                      )}
                     </div>
-                    <div className="flex items-center gap-3 font-mono">
+                    <div className="flex items-center gap-2 font-mono shrink-0">
                       <span className="font-semibold text-emerald-600 dark:text-emerald-400">
                         Thực bán: {formatNumber(cat.netQty)}
                       </span>
@@ -252,6 +394,32 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
                       <span className="text-slate-700 dark:text-slate-300">
                         {formatVND(cat.netRevenue)}
                       </span>
+                      {canWrite && !isRenaming && (
+                        <div
+                          className="flex items-center gap-1 ml-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRenamingCat(cat.category);
+                              setRenameValue(cat.category);
+                            }}
+                            className="p-1 text-slate-400 hover:text-emerald-600 rounded cursor-pointer"
+                            title="Sửa tên danh mục"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmDeleteCat(cat.category)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                            title="Xóa danh mục"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
                       <ChevronRight
                         className={`w-3.5 h-3.5 transition-transform ${
                           isSelected ? 'text-emerald-500 translate-x-0.5' : 'text-slate-400'
@@ -269,7 +437,7 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
                       }`}
                     />
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>

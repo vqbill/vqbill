@@ -11,14 +11,16 @@ import {
   RefreshCw,
   AlertCircle,
   CheckCircle2,
+  Sparkles,
 } from 'lucide-react';
 import {
   ExtractedBillItem,
   ExtractedBillJSON,
   PaymentType,
-  STANDARD_CATEGORIES,
   PAYMENT_LABELS,
   ConfirmRequestOptions,
+  ProductRecord,
+  GeminiKeyStatus,
 } from '../types';
 import {
   formatVND,
@@ -26,9 +28,17 @@ import {
   parseRawTextToBillJSON,
   SAMPLE_BILL_TEMPLATES,
 } from '../utils/parser';
+import { GeminiKeyBar } from './GeminiKeyBar';
 
 interface OcrScannerTabProps {
   canWrite: boolean;
+  categories: string[];
+  products: ProductRecord[];
+  geminiApiKey: string;
+  geminiStatus: GeminiKeyStatus;
+  onSaveGeminiKey: (newKey: string) => Promise<void>;
+  onCheckGeminiKey: (keyToTest?: string) => Promise<{ ok: boolean; message: string }>;
+  onClearGeminiKey: () => Promise<void>;
   autoAddProducts: boolean;
   onToggleAutoAddProducts: (val: boolean) => void;
   onSaveExtractedBill: (params: {
@@ -45,6 +55,13 @@ interface OcrScannerTabProps {
 
 export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   canWrite,
+  categories,
+  products,
+  geminiApiKey,
+  geminiStatus,
+  onSaveGeminiKey,
+  onCheckGeminiKey,
+  onClearGeminiKey,
   autoAddProducts,
   onToggleAutoAddProducts,
   onSaveExtractedBill,
@@ -59,6 +76,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [rawText, setRawText] = useState<string>(SAMPLE_BILL_TEMPLATES[0].rawText);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageMimeType, setImageMimeType] = useState<string>('image/jpeg');
+  const [quickAiItemPrompt, setQuickAiItemPrompt] = useState<string>('');
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -107,7 +125,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setItems(
       result.items.map((it) => ({
         productName: it.productName,
-        category: it.category || inferCategory(it.productName),
+        category: it.category || inferCategory(it.productName, categories),
         quantity: Math.max(1, Math.round(it.quantity || 1)),
         unitPrice: Math.max(0, Math.round(it.unitPrice || 0)),
         subtotal:
@@ -128,7 +146,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     reader.onload = async () => {
       const base64Data = String(reader.result || '');
       setImagePreview(base64Data);
-      await runAiExtraction({ imageBase64: base64Data, mimeType: file.type || 'image/jpeg' });
+      await runAiExtraction({
+        imageBase64: base64Data,
+        mimeType: file.type || 'image/jpeg',
+      });
     };
     reader.readAsDataURL(file);
   };
@@ -137,6 +158,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     imageBase64?: string;
     mimeType?: string;
     text?: string;
+    appendMode?: boolean;
   }) => {
     setIsProcessing(true);
     setErrorMsg(null);
@@ -151,23 +173,42 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
           mimeType: payload.mimeType,
           rawText: payload.text,
           defaultDate: billDate || todayStr,
+          apiKey: geminiApiKey || undefined,
+          categories,
         }),
       });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || 'Lỗi kết nối AI OCR.');
+        throw new Error(errData.error || 'Lỗi kết nối Gemini AI OCR.');
       }
 
       const data: ExtractedBillJSON = await response.json();
       if (data && Array.isArray(data.items) && data.items.length > 0) {
-        applyExtractedResult(data);
-        setSuccessMsg(
-          `Đã trích xuất thành công ${data.items.length} món ăn/đồ uống (${formatVND(
-            data.billInfo.totalAmount
-          )}).`
-        );
-      } else if (payload.text) {
+        if (payload.appendMode) {
+          const newItems = data.items.map((it) => ({
+            productName: it.productName,
+            category: it.category || inferCategory(it.productName, categories),
+            quantity: Math.max(1, Math.round(it.quantity || 1)),
+            unitPrice: Math.max(0, Math.round(it.unitPrice || 0)),
+            subtotal:
+              Math.max(1, Math.round(it.quantity || 1)) *
+              Math.max(0, Math.round(it.unitPrice || 0)),
+          }));
+          setItems((prev) => [...prev, ...newItems]);
+          setSuccessMsg(
+            `Gemini đã nhận diện và thêm ${newItems.length} món mới vào hóa đơn hiện tại!`
+          );
+          setQuickAiItemPrompt('');
+        } else {
+          applyExtractedResult(data);
+          setSuccessMsg(
+            `Gemini AI đã trích xuất thành công ${data.items.length} món ăn/đồ uống (${formatVND(
+              data.billInfo.totalAmount
+            )}).`
+          );
+        }
+      } else if (payload.text && !payload.appendMode) {
         const fallback = parseRawTextToBillJSON(payload.text, billDate || todayStr);
         applyExtractedResult(fallback);
         setSuccessMsg(
@@ -176,10 +217,12 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
           )}).`
         );
       } else {
-        setErrorMsg('Không tìm thấy món ăn nào trên ảnh. Bạn có thể thêm hoặc chỉnh sửa trực tiếp bên dưới.');
+        setErrorMsg(
+          'Không tìm thấy món ăn nào. Bạn có thể kiểm tra lại Gemini Key hoặc nhập trực tiếp bên dưới.'
+        );
       }
     } catch (err: any) {
-      if (payload.text) {
+      if (payload.text && !payload.appendMode) {
         const fallback = parseRawTextToBillJSON(payload.text, billDate || todayStr);
         applyExtractedResult(fallback);
         setSuccessMsg(
@@ -188,7 +231,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
           )}).`
         );
       } else {
-        setErrorMsg(err?.message || 'Không thể trích xuất tự động từ ảnh.');
+        setErrorMsg(
+          err?.message ||
+            'Không thể trích xuất tự động bằng Gemini. Vui lòng kiểm tra Gemini Key.'
+        );
       }
     } finally {
       setIsProcessing(false);
@@ -216,14 +262,28 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         if (idx !== index) return item;
         const updated = { ...item };
         if (field === 'productName') {
-          updated.productName = String(value);
-          updated.category = inferCategory(updated.productName);
+          const nameVal = String(value);
+          updated.productName = nameVal;
+          // If matches a product in catalog, pre-fill category and default price if price was 0
+          const matchedProd = products.find(
+            (p) => p.productName.toLowerCase().trim() === nameVal.toLowerCase().trim()
+          );
+          if (matchedProd) {
+            updated.category = matchedProd.category;
+            if (updated.unitPrice === 0 || item.productName !== nameVal) {
+              updated.unitPrice = matchedProd.unitPrice;
+              updated.subtotal = updated.quantity * updated.unitPrice;
+            }
+          } else {
+            updated.category = inferCategory(updated.productName, categories);
+          }
         } else if (field === 'category') {
           updated.category = String(value);
         } else if (field === 'quantity') {
           updated.quantity = Math.max(1, Math.round(Number(value) || 1));
           updated.subtotal = updated.quantity * updated.unitPrice;
         } else if (field === 'unitPrice') {
+          // Chỉnh giá trực tiếp trong bill, không làm thay đổi giá mặc định của sản phẩm trong Menu
           updated.unitPrice = Math.max(0, Math.round(Number(value) || 0));
           updated.subtotal = updated.quantity * updated.unitPrice;
         }
@@ -239,16 +299,34 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       confirmLabel: 'Thêm dòng món',
       variant: 'primary',
       onConfirm: () => {
+        const defaultProd = products[0];
+        const defaultName = defaultProd ? defaultProd.productName : 'Bia Tiger Lùn';
+        const defaultCat = defaultProd ? defaultProd.category : categories[0] || 'Bia';
+        const defaultPrice = defaultProd ? defaultProd.unitPrice : 22000;
         setItems((prev) => [
           ...prev,
           {
-            productName: 'Bia Tiger Lùn',
-            category: 'Bia',
+            productName: defaultName,
+            category: defaultCat,
             quantity: 1,
-            unitPrice: 22000,
-            subtotal: 22000,
+            unitPrice: defaultPrice,
+            subtotal: defaultPrice,
           },
         ]);
+      },
+    });
+  };
+
+  const handleGeminiAddItemsToBill = () => {
+    const trimmed = quickAiItemPrompt.trim();
+    if (!trimmed) return;
+    requestConfirm({
+      title: 'Xác nhận Dùng Gemini Nhận Diện & Thêm Món Vào Bill',
+      message: `Bạn có muốn sử dụng Gemini AI để phân tích "${trimmed}" và tự động thêm món vào hóa đơn hiện tại không?`,
+      confirmLabel: 'Gemini Thêm Món',
+      variant: 'primary',
+      onConfirm: async () => {
+        await runAiExtraction({ text: trimmed, appendMode: true });
       },
     });
   };
@@ -306,7 +384,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         validItems.length
       } món, Tổng tiền: ${formatVND(totalAmount)}, Hình thức: ${
         PAYMENT_LABELS[paymentType]
-      }) vào Firebase và cộng số lượng bán theo thời gian thực không?`,
+      }) vào Firebase và cộng số lượng bán theo thời gian thực không? (Lưu ý: Giá tùy chỉnh trong bill sẽ không làm thay đổi giá mặc định của sản phẩm trong Menu).`,
       confirmLabel: 'Xác nhận Lưu Bill',
       variant: 'primary',
       onConfirm: async () => {
@@ -336,6 +414,17 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Gemini API Key Configuration & Check Bar */}
+      <GeminiKeyBar
+        geminiApiKey={geminiApiKey}
+        geminiStatus={geminiStatus}
+        onSaveGeminiKey={onSaveGeminiKey}
+        onCheckGeminiKey={onCheckGeminiKey}
+        onClearGeminiKey={onClearGeminiKey}
+        requestConfirm={requestConfirm}
+        contextLabel="Nhập Gemini API Key và bấm Check Gemini Key để kích hoạt AI quét ảnh hóa đơn, nhận diện văn bản bill và thêm món tự động."
+      />
+
       {/* Header & Quick Templates */}
       <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -344,7 +433,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               AI OCR & Trích Xuất Hóa Đơn Chuẩn JSON
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Chụp ảnh hóa đơn hoặc dán văn bản để AI tự động tách món, phân loại danh mục (Bia, Nước ngọt, Khai vị, Ếch, Gà...) và cộng dồn doanh thu thời gian thực.
+              Chụp ảnh hóa đơn hoặc dán văn bản để Gemini AI tự động tách món, phân loại danh mục ({categories.join(', ')}) và cộng dồn doanh thu thời gian thực.
             </p>
           </div>
 
@@ -477,7 +566,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                         Chụp ảnh Bill hoặc tải ảnh từ thiết bị
                       </p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Hỗ trợ ảnh chụp điện thoại, bill in nhiệt, bill viết tay rõ chữ (JPG, PNG, WEBP)
+                        Gemini OCR tự động đọc ảnh chụp điện thoại, bill in nhiệt, bill viết tay (JPG, PNG, WEBP)
                       </p>
                     </div>
                   )}
@@ -488,13 +577,18 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     type="button"
                     disabled={isProcessing}
                     onClick={() =>
-                      runAiExtraction({ imageBase64: imagePreview, mimeType: imageMimeType })
+                      runAiExtraction({
+                        imageBase64: imagePreview,
+                        mimeType: imageMimeType,
+                      })
                     }
                     className="w-full py-2.5 px-4 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
                   >
                     <RefreshCw className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
                     <span>
-                      {isProcessing ? 'AI đang đọc hóa đơn...' : 'Quét lại ảnh bằng Gemini AI OCR'}
+                      {isProcessing
+                        ? 'Gemini AI đang đọc hóa đơn...'
+                        : 'Quét lại ảnh bằng Gemini AI OCR'}
                     </span>
                   </button>
                 )}
@@ -533,8 +627,12 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     onClick={() => runAiExtraction({ text: rawText })}
                     className="py-2.5 px-3 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
-                    <span>{isProcessing ? 'AI đang xử lý...' : 'Phân tích bằng Gemini AI'}</span>
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`}
+                    />
+                    <span>
+                      {isProcessing ? 'Gemini đang xử lý...' : 'Nhận diện bằng Gemini AI'}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -575,7 +673,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   Kiểm tra & Chỉnh sửa Hóa Đơn trước khi lưu
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Mặc định hình thức thanh toán là Tiền mặt (`cash`). Khi lưu sẽ hiển thị popup xác nhận và cộng vào Firebase.
+                  Có thể chỉnh trực tiếp <strong>Đơn giá của sản phẩm trong Bill</strong> mà không làm thay đổi giá mặc định của sản phẩm trong Menu.
                 </p>
               </div>
               <div className="text-right">
@@ -649,6 +747,35 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               />
             </div>
 
+            {/* Quick Gemini AI Add Item to Bill Bar */}
+            <div className="p-3 rounded-lg border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <input
+                type="text"
+                value={quickAiItemPrompt}
+                onChange={(e) => setQuickAiItemPrompt(e.target.value)}
+                placeholder="Nhập nhanh món để Gemini AI nhận diện & thêm vào bill (VD: 10 Tiger Lùn 22k, 2 ếch sapo 135k)..."
+                className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+              />
+              <button
+                type="button"
+                disabled={isProcessing || !quickAiItemPrompt.trim()}
+                onClick={handleGeminiAddItemsToBill}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Gemini Nhận diện & Thêm món</span>
+              </button>
+            </div>
+
+            {/* Datalist for autocomplete from Menu Catalog */}
+            <datalist id="vqbill-menu-products-list">
+              {products.map((p) => (
+                <option key={p.id} value={p.productName}>
+                  {p.category} — Giá chuẩn: {formatVND(p.unitPrice)}
+                </option>
+              ))}
+            </datalist>
+
             {/* Items Table */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -678,83 +805,116 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               </div>
 
               <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-                <table className="w-full text-left border-collapse min-w-[540px]">
+                <table className="w-full text-left border-collapse min-w-[560px]">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                       <th className="py-2 px-3">Tên món ăn / Nước uống</th>
                       <th className="py-2 px-2 w-36">Danh mục (Category)</th>
                       <th className="py-2 px-2 w-20 text-right">SL</th>
-                      <th className="py-2 px-2 w-28 text-right">Đơn giá (₫)</th>
+                      <th className="py-2 px-2 w-36 text-right">
+                        Đơn giá trong Bill (₫)
+                      </th>
                       <th className="py-2 px-3 w-32 text-right">Thành tiền</th>
                       <th className="py-2 px-2 w-10"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
-                    {items.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
-                        <td className="p-2">
-                          <input
-                            type="text"
-                            value={item.productName}
-                            onChange={(e) =>
-                              handleItemChange(idx, 'productName', e.target.value)
-                            }
-                            className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
-                          />
-                        </td>
-                        <td className="p-2">
-                          <select
-                            value={item.category}
-                            onChange={(e) =>
-                              handleItemChange(idx, 'category', e.target.value)
-                            }
-                            className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
-                          >
-                            {STANDARD_CATEGORIES.map((cat) => (
-                              <option key={cat} value={cat}>
-                                {cat}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="p-2">
-                          <input
-                            type="number"
-                            min={1}
-                            value={item.quantity}
-                            onChange={(e) =>
-                              handleItemChange(idx, 'quantity', e.target.value)
-                            }
-                            className="w-full px-2 py-1.5 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
-                          />
-                        </td>
-                        <td className="p-2">
-                          <input
-                            type="number"
-                            min={0}
-                            step={1000}
-                            value={item.unitPrice}
-                            onChange={(e) =>
-                              handleItemChange(idx, 'unitPrice', e.target.value)
-                            }
-                            className="w-full px-2 py-1.5 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
-                          />
-                        </td>
-                        <td className="p-2 text-right font-mono font-semibold text-slate-900 dark:text-white">
-                          {formatVND(item.quantity * item.unitPrice)}
-                        </td>
-                        <td className="p-2 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItem(idx)}
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
-                            title="Xóa món"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {items.map((item, idx) => {
+                      const catalogMatch = products.find(
+                        (p) =>
+                          p.productName.toLowerCase().trim() ===
+                          item.productName.toLowerCase().trim()
+                      );
+                      const isCustomBillPrice =
+                        catalogMatch &&
+                        catalogMatch.unitPrice > 0 &&
+                        catalogMatch.unitPrice !== item.unitPrice;
+
+                      const categoryOptions = Array.from(
+                        new Set([...categories, item.category].filter(Boolean))
+                      );
+
+                      return (
+                        <tr
+                          key={idx}
+                          className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30"
+                        >
+                          <td className="p-2 align-top">
+                            <input
+                              type="text"
+                              list="vqbill-menu-products-list"
+                              value={item.productName}
+                              onChange={(e) =>
+                                handleItemChange(idx, 'productName', e.target.value)
+                              }
+                              className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                            />
+                          </td>
+                          <td className="p-2 align-top">
+                            <select
+                              value={item.category}
+                              onChange={(e) =>
+                                handleItemChange(idx, 'category', e.target.value)
+                              }
+                              className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                            >
+                              {categoryOptions.map((cat) => (
+                                <option key={cat} value={cat}>
+                                  {cat}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="p-2 align-top">
+                            <input
+                              type="number"
+                              min={1}
+                              value={item.quantity}
+                              onChange={(e) =>
+                                handleItemChange(idx, 'quantity', e.target.value)
+                              }
+                              className="w-full px-2 py-1.5 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                            />
+                          </td>
+                          <td className="p-2 align-top">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1000}
+                              value={item.unitPrice}
+                              onChange={(e) =>
+                                handleItemChange(idx, 'unitPrice', e.target.value)
+                              }
+                              className="w-full px-2 py-1.5 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                            />
+                            {catalogMatch && (
+                              <div className="text-[10px] text-right mt-0.5 font-mono text-slate-400">
+                                {isCustomBillPrice ? (
+                                  <span className="text-amber-600 dark:text-amber-400">
+                                    Giá gốc Menu: {formatVND(catalogMatch.unitPrice)} (Không đổi)
+                                  </span>
+                                ) : (
+                                  <span>Giá chuẩn Menu: {formatVND(catalogMatch.unitPrice)}</span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-2 align-top text-right font-mono font-semibold text-slate-900 dark:text-white pt-3">
+                            {formatVND(item.quantity * item.unitPrice)}
+                          </td>
+                          <td className="p-2 align-top text-center pt-2.5">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItem(idx)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                              title="Xóa món"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -31,6 +31,8 @@ import {
   Menu,
   X,
   CheckCircle2,
+  KeyRound,
+  Lock,
 } from 'lucide-react';
 import {
   auth,
@@ -52,6 +54,13 @@ import {
   ExtractedBillItem,
   PaymentType,
   ConfirmRequestOptions,
+  GeminiKeyStatus,
+  ManagementTabId,
+  MANAGEMENT_TABS,
+  RolePermissionsMap,
+  DEFAULT_ROLE_PERMISSIONS,
+  getEffectiveRolePermissions,
+  sanitizeTabList,
 } from './types';
 import {
   formatVND,
@@ -60,10 +69,16 @@ import {
 } from './utils/parser';
 import {
   DEFAULT_STAFF_ACCOUNTS,
+  FIXED_ADMIN_USERNAME,
+  FIXED_ADMIN_PASSWORD,
+  normalizeStaffAccountsWithFixedAdmin,
   buildInitialSeedDataset,
   loadLocalMirror,
   saveLocalMirror,
   fetchRtdbWorkspaceOnce,
+  saveCategoriesToCloud,
+  saveRolePermissionsToCloud,
+  renameOrReassignCategoryInCloud,
   saveStaffAccountToFirebase,
   deleteStaffAccountsFromFirebase,
   createOrUpdateProductInFirestore,
@@ -84,15 +99,9 @@ import { ProductCatalogTab } from './components/ProductCatalogTab';
 import { AccountsManagerTab } from './components/AccountsManagerTab';
 import { BillEditModal } from './components/BillEditModal';
 import { ConfirmDialogModal } from './components/ConfirmDialogModal';
+import { GeminiKeyBar } from './components/GeminiKeyBar';
 
-type ActiveTab =
-  | 'dashboard'
-  | 'ocr'
-  | 'categories'
-  | 'debts'
-  | 'returns'
-  | 'products'
-  | 'accounts';
+type ActiveTab = ManagementTabId;
 
 type PeriodPreset = 'today' | 'week' | 'month' | 'all' | 'custom';
 
@@ -128,29 +137,41 @@ export default function App() {
     if (cached && cached.initialized) {
       return {
         initialized: true,
+        categories:
+          cached.categories && cached.categories.length > 0
+            ? cached.categories
+            : Array.from(STANDARD_CATEGORIES),
+        rolePermissions: cached.rolePermissions || DEFAULT_ROLE_PERMISSIONS,
         products: cached.products || [],
         bills: cached.bills || [],
         billItems: cached.billItems || [],
         deductions: cached.deductions || [],
-        staffAccounts:
-          cached.staffAccounts && cached.staffAccounts.length > 0
-            ? cached.staffAccounts
-            : DEFAULT_STAFF_ACCOUNTS,
+        staffAccounts: normalizeStaffAccountsWithFixedAdmin(
+          cached.staffAccounts
+        ),
       };
     }
     const seed = buildInitialSeedDataset(ownerId);
     return {
       initialized: false,
+      categories: Array.from(STANDARD_CATEGORIES),
+      rolePermissions: DEFAULT_ROLE_PERMISSIONS,
       products: seed.products,
       bills: seed.bills,
       billItems: seed.billItems,
       deductions: seed.deductions,
-      staffAccounts: DEFAULT_STAFF_ACCOUNTS,
+      staffAccounts: normalizeStaffAccountsWithFixedAdmin(DEFAULT_STAFF_ACCOUNTS),
     };
   }, [ownerId]);
 
   const [workspaceInitialized, setWorkspaceInitialized] = useState<boolean>(
     initialWorkspaceData.initialized
+  );
+  const [categories, setCategories] = useState<string[]>(
+    initialWorkspaceData.categories
+  );
+  const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap>(
+    initialWorkspaceData.rolePermissions
   );
   const [products, setProducts] = useState<ProductRecord[]>(
     initialWorkspaceData.products
@@ -175,6 +196,18 @@ export default function App() {
     }
     return null;
   });
+
+  // Gemini API Key State & Status
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    return localStorage.getItem('vqbill_gemini_api_key') || '';
+  });
+  const [geminiKeyStatus, setGeminiKeyStatus] = useState<GeminiKeyStatus>({
+    configured: false,
+    source: 'none',
+    maskedKey: '',
+  });
+  const [isCheckingGeminiKey, setIsCheckingGeminiKey] = useState<boolean>(false);
+  const [showGeminiKeyModal, setShowGeminiKeyModal] = useState<boolean>(false);
 
   // Confirm Dialog State (Global Popup Confirm for all Add/Edit/Delete actions)
   const [confirmConfig, setConfirmConfig] = useState<ConfirmRequestOptions | null>(
@@ -219,17 +252,213 @@ export default function App() {
     setTimeout(() => setToastBanner(null), 4000);
   };
 
+  // Resolve live staff account object so permission updates apply immediately
+  const currentStaffAccount = useMemo<StaffAccount | null>(() => {
+    if (!loggedInStaff) return null;
+    const found = staffAccounts.find(
+      (a) =>
+        a.id === loggedInStaff.id ||
+        a.username.toLowerCase() === loggedInStaff.username.toLowerCase()
+    );
+    return found || loggedInStaff;
+  }, [loggedInStaff, staffAccounts]);
+
+  // Effective Role & Account Permissions (strictly controls which management tabs can be accessed)
+  const effectivePermissions = useMemo(() => {
+    return getEffectiveRolePermissions(currentStaffAccount, rolePermissions);
+  }, [currentStaffAccount, rolePermissions]);
+
+  const allowedTabs = effectivePermissions.allowedTabs;
+  const activeRole = currentStaffAccount?.role || UserRole.VIEWER;
+  const isAdminUser =
+    activeRole === UserRole.ADMIN || allowedTabs.includes('accounts');
+  const canWrite = effectivePermissions.canWrite;
+  const canDelete = effectivePermissions.canDelete;
+
+  // Enforce activeTab to always be within allowedTabs for the logged-in account
+  useEffect(() => {
+    if (!currentStaffAccount) return;
+    if (!allowedTabs.includes(activeTab)) {
+      const fallbackTab = allowedTabs[0] || 'dashboard';
+      setActiveTab(fallbackTab);
+    }
+  }, [currentStaffAccount, allowedTabs, activeTab]);
+
+  // Safe tab navigation helper that checks allowedTabs
+  const handleSelectTab = (targetTab: ActiveTab) => {
+    if (!allowedTabs.includes(targetTab)) {
+      const tabMeta = MANAGEMENT_TABS.find((t) => t.id === targetTab);
+      showToast(
+        `Tài khoản @${currentStaffAccount?.username} không được phân quyền truy cập mục "${
+          tabMeta?.label || targetTab
+        }".`
+      );
+      return;
+    }
+    setActiveTab(targetTab);
+  };
+
+  // Sync Gemini Key on boot with backend
+  useEffect(() => {
+    const syncInitialGeminiKey = async () => {
+      try {
+        const storedKey = localStorage.getItem('vqbill_gemini_api_key') || '';
+        if (storedKey.trim()) {
+          const res = await fetch('/api/gemini-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey: storedKey.trim() }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setGeminiKeyStatus({
+              configured: Boolean(data.configured),
+              source: data.source || 'custom',
+              maskedKey: data.maskedKey || '',
+            });
+            return;
+          }
+        }
+
+        const res = await fetch('/api/gemini-status');
+        const data = await res.json();
+        if (res.ok) {
+          setGeminiKeyStatus({
+            configured: Boolean(data.configured),
+            source: data.source || 'none',
+            maskedKey: data.maskedKey || '',
+          });
+        }
+      } catch {
+        // Ignore network errors on initial status check
+      }
+    };
+    syncInitialGeminiKey();
+  }, []);
+
+  const handleSaveGeminiKey = async (newKey: string) => {
+    const clean = newKey.trim();
+    setGeminiApiKey(clean);
+    if (clean) {
+      localStorage.setItem('vqbill_gemini_api_key', clean);
+    } else {
+      localStorage.removeItem('vqbill_gemini_api_key');
+    }
+
+    try {
+      const res = await fetch('/api/gemini-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: clean }),
+      });
+      const data = await res.json();
+      setGeminiKeyStatus({
+        configured: Boolean(data.configured),
+        source: data.source || (clean ? 'custom' : 'none'),
+        maskedKey: data.maskedKey || '',
+        verified: undefined,
+        message: clean
+          ? 'Đã lưu Gemini API Key. Hãy bấm "Check Gemini Key" để kiểm tra kết nối.'
+          : 'Đã xóa Gemini Key tùy chỉnh.',
+        error: undefined,
+      });
+      showToast(
+        clean
+          ? 'Đã lưu Gemini API Key! Bạn có thể bấm Check Gemini Key để xác thực.'
+          : 'Đã xóa Gemini API Key tùy chỉnh.'
+      );
+    } catch (err: any) {
+      showToast(err?.message || 'Lỗi khi lưu Gemini Key.');
+    }
+  };
+
+  const handleCheckGeminiKey = async (
+    keyToTest?: string
+  ): Promise<{ ok: boolean; message: string }> => {
+    const candidate =
+      typeof keyToTest === 'string' ? keyToTest.trim() : geminiApiKey.trim();
+    setIsCheckingGeminiKey(true);
+    try {
+      const res = await fetch('/api/check-gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: candidate }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        const errMsg =
+          data.error ||
+          'Gemini API Key không hợp lệ hoặc không thể kết nối tới Gemini.';
+        setGeminiKeyStatus((prev) => ({
+          ...prev,
+          configured: Boolean(candidate || prev.configured),
+          verified: false,
+          error: errMsg,
+          message: undefined,
+        }));
+        return { ok: false, message: errMsg };
+      }
+
+      if (candidate) {
+        setGeminiApiKey(candidate);
+        localStorage.setItem('vqbill_gemini_api_key', candidate);
+      }
+
+      const okMsg =
+        data.message || 'Check Gemini Key thành công! Sẵn sàng quét Bill & Menu.';
+
+      setGeminiKeyStatus({
+        configured: true,
+        source: data.source || (candidate ? 'custom' : 'env'),
+        maskedKey: data.maskedKey || '',
+        verified: true,
+        model: data.model,
+        latencyMs: data.latencyMs,
+        message: okMsg,
+        error: undefined,
+      });
+      showToast(okMsg);
+      return { ok: true, message: okMsg };
+    } catch (err: any) {
+      const errMsg = err?.message || 'Không thể kiểm tra Gemini Key lúc này.';
+      setGeminiKeyStatus((prev) => ({
+        ...prev,
+        verified: false,
+        error: errMsg,
+      }));
+      return { ok: false, message: errMsg };
+    } finally {
+      setIsCheckingGeminiKey(false);
+    }
+  };
+
+  const handleClearGeminiKey = async () => {
+    await handleSaveGeminiKey('');
+  };
+
   // Keep local mirror synced whenever data changes
   useEffect(() => {
     saveLocalMirror(ownerId, {
       initialized: workspaceInitialized,
+      categories,
+      rolePermissions,
       products,
       bills,
       billItems,
       deductions,
       staffAccounts,
     });
-  }, [ownerId, workspaceInitialized, products, bills, billItems, deductions, staffAccounts]);
+  }, [
+    ownerId,
+    workspaceInitialized,
+    categories,
+    rolePermissions,
+    products,
+    bills,
+    billItems,
+    deductions,
+    staffAccounts,
+  ]);
 
   // Fetch from Firebase Realtime Database on boot
   useEffect(() => {
@@ -238,13 +467,29 @@ export default function App() {
       if (!mounted || !cloudSnap) return;
       if (cloudSnap.initialized) {
         setWorkspaceInitialized(true);
+        if (cloudSnap.categories && cloudSnap.categories.length > 0) {
+          setCategories(cloudSnap.categories);
+        }
+        if (cloudSnap.rolePermissions) {
+          setRolePermissions({
+            ...DEFAULT_ROLE_PERMISSIONS,
+            ...cloudSnap.rolePermissions,
+          });
+        }
         if (cloudSnap.products) setProducts(cloudSnap.products);
         if (cloudSnap.bills) setBills(cloudSnap.bills);
         if (cloudSnap.billItems) setBillItems(cloudSnap.billItems);
         if (cloudSnap.deductions) setDeductions(cloudSnap.deductions);
+      } else if (cloudSnap.rolePermissions) {
+        setRolePermissions({
+          ...DEFAULT_ROLE_PERMISSIONS,
+          ...cloudSnap.rolePermissions,
+        });
       }
       if (cloudSnap.staffAccounts && cloudSnap.staffAccounts.length > 0) {
-        setStaffAccounts(cloudSnap.staffAccounts);
+        setStaffAccounts(
+          normalizeStaffAccountsWithFixedAdmin(cloudSnap.staffAccounts)
+        );
       }
     });
     return () => {
@@ -269,6 +514,10 @@ export default function App() {
           info: `Firebase Auth (${user.email || 'Google'})`,
           role: loggedInStaff?.role || defaultRole,
           active: true,
+          allowedTabs:
+            loggedInStaff?.allowedTabs ||
+            DEFAULT_ROLE_PERMISSIONS[loggedInStaff?.role || defaultRole].allowedTabs,
+          useCustomTabs: Boolean(loggedInStaff?.useCustomTabs),
         };
         setLoggedInStaff(staffObj);
         localStorage.setItem('vqbill_active_staff', JSON.stringify(staffObj));
@@ -423,22 +672,48 @@ export default function App() {
       qStaff,
       (snap) => {
         if (!snap.empty) {
-          const loaded: StaffAccount[] = snap.docs.map((d) => {
-            const data = d.data();
-            return {
-              id: d.id,
-              ownerId: data.ownerId,
-              username: data.username,
-              password: data.password,
-              displayName: data.displayName,
-              info: data.info || '',
-              role: (data.role as UserRole) || UserRole.CASHIER,
-              active: Boolean(data.active),
-              createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
-              updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
-            };
+          setStaffAccounts((prev) => {
+            const prevMap = new Map<string, StaffAccount>(
+              prev.map((p) => [p.id, p])
+            );
+            const mapped = snap.docs.map((d) => {
+              const data = d.data();
+              const existingLocal = prevMap.get(d.id);
+              const role = (data.role as UserRole) || UserRole.CASHIER;
+              const fromFirestoreTabs = sanitizeTabList(data.allowedTabs);
+              return {
+                id: d.id,
+                ownerId: data.ownerId,
+                username: data.username,
+                password:
+                  String(data.username || '').toLowerCase() === FIXED_ADMIN_USERNAME
+                    ? FIXED_ADMIN_PASSWORD
+                    : data.password,
+                displayName: data.displayName,
+                info: data.info || '',
+                role:
+                  String(data.username || '').toLowerCase() === FIXED_ADMIN_USERNAME
+                    ? UserRole.ADMIN
+                    : role,
+                active:
+                  String(data.username || '').toLowerCase() === FIXED_ADMIN_USERNAME
+                    ? true
+                    : Boolean(data.active),
+                allowedTabs:
+                  fromFirestoreTabs.length > 0
+                    ? fromFirestoreTabs
+                    : existingLocal?.allowedTabs ||
+                      DEFAULT_ROLE_PERMISSIONS[role]?.allowedTabs,
+                useCustomTabs:
+                  typeof data.useCustomTabs === 'boolean'
+                    ? data.useCustomTabs
+                    : Boolean(existingLocal?.useCustomTabs),
+                createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+                updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+              };
+            });
+            return normalizeStaffAccountsWithFixedAdmin(mapped);
           });
-          setStaffAccounts(loaded);
         }
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'staff_accounts')
@@ -452,15 +727,6 @@ export default function App() {
       unsubStaff();
     };
   }, [authReady, firebaseUser?.uid, workspaceInitialized]);
-
-  // Role Permissions
-  const activeRole = loggedInStaff?.role || UserRole.VIEWER;
-  const isAdminUser = activeRole === UserRole.ADMIN;
-  const canWrite =
-    activeRole === UserRole.ADMIN ||
-    activeRole === UserRole.MANAGER ||
-    activeRole === UserRole.CASHIER;
-  const canDelete = activeRole === UserRole.ADMIN || activeRole === UserRole.MANAGER;
 
   // Date Range Helper
   const isDateInPeriod = (dateStr: string): boolean => {
@@ -627,6 +893,8 @@ export default function App() {
     setLoggedInStaff(acc);
     localStorage.setItem('vqbill_active_staff', JSON.stringify(acc));
     setAuthError(null);
+    const eff = getEffectiveRolePermissions(acc, rolePermissions);
+    setActiveTab(eff.allowedTabs[0] || 'dashboard');
   };
 
   const handleGoogleSignIn = async () => {
@@ -642,8 +910,54 @@ export default function App() {
     }
   };
 
+  // Save Role-based Management Tabs Permissions Matrix (Admin Tab)
+  const handleSaveRolePermissions = async (
+    updatedMap: RolePermissionsMap,
+    syncAccountsOfRoles: boolean
+  ) => {
+    setWorkspaceInitialized(true);
+    setRolePermissions(updatedMap);
+    await saveRolePermissionsToCloud(ownerId, updatedMap);
+
+    if (syncAccountsOfRoles) {
+      const updatedStaffList = staffAccounts.map((acc) => {
+        const roleCfg = updatedMap[acc.role] || DEFAULT_ROLE_PERMISSIONS[acc.role];
+        return {
+          ...acc,
+          allowedTabs: roleCfg.allowedTabs,
+          useCustomTabs: false,
+          updatedAtMs: Date.now(),
+        };
+      });
+      setStaffAccounts(updatedStaffList);
+
+      if (currentStaffAccount) {
+        const syncedCurrent = updatedStaffList.find(
+          (a) => a.id === currentStaffAccount.id
+        );
+        if (syncedCurrent) {
+          setLoggedInStaff(syncedCurrent);
+          localStorage.setItem(
+            'vqbill_active_staff',
+            JSON.stringify(syncedCurrent)
+          );
+        }
+      }
+
+      for (const acc of updatedStaffList) {
+        await saveStaffAccountToFirebase(ownerId, acc, false);
+      }
+      showToast(
+        'Đã lưu bảng phân phối Danh mục quản lý theo Role và đồng bộ toàn bộ tài khoản lên Firebase!'
+      );
+    } else {
+      showToast('Đã lưu bảng phân phối Danh mục quản lý theo Role lên Firebase!');
+    }
+  };
+
   // Staff Accounts CRUD (Admin Tab)
   const handleCreateStaffAccount = async (newAcc: Omit<StaffAccount, 'id'>) => {
+    setWorkspaceInitialized(true);
     const now = Date.now();
     const created: StaffAccount = {
       ...newAcc,
@@ -654,35 +968,183 @@ export default function App() {
     };
     setStaffAccounts((prev) => [...prev, created]);
     await saveStaffAccountToFirebase(ownerId, created, true);
-    showToast(`Đã tạo tài khoản @${created.username} (${created.displayName}) trên Firebase!`);
+    showToast(
+      `Đã tạo tài khoản @${created.username} (${created.displayName}) với phân quyền danh mục quản lý trên Firebase!`
+    );
   };
 
   const handleUpdateStaffAccount = async (updatedAcc: StaffAccount) => {
+    setWorkspaceInitialized(true);
     setStaffAccounts((prev) =>
       prev.map((a) => (a.id === updatedAcc.id ? updatedAcc : a))
     );
-    if (loggedInStaff && loggedInStaff.id === updatedAcc.id) {
+    if (
+      currentStaffAccount &&
+      (currentStaffAccount.id === updatedAcc.id ||
+        currentStaffAccount.username === updatedAcc.username)
+    ) {
       setLoggedInStaff(updatedAcc);
       localStorage.setItem('vqbill_active_staff', JSON.stringify(updatedAcc));
     }
     await saveStaffAccountToFirebase(ownerId, updatedAcc, false);
-    showToast(`Đã lưu thay đổi tài khoản @${updatedAcc.username} lên Firebase!`);
+    showToast(
+      `Đã lưu phân phối danh mục quản lý và thông tin tài khoản @${updatedAcc.username} lên Firebase!`
+    );
   };
 
   const handleDeleteStaffAccount = async (accountId: string) => {
+    setWorkspaceInitialized(true);
     setStaffAccounts((prev) => prev.filter((a) => a.id !== accountId));
     await deleteStaffAccountsFromFirebase(ownerId, [accountId]);
     showToast('Đã xóa tài khoản khỏi hệ thống Firebase.');
   };
 
   const handleDeleteAllNonAdminAccounts = async () => {
+    setWorkspaceInitialized(true);
     const toRemove = staffAccounts.filter(
-      (a) => a.username !== 'admin' && a.id !== loggedInStaff?.id
+      (a) => a.username !== 'admin' && a.id !== currentStaffAccount?.id
     );
     const ids = toRemove.map((a) => a.id);
     setStaffAccounts((prev) => prev.filter((a) => !ids.includes(a.id)));
     await deleteStaffAccountsFromFirebase(ownerId, ids);
     showToast(`Đã xóa ${ids.length} tài khoản nhân viên phụ khỏi Firebase.`);
+  };
+
+  // Category CRUD Handlers
+  const handleAddCategory = async (newCatName: string) => {
+    const trimmed = newCatName.trim();
+    if (!trimmed) return;
+    if (categories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+      return;
+    }
+    setWorkspaceInitialized(true);
+    const next = [...categories, trimmed];
+    setCategories(next);
+    await saveCategoriesToCloud(ownerId, next);
+    showToast(`Đã thêm danh mục "${trimmed}" vào hệ thống!`);
+  };
+
+  const handleRenameCategory = async (oldName: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed || oldName === trimmed) return;
+    setWorkspaceInitialized(true);
+
+    const nextCategories = categories.map((c) => (c === oldName ? trimmed : c));
+    const uniqueCategories = Array.from(new Set(nextCategories));
+    setCategories(uniqueCategories);
+
+    const affectedProducts = products
+      .filter((p) => p.category === oldName)
+      .map((p) => ({ ...p, category: trimmed }));
+    const affectedBillItems = billItems
+      .filter((it) => it.category === oldName)
+      .map((it) => ({ ...it, category: trimmed }));
+    const affectedDeductions = deductions
+      .filter((d) => d.category === oldName)
+      .map((d) => ({ ...d, category: trimmed }));
+
+    setProducts((prev) =>
+      prev.map((p) => (p.category === oldName ? { ...p, category: trimmed } : p))
+    );
+    setBillItems((prev) =>
+      prev.map((it) => (it.category === oldName ? { ...it, category: trimmed } : it))
+    );
+    setDeductions((prev) =>
+      prev.map((d) => (d.category === oldName ? { ...d, category: trimmed } : d))
+    );
+
+    await renameOrReassignCategoryInCloud({
+      ownerId,
+      categories: uniqueCategories,
+      affectedProducts,
+      affectedBillItems,
+      affectedDeductions,
+    });
+    showToast(`Đã đổi tên danh mục "${oldName}" thành "${trimmed}" trên toàn hệ thống!`);
+  };
+
+  const handleDeleteCategory = async (
+    catName: string,
+    mode: 'move_to_other' | 'delete_products' = 'move_to_other'
+  ) => {
+    setWorkspaceInitialized(true);
+    const fallbackCategory = 'Khác';
+    let nextCategories = categories.filter((c) => c !== catName);
+    if (mode === 'move_to_other' && !nextCategories.includes(fallbackCategory)) {
+      nextCategories = [...nextCategories, fallbackCategory];
+    }
+    if (nextCategories.length === 0) {
+      nextCategories = [fallbackCategory];
+    }
+    setCategories(nextCategories);
+
+    const affectedBillItems = billItems
+      .filter((it) => it.category === catName)
+      .map((it) => ({ ...it, category: fallbackCategory }));
+    const affectedDeductions = deductions
+      .filter((d) => d.category === catName)
+      .map((d) => ({ ...d, category: fallbackCategory }));
+
+    if (mode === 'delete_products') {
+      const catProdIds = products
+        .filter((p) => p.category === catName)
+        .map((p) => p.id);
+      if (catProdIds.length > 0) {
+        const idSet = new Set(catProdIds);
+        setProducts((prev) => prev.filter((p) => !idSet.has(p.id)));
+        await deleteProductsBatchFromFirestore(ownerId, catProdIds);
+      }
+      setBillItems((prev) =>
+        prev.map((it) =>
+          it.category === catName ? { ...it, category: fallbackCategory } : it
+        )
+      );
+      setDeductions((prev) =>
+        prev.map((d) =>
+          d.category === catName ? { ...d, category: fallbackCategory } : d
+        )
+      );
+      await renameOrReassignCategoryInCloud({
+        ownerId,
+        categories: nextCategories,
+        affectedProducts: [],
+        affectedBillItems,
+        affectedDeductions,
+      });
+      showToast(
+        `Đã xóa danh mục "${catName}" và xóa ${catProdIds.length} sản phẩm thuộc danh mục này!`
+      );
+    } else {
+      const affectedProducts = products
+        .filter((p) => p.category === catName)
+        .map((p) => ({ ...p, category: fallbackCategory }));
+
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.category === catName ? { ...p, category: fallbackCategory } : p
+        )
+      );
+      setBillItems((prev) =>
+        prev.map((it) =>
+          it.category === catName ? { ...it, category: fallbackCategory } : it
+        )
+      );
+      setDeductions((prev) =>
+        prev.map((d) =>
+          d.category === catName ? { ...d, category: fallbackCategory } : d
+        )
+      );
+      await renameOrReassignCategoryInCloud({
+        ownerId,
+        categories: nextCategories,
+        affectedProducts,
+        affectedBillItems,
+        affectedDeductions,
+      });
+      showToast(
+        `Đã xóa danh mục "${catName}" và chuyển sản phẩm sang nhóm "${fallbackCategory}"!`
+      );
+    }
   };
 
   // Bill & Item Handlers
@@ -694,6 +1156,18 @@ export default function App() {
     items: ExtractedBillItem[];
   }) => {
     setWorkspaceInitialized(true);
+    const itemCats = params.items
+      .map((it) => it.category?.trim())
+      .filter(Boolean);
+    const missingCats = itemCats.filter(
+      (c) => !categories.some((existing) => existing.toLowerCase() === c.toLowerCase())
+    );
+    if (missingCats.length > 0) {
+      const mergedCats = Array.from(new Set([...categories, ...missingCats]));
+      setCategories(mergedCats);
+      await saveCategoriesToCloud(ownerId, mergedCats);
+    }
+
     const res = await saveNewBillToCloud({
       ownerId,
       billDate: params.billDate,
@@ -731,7 +1205,38 @@ export default function App() {
       ...prev.filter((it) => it.billId !== updatedBill.id),
       ...updatedItems,
     ]);
-    showToast(`Đã cập nhật hóa đơn ${updatedBill.billCode} lên Firebase!`);
+    showToast(
+      `Đã cập nhật hóa đơn ${updatedBill.billCode} lên Firebase (giá mặc định Menu được giữ nguyên)!`
+    );
+  };
+
+  const handleUpdateBillItemPriceInline = async (
+    bill: BillRecord,
+    targetItem: BillItemRecord,
+    newUnitPrice: number
+  ) => {
+    const cleanPrice = Math.max(0, Math.round(Number(newUnitPrice) || 0));
+    const currentItems = billItems.filter((it) => it.billId === bill.id);
+    const updatedItems = currentItems.map((it) =>
+      it.id === targetItem.id
+        ? {
+            ...it,
+            unitPrice: cleanPrice,
+            subtotal: it.quantity * cleanPrice,
+            updatedAtMs: Date.now(),
+          }
+        : it
+    );
+    const newTotal = updatedItems.reduce(
+      (sum, it) => sum + Math.round(it.quantity * it.unitPrice),
+      0
+    );
+    const updatedBill: BillRecord = {
+      ...bill,
+      totalAmount: newTotal,
+      updatedAtMs: Date.now(),
+    };
+    await handleSaveEditedBill(updatedBill, updatedItems);
   };
 
   const handleDeleteBillDirect = async (bill: BillRecord) => {
@@ -866,6 +1371,13 @@ export default function App() {
     unit: string;
   }) => {
     setWorkspaceInitialized(true);
+    const cleanCat = prodInput.category.trim() || 'Khác';
+    if (!categories.some((c) => c.toLowerCase() === cleanCat.toLowerCase())) {
+      const nextCats = [...categories, cleanCat];
+      setCategories(nextCats);
+      await saveCategoriesToCloud(ownerId, nextCats);
+    }
+
     const now = Date.now();
     const existing = products.find(
       (p) =>
@@ -877,7 +1389,7 @@ export default function App() {
       const updated: ProductRecord = {
         ...existing,
         productName: prodInput.productName,
-        category: prodInput.category,
+        category: cleanCat,
         unitPrice: prodInput.unitPrice,
         unit: prodInput.unit,
         updatedAtMs: now,
@@ -889,7 +1401,7 @@ export default function App() {
         id: sanitizeId(`prod_${now}_${Math.random().toString(36).slice(2, 6)}`),
         ownerId,
         productName: prodInput.productName,
-        category: prodInput.category,
+        category: cleanCat,
         unitPrice: prodInput.unitPrice,
         unit: prodInput.unit,
         totalSold: 0,
@@ -958,11 +1470,14 @@ export default function App() {
       variant: 'warning',
       onConfirm: async () => {
         const fresh = buildInitialSeedDataset(ownerId);
+        const stdCats = Array.from(STANDARD_CATEGORIES);
         setWorkspaceInitialized(true);
+        setCategories(stdCats);
         setProducts(fresh.products);
         setBills(fresh.bills);
         setBillItems(fresh.billItems);
         setDeductions(fresh.deductions);
+        await saveCategoriesToCloud(ownerId, stdCats);
         for (const p of fresh.products) {
           await createOrUpdateProductInFirestore(ownerId, p, false);
         }
@@ -972,7 +1487,7 @@ export default function App() {
   };
 
   // If not logged in, render AuthScreen (without any sample quick-fill buttons)
-  if (!loggedInStaff) {
+  if (!currentStaffAccount) {
     return (
       <AuthScreen
         staffAccounts={staffAccounts}
@@ -985,7 +1500,7 @@ export default function App() {
     );
   }
 
-  const navItems: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
+  const allNavItems: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     {
       id: 'dashboard',
       label: 'Tổng quan & Doanh thu',
@@ -1016,16 +1531,16 @@ export default function App() {
       label: 'Upload Sản phẩm / Menu',
       icon: <Package className="w-4 h-4" />,
     },
-    ...(isAdminUser
-      ? [
-          {
-            id: 'accounts' as ActiveTab,
-            label: 'Tài khoản & Phân quyền',
-            icon: <Shield className="w-4 h-4" />,
-          },
-        ]
-      : []),
+    {
+      id: 'accounts',
+      label: 'Tài khoản & Phân quyền',
+      icon: <Shield className="w-4 h-4" />,
+    },
   ];
+
+  // Strictly filter navigation items to ONLY the management categories assigned by Admin
+  const navItems = allNavItems.filter((item) => allowedTabs.includes(item.id));
+  const isCurrentTabAllowed = allowedTabs.includes(activeTab);
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
@@ -1044,7 +1559,7 @@ export default function App() {
             href="#top"
             onClick={(e) => {
               e.preventDefault();
-              setActiveTab('dashboard');
+              handleSelectTab(allowedTabs[0] || 'dashboard');
             }}
             className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap"
           >
@@ -1052,13 +1567,13 @@ export default function App() {
           </a>
         </div>
 
-        {/* Zone 2: Clean Typography Nav Links */}
+        {/* Zone 2: Clean Typography Nav Links (Only Assigned Management Categories) */}
         <nav className="hidden lg:flex items-center gap-4 text-xs font-medium text-slate-600 dark:text-slate-400 overflow-x-auto">
           {navItems.map((item) => (
             <button
               key={item.id}
               type="button"
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => handleSelectTab(item.id)}
               className={`py-1 transition-colors whitespace-nowrap cursor-pointer border-b-2 ${
                 activeTab === item.id
                   ? 'border-emerald-600 text-slate-900 dark:text-white font-semibold'
@@ -1074,12 +1589,36 @@ export default function App() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setActiveTab('ocr')}
-            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+            onClick={() => setShowGeminiKeyModal(true)}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+              geminiKeyStatus.verified
+                ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                : geminiKeyStatus.configured
+                ? 'border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                : 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+            }`}
+            title="Bấm để mở cấu hình & Check Gemini API Key"
           >
-            <Camera className="w-3.5 h-3.5" />
-            <span>+ Chụp / Tạo Bill</span>
+            <KeyRound className="w-3.5 h-3.5" />
+            <span>
+              {geminiKeyStatus.verified
+                ? 'Gemini Key: OK'
+                : geminiKeyStatus.configured
+                ? 'Gemini Key: Đã lưu'
+                : 'Add Gemini Key'}
+            </span>
           </button>
+
+          {allowedTabs.includes('ocr') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTab('ocr')}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>+ Chụp / Tạo Bill</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -1104,7 +1643,7 @@ export default function App() {
               key={item.id}
               type="button"
               onClick={() => {
-                setActiveTab(item.id);
+                handleSelectTab(item.id);
                 setMobileMenuOpen(false);
               }}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-medium ${
@@ -1126,14 +1665,19 @@ export default function App() {
         <aside className="hidden lg:flex w-64 shrink-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex-col justify-between p-4">
           <div className="space-y-6">
             <div className="space-y-1">
-              <p className="px-3 text-[11px] font-semibold text-slate-400 dark:text-slate-500">
-                Danh mục quản lý
-              </p>
+              <div className="px-3 flex items-center justify-between">
+                <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500">
+                  Danh mục quản lý
+                </p>
+                <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+                  {navItems.length}/{MANAGEMENT_TABS.length} mục
+                </span>
+              </div>
               {navItems.map((item) => (
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => handleSelectTab(item.id)}
                   className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
                     activeTab === item.id
                       ? 'bg-slate-900 dark:bg-emerald-600 text-white font-semibold'
@@ -1158,9 +1702,9 @@ export default function App() {
                 </span>
               </div>
               <div className="flex items-center justify-between font-mono">
-                <span className="text-slate-500">Sản phẩm Menu:</span>
+                <span className="text-slate-500">Danh mục / Món:</span>
                 <span className="font-bold text-slate-900 dark:text-white">
-                  {products.length}
+                  {categories.length} nhóm / {products.length} món
                 </span>
               </div>
               <div className="flex items-center justify-between font-mono">
@@ -1190,23 +1734,26 @@ export default function App() {
           <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2">
             <div className="px-2 py-1.5">
               <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                {loggedInStaff.displayName}
+                {currentStaffAccount.displayName}
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                {ROLE_LABELS[loggedInStaff.role]} · @{loggedInStaff.username}
+                {ROLE_LABELS[currentStaffAccount.role]} · @{currentStaffAccount.username}
               </div>
-              {loggedInStaff.info && (
+              <div className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                Được cấp {allowedTabs.length}/{MANAGEMENT_TABS.length} danh mục quản lý
+              </div>
+              {currentStaffAccount.info && (
                 <div className="text-[11px] text-slate-400 dark:text-slate-500 truncate mt-0.5">
-                  {loggedInStaff.info}
+                  {currentStaffAccount.info}
                 </div>
               )}
             </div>
 
             <div className="flex flex-col gap-1.5">
-              {isAdminUser && (
+              {allowedTabs.includes('accounts') && (
                 <button
                   type="button"
-                  onClick={() => setActiveTab('accounts')}
+                  onClick={() => handleSelectTab('accounts')}
                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Shield className="w-3.5 h-3.5 text-emerald-600" />
@@ -1255,85 +1802,108 @@ export default function App() {
             </div>
           )}
 
-          {/* Global Time Period & Quick Menu Actions Bar (Visible on Dashboard & Categories) */}
-          {(activeTab === 'dashboard' || activeTab === 'categories') && (
-            <div className="p-4 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-3">
-              <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-                {/* Period Filter Buttons */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 mr-1">
-                    Thời gian xem:
-                  </span>
-                  {(
-                    [
-                      { id: 'today', label: 'Hôm nay' },
-                      { id: 'week', label: 'Theo Tuần' },
-                      { id: 'month', label: 'Theo Tháng' },
-                      { id: 'all', label: 'Tất cả (Gồm 20/08/2026)' },
-                      { id: 'custom', label: 'Tự chọn ngày' },
-                    ] as { id: PeriodPreset; label: string }[]
-                  ).map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => setPeriodPreset(p.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                        periodPreset === p.id
-                          ? 'bg-emerald-600 text-white font-semibold'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                      }`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Custom Date Range Inputs */}
-                {periodPreset === 'custom' && (
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-                    <span>Từ:</span>
-                    <input
-                      type="date"
-                      value={customStartDate}
-                      onChange={(e) => setCustomStartDate(e.target.value)}
-                      className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
-                    />
-                    <span>Đến:</span>
-                    <input
-                      type="date"
-                      value={customEndDate}
-                      onChange={(e) => setCustomEndDate(e.target.value)}
-                      className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
-                    />
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center gap-2">
-                  {canWrite && products.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleRequestDeleteAllMenuProducts}
-                      className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Xóa tất cả sản phẩm trong Menu ({products.length})</span>
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={handleRequestRestoreSeedData}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 whitespace-nowrap cursor-pointer"
-                  >
-                    Khôi phục dữ liệu mẫu
-                  </button>
-                </div>
+          {/* Guard: If activeTab is not in allowedTabs */}
+          {!isCurrentTabAllowed && (
+            <div className="p-8 border border-amber-300 dark:border-amber-800 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 text-center space-y-3">
+              <Lock className="w-8 h-8 text-amber-600 dark:text-amber-400 mx-auto" />
+              <div className="text-base font-bold text-slate-900 dark:text-white">
+                Danh mục quản lý này không nằm trong quyền truy cập của tài khoản @{currentStaffAccount.username}
               </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 max-w-md mx-auto">
+                Tài khoản của bạn ({ROLE_LABELS[currentStaffAccount.role]}) chỉ được phép truy cập các danh mục quản lý mà Admin đã phân phối.
+              </p>
+              <button
+                type="button"
+                onClick={() => handleSelectTab(allowedTabs[0] || 'dashboard')}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer"
+              >
+                Chuyển về danh mục được cấp quyền
+              </button>
             </div>
           )}
 
+          {/* Global Time Period & Quick Menu Actions Bar (Visible on Dashboard & Categories) */}
+          {isCurrentTabAllowed &&
+            (activeTab === 'dashboard' || activeTab === 'categories') && (
+              <div className="p-4 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-3">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                  {/* Period Filter Buttons */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 mr-1">
+                      Thời gian xem:
+                    </span>
+                    {(
+                      [
+                        { id: 'today', label: 'Hôm nay' },
+                        { id: 'week', label: 'Theo Tuần' },
+                        { id: 'month', label: 'Theo Tháng' },
+                        { id: 'all', label: 'Tất cả (Gồm 20/08/2026)' },
+                        { id: 'custom', label: 'Tự chọn ngày' },
+                      ] as { id: PeriodPreset; label: string }[]
+                    ).map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setPeriodPreset(p.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                          periodPreset === p.id
+                            ? 'bg-emerald-600 text-white font-semibold'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Custom Date Range Inputs */}
+                  {periodPreset === 'custom' && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+                      <span>Từ:</span>
+                      <input
+                        type="date"
+                        value={customStartDate}
+                        onChange={(e) => setCustomStartDate(e.target.value)}
+                        className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
+                      />
+                      <span>Đến:</span>
+                      <input
+                        type="date"
+                        value={customEndDate}
+                        onChange={(e) => setCustomEndDate(e.target.value)}
+                        className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {canWrite && products.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleRequestDeleteAllMenuProducts}
+                        className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Xóa tất cả sản phẩm trong Menu ({products.length})</span>
+                      </button>
+                    )}
+
+                    {canWrite && (
+                      <button
+                        type="button"
+                        onClick={handleRequestRestoreSeedData}
+                        className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 whitespace-nowrap cursor-pointer"
+                      >
+                        Khôi phục dữ liệu mẫu
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
           {/* TAB 1: DASHBOARD & FINANCIAL LEDGER */}
-          {activeTab === 'dashboard' && (
+          {activeTab === 'dashboard' && allowedTabs.includes('dashboard') && (
             <div className="space-y-6">
               {/* Row 1: 4 Primary Gross Metrics */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -1561,7 +2131,7 @@ export default function App() {
                       className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                     >
                       <option value="all">Tất cả danh mục</option>
-                      {STANDARD_CATEGORIES.map((c) => (
+                      {categories.map((c) => (
                         <option key={c} value={c}>
                           Có món nhóm: {c}
                         </option>
@@ -1670,21 +2240,23 @@ export default function App() {
                                       type="button"
                                       onClick={() => setEditingBill(bill)}
                                       className="px-2 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
-                                      title="Chỉnh sửa Bill"
+                                      title="Chỉnh sửa Bill & Giá món trong Bill"
                                     >
-                                      Sửa
+                                      Sửa Bill / Giá
                                     </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setPreselectedReturnBillId(bill.id);
-                                        setActiveTab('returns');
-                                      }}
-                                      className="px-2 py-1 rounded border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[11px] font-medium text-rose-600 dark:text-rose-400 cursor-pointer"
-                                      title="Hoàn trả món trong Bill này"
-                                    >
-                                      Hoàn trả
-                                    </button>
+                                    {allowedTabs.includes('returns') && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setPreselectedReturnBillId(bill.id);
+                                          handleSelectTab('returns');
+                                        }}
+                                        className="px-2 py-1 rounded border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[11px] font-medium text-rose-600 dark:text-rose-400 cursor-pointer"
+                                        title="Hoàn trả món trong Bill này"
+                                      >
+                                        Hoàn trả
+                                      </button>
+                                    )}
                                   </>
                                 )}
                                 {canDelete && (
@@ -1710,41 +2282,55 @@ export default function App() {
           )}
 
           {/* TAB 2: AI OCR & TEXT BILL SCANNER */}
-          {activeTab === 'ocr' && (
+          {activeTab === 'ocr' && allowedTabs.includes('ocr') && (
             <OcrScannerTab
               canWrite={canWrite}
+              categories={categories}
+              products={products}
               autoAddProducts={autoAddProducts}
               onToggleAutoAddProducts={setAutoAddProducts}
               onSaveExtractedBill={handleSaveExtractedBill}
               onDeleteAllMenuProducts={handleRequestDeleteAllMenuProducts}
               menuProductsCount={products.length}
+              geminiApiKey={geminiApiKey}
+              geminiStatus={geminiKeyStatus}
+              onSaveGeminiKey={handleSaveGeminiKey}
+              onCheckGeminiKey={handleCheckGeminiKey}
+              onClearGeminiKey={handleClearGeminiKey}
               requestConfirm={requestConfirm}
             />
           )}
 
           {/* TAB 3: CATEGORY & ITEM QUANTITY ANALYTICS */}
-          {activeTab === 'categories' && (
+          {activeTab === 'categories' && allowedTabs.includes('categories') && (
             <CategoryAnalyticsTab
               billItems={periodBillItems}
               products={products}
+              categories={categories}
               periodLabel={periodLabel}
               canWrite={canWrite}
               onDeleteAllMenuProducts={handleRequestDeleteAllMenuProducts}
               onDeleteCategoryMenuProducts={handleRequestDeleteCategoryMenuProducts}
+              onAddCategory={handleAddCategory}
+              onRenameCategory={handleRenameCategory}
+              onDeleteCategory={handleDeleteCategory}
+              requestConfirm={requestConfirm}
             />
           )}
 
           {/* TAB 4: DEBT MANAGEMENT & SCROLL INSPECTOR */}
-          {activeTab === 'debts' && (
+          {activeTab === 'debts' && allowedTabs.includes('debts') && (
             <DebtManagerTab
               bills={bills}
               billItems={billItems}
+              products={products}
               canWrite={canWrite}
               canDelete={canDelete}
               onEditBill={(bill) => setEditingBill(bill)}
+              onUpdateBillItemPriceInline={handleUpdateBillItemPriceInline}
               onJumpToReturnForBill={(bill) => {
                 setPreselectedReturnBillId(bill.id);
-                setActiveTab('returns');
+                handleSelectTab('returns');
               }}
               onSettleDebt={handleSettleDebt}
               onDeleteBill={handleDeleteBillDirect}
@@ -1756,7 +2342,7 @@ export default function App() {
           )}
 
           {/* TAB 5: RETURNS & DEDUCTIONS */}
-          {activeTab === 'returns' && (
+          {activeTab === 'returns' && allowedTabs.includes('returns') && (
             <ReturnsDeductionsTab
               bills={bills}
               billItems={billItems}
@@ -1773,46 +2359,134 @@ export default function App() {
           )}
 
           {/* TAB 6: PRODUCT CATALOG & MENU UPLOAD */}
-          {activeTab === 'products' && (
+          {activeTab === 'products' && allowedTabs.includes('products') && (
             <ProductCatalogTab
               products={products}
+              categories={categories}
               canWrite={canWrite}
               autoAddProducts={autoAddProducts}
               onToggleAutoAddProducts={setAutoAddProducts}
               onAddOrUpdateProduct={handleAddOrUpdateProduct}
               onDeleteProduct={handleDeleteProduct}
               onDeleteProductsBatch={handleDeleteProductsBatch}
+              onAddCategory={handleAddCategory}
+              onRenameCategory={handleRenameCategory}
+              onDeleteCategory={handleDeleteCategory}
+              geminiApiKey={geminiApiKey}
+              geminiStatus={geminiKeyStatus}
+              onSaveGeminiKey={handleSaveGeminiKey}
+              onCheckGeminiKey={handleCheckGeminiKey}
+              onClearGeminiKey={handleClearGeminiKey}
               requestConfirm={requestConfirm}
             />
           )}
 
           {/* TAB 7: ADMIN ACCOUNTS & PERMISSIONS MANAGER */}
-          {activeTab === 'accounts' && isAdminUser && (
-            <AccountsManagerTab
-              staffAccounts={staffAccounts}
-              currentAccount={loggedInStaff}
-              onCreateAccount={handleCreateStaffAccount}
-              onUpdateAccount={handleUpdateStaffAccount}
-              onDeleteAccount={handleDeleteStaffAccount}
-              onDeleteAllNonAdminAccounts={handleDeleteAllNonAdminAccounts}
-              onSwitchAccount={(acc) => {
-                setLoggedInStaff(acc);
-                localStorage.setItem('vqbill_active_staff', JSON.stringify(acc));
-                showToast(
-                  `Đã chuyển sang tài khoản ${acc.displayName} (${ROLE_LABELS[acc.role]})`
-                );
-              }}
-              requestConfirm={requestConfirm}
-            />
-          )}
+          {activeTab === 'accounts' &&
+            isAdminUser &&
+            allowedTabs.includes('accounts') && (
+              <AccountsManagerTab
+                staffAccounts={staffAccounts}
+                currentAccount={currentStaffAccount}
+                rolePermissions={rolePermissions}
+                onSaveRolePermissions={handleSaveRolePermissions}
+                onCreateAccount={handleCreateStaffAccount}
+                onUpdateAccount={handleUpdateStaffAccount}
+                onDeleteAccount={handleDeleteStaffAccount}
+                onDeleteAllNonAdminAccounts={handleDeleteAllNonAdminAccounts}
+                onSwitchAccount={(acc) => {
+                  setLoggedInStaff(acc);
+                  localStorage.setItem('vqbill_active_staff', JSON.stringify(acc));
+                  const eff = getEffectiveRolePermissions(acc, rolePermissions);
+                  if (!eff.allowedTabs.includes(activeTab)) {
+                    setActiveTab(eff.allowedTabs[0] || 'dashboard');
+                  }
+                  showToast(
+                    `Đã chuyển sang tài khoản ${acc.displayName} (${ROLE_LABELS[acc.role]}) — Được phép truy cập ${eff.allowedTabs.length} danh mục quản lý.`
+                  );
+                }}
+                requestConfirm={requestConfirm}
+              />
+            )}
         </main>
       </div>
+
+      {/* Gemini API Key Popup Modal (When clicking Add Gemini Key in Header) */}
+      {showGeminiKeyModal && (
+        <div className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Cấu Hình & Kiểm Tra Gemini API Key (Add & Check Gemini Key)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGeminiKeyModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <GeminiKeyBar
+                geminiApiKey={geminiApiKey}
+                geminiStatus={geminiKeyStatus}
+                onSaveGeminiKey={handleSaveGeminiKey}
+                onCheckGeminiKey={handleCheckGeminiKey}
+                onClearGeminiKey={handleClearGeminiKey}
+                requestConfirm={requestConfirm}
+                contextLabel="Nhập Gemini API Key (AIza...) rồi bấm Add Gemini Key hoặc Check Gemini Key để sử dụng AI quét hóa đơn OCR và nhận diện món tự động."
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  {allowedTabs.includes('ocr') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowGeminiKeyModal(false);
+                        handleSelectTab('ocr');
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold cursor-pointer"
+                    >
+                      Mở tab Chụp / Nhập Bill OCR
+                    </button>
+                  )}
+                  {allowedTabs.includes('products') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowGeminiKeyModal(false);
+                        handleSelectTab('products');
+                      }}
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium cursor-pointer"
+                    >
+                      Mở tab Upload Sản phẩm / Menu
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowGeminiKeyModal(false)}
+                  className="px-3.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium cursor-pointer"
+                >
+                  Đóng cửa sổ
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Bill Modal */}
       {editingBill && (
         <BillEditModal
           bill={editingBill}
           items={billItems.filter((it) => it.billId === editingBill.id)}
+          categories={categories}
+          products={products}
           onClose={() => setEditingBill(null)}
           onSaveEdit={handleSaveEditedBill}
           requestConfirm={requestConfirm}

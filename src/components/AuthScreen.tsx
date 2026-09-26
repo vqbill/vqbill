@@ -1,6 +1,21 @@
 import React, { useState } from 'react';
-import { Lock, User, LogIn, ShieldCheck, Sun, Moon, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { StaffAccount } from '../types';
+import {
+  Lock,
+  User,
+  LogIn,
+  ShieldCheck,
+  Sun,
+  Moon,
+  AlertCircle,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
+import { StaffAccount, UserRole, DEFAULT_ROLE_PERMISSIONS } from '../types';
+import {
+  FIXED_ADMIN_USERNAME,
+  FIXED_ADMIN_PASSWORD,
+} from '../services/dataService';
 
 interface AuthScreenProps {
   staffAccounts: StaffAccount[];
@@ -21,6 +36,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -28,6 +44,55 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     e.preventDefault();
     setLocalError(null);
     const trimmedUser = username.trim().toLowerCase();
+
+    // Admin account has a permanently fixed password: admin123
+    if (trimmedUser === FIXED_ADMIN_USERNAME) {
+      if (password !== FIXED_ADMIN_PASSWORD) {
+        setLocalError(
+          'Mật khẩu tài khoản Admin không chính xác. Vui lòng kiểm tra lại bằng nút Hiện mật khẩu.'
+        );
+        return;
+      }
+
+      const existingAdmin = staffAccounts.find(
+        (acc) =>
+          acc.username.toLowerCase() === FIXED_ADMIN_USERNAME ||
+          acc.id === 'staff_admin'
+      );
+
+      const adminAccount: StaffAccount = existingAdmin
+        ? {
+            ...existingAdmin,
+            username: FIXED_ADMIN_USERNAME,
+            password: FIXED_ADMIN_PASSWORD,
+            role: UserRole.ADMIN,
+            active: true,
+            allowedTabs:
+              existingAdmin.allowedTabs && existingAdmin.allowedTabs.length > 0
+                ? Array.from(
+                    new Set([
+                      ...existingAdmin.allowedTabs,
+                      ...DEFAULT_ROLE_PERMISSIONS[UserRole.ADMIN].allowedTabs,
+                    ])
+                  )
+                : DEFAULT_ROLE_PERMISSIONS[UserRole.ADMIN].allowedTabs,
+          }
+        : {
+            id: 'staff_admin',
+            username: FIXED_ADMIN_USERNAME,
+            password: FIXED_ADMIN_PASSWORD,
+            displayName: 'Chủ Quán (Admin)',
+            info: 'Quản trị viên cao nhất — Toàn quyền hệ thống',
+            role: UserRole.ADMIN,
+            active: true,
+            allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.ADMIN].allowedTabs,
+            useCustomTabs: false,
+          };
+
+      onLoginSuccess(adminAccount);
+      return;
+    }
+
     const matched = staffAccounts.find(
       (acc) =>
         acc.active &&
@@ -36,7 +101,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     );
 
     if (!matched) {
-      setLocalError('Tên đăng nhập hoặc mật khẩu không chính xác. Vui lòng kiểm tra lại.');
+      setLocalError(
+        'Tên đăng nhập hoặc mật khẩu không chính xác. Bạn có thể bấm biểu tượng con mắt để kiểm tra mật khẩu vừa nhập.'
+      );
       return;
     }
 
@@ -169,19 +236,60 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                  Mật khẩu (Password)
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Mật khẩu (Password)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    {showPassword ? (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5" />
+                        <span>Ẩn mật khẩu</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Hiện mật khẩu để kiểm tra</span>
+                      </>
+                    )}
+                  </button>
+                </div>
                 <div className="relative">
                   <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Nhập mật khẩu..."
-                    className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full pl-9 pr-20 py-2.5 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 px-2 py-1 rounded text-xs font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700 inline-flex items-center gap-1 transition-colors cursor-pointer"
+                    title={
+                      showPassword
+                        ? 'Ẩn mật khẩu'
+                        : 'Hiển thị mật khẩu để kiểm tra xem đã nhập đúng chưa'
+                    }
+                  >
+                    {showPassword ? (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5" />
+                        <span>Ẩn</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Hiện</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
 

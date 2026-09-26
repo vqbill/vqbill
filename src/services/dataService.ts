@@ -17,6 +17,9 @@ import {
   PaymentType,
   StaffAccount,
   UserRole,
+  RolePermissionsMap,
+  DEFAULT_ROLE_PERMISSIONS,
+  sanitizeTabList,
 } from '../types';
 import {
   sanitizeId,
@@ -26,15 +29,20 @@ import {
   DEFAULT_CATALOG_PRODUCTS,
 } from '../utils/parser';
 
+export const FIXED_ADMIN_USERNAME = 'admin';
+export const FIXED_ADMIN_PASSWORD = 'admin123';
+
 export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
   {
     id: 'staff_admin',
-    username: 'admin',
-    password: 'admin123',
+    username: FIXED_ADMIN_USERNAME,
+    password: FIXED_ADMIN_PASSWORD,
     displayName: 'Chủ Quán (Admin)',
     info: 'Quản trị viên cao nhất — Toàn quyền hệ thống',
     role: UserRole.ADMIN,
     active: true,
+    allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.ADMIN].allowedTabs,
+    useCustomTabs: false,
   },
   {
     id: 'staff_manager',
@@ -44,6 +52,8 @@ export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
     info: 'Quản lý ca ngày & tối — Sửa bill, Hoàn trả, Menu',
     role: UserRole.MANAGER,
     active: true,
+    allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.MANAGER].allowedTabs,
+    useCustomTabs: false,
   },
   {
     id: 'staff_cashier',
@@ -53,6 +63,8 @@ export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
     info: 'Thu ngân quầy chính — Tạo bill, Ghi nhận hoàn trả',
     role: UserRole.CASHIER,
     active: true,
+    allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.CASHIER].allowedTabs,
+    useCustomTabs: false,
   },
   {
     id: 'staff_viewer',
@@ -62,13 +74,61 @@ export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
     info: 'Bộ phận kế toán — Kiểm tra đối soát báo cáo',
     role: UserRole.VIEWER,
     active: true,
+    allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER].allowedTabs,
+    useCustomTabs: false,
   },
 ];
+
+export function normalizeStaffAccountsWithFixedAdmin(
+  accounts?: StaffAccount[] | null
+): StaffAccount[] {
+  const rawList =
+    Array.isArray(accounts) && accounts.length > 0
+      ? accounts
+      : DEFAULT_STAFF_ACCOUNTS;
+
+  let hasAdmin = false;
+  const normalized = rawList.map((acc) => {
+    const isPrimaryAdmin =
+      acc.username?.trim().toLowerCase() === FIXED_ADMIN_USERNAME ||
+      acc.id === 'staff_admin';
+
+    if (isPrimaryAdmin) {
+      hasAdmin = true;
+      return {
+        ...acc,
+        id: acc.id || 'staff_admin',
+        username: FIXED_ADMIN_USERNAME,
+        password: FIXED_ADMIN_PASSWORD,
+        role: UserRole.ADMIN,
+        active: true,
+        allowedTabs:
+          acc.allowedTabs && acc.allowedTabs.length > 0
+            ? Array.from(
+                new Set([
+                  ...acc.allowedTabs,
+                  ...DEFAULT_ROLE_PERMISSIONS[UserRole.ADMIN].allowedTabs,
+                ])
+              )
+            : DEFAULT_ROLE_PERMISSIONS[UserRole.ADMIN].allowedTabs,
+      };
+    }
+    return acc;
+  });
+
+  if (!hasAdmin) {
+    return [DEFAULT_STAFF_ACCOUNTS[0], ...normalized];
+  }
+
+  return normalized;
+}
 
 const LOCAL_CACHE_KEY = 'vqbill_cloud_mirror_v2';
 
 export interface WorkspaceCacheSnapshot {
   initialized: boolean;
+  categories?: string[];
+  rolePermissions?: RolePermissionsMap;
   products: ProductRecord[];
   bills: BillRecord[];
   billItems: BillItemRecord[];
@@ -122,6 +182,8 @@ export async function fetchRtdbWorkspaceOnce(
     const val = snap.val() || {};
     return {
       initialized: Boolean(val.meta?.initialized),
+      categories: Array.isArray(val.categories) ? val.categories : undefined,
+      rolePermissions: val.role_permissions || undefined,
       products: val.products ? Object.values(val.products) : [],
       bills: val.bills ? Object.values(val.bills) : [],
       billItems: val.bill_items ? Object.values(val.bill_items) : [],
@@ -131,6 +193,22 @@ export async function fetchRtdbWorkspaceOnce(
   } catch {
     return null;
   }
+}
+
+export async function saveCategoriesToCloud(
+  ownerId: string,
+  categories: string[]
+): Promise<void> {
+  const cleanOwner = sanitizeId(ownerId);
+  await syncToRtdbSafe(`workspaces/${cleanOwner}/categories`, categories);
+}
+
+export async function saveRolePermissionsToCloud(
+  ownerId: string,
+  rolePermissions: RolePermissionsMap
+): Promise<void> {
+  const cleanOwner = sanitizeId(ownerId);
+  await syncToRtdbSafe(`workspaces/${cleanOwner}/role_permissions`, rolePermissions);
 }
 
 export function isFirestoreCloudActive(): boolean {
@@ -153,15 +231,29 @@ export async function saveStaffAccountToFirebase(
 ): Promise<void> {
   const cleanOwner = sanitizeId(ownerId);
   const accId = sanitizeId(account.id);
+  const isPrimaryAdmin =
+    account.username.trim().toLowerCase() === FIXED_ADMIN_USERNAME ||
+    accId === 'staff_admin';
+  const sanitizedTabs = sanitizeTabList(account.allowedTabs);
   const cleanAcc: StaffAccount = {
     id: accId,
     ownerId: cleanOwner,
-    username: truncateStr(account.username.toLowerCase(), 64, 'user'),
-    password: truncateStr(account.password, 100, '123456'),
+    username: isPrimaryAdmin
+      ? FIXED_ADMIN_USERNAME
+      : truncateStr(account.username.toLowerCase(), 64, 'user'),
+    password: isPrimaryAdmin
+      ? FIXED_ADMIN_PASSWORD
+      : truncateStr(account.password, 100, '123456'),
     displayName: truncateStr(account.displayName, 100, 'Nhân viên'),
     info: truncateStr(account.info || '', 500, ''),
-    role: account.role,
-    active: Boolean(account.active),
+    role: isPrimaryAdmin ? UserRole.ADMIN : account.role,
+    active: isPrimaryAdmin ? true : Boolean(account.active),
+    allowedTabs: isPrimaryAdmin
+      ? DEFAULT_ROLE_PERMISSIONS[UserRole.ADMIN].allowedTabs
+      : sanitizedTabs.length > 0
+      ? sanitizedTabs
+      : DEFAULT_ROLE_PERMISSIONS[account.role]?.allowedTabs || ['dashboard'],
+    useCustomTabs: Boolean(account.useCustomTabs),
     createdAtMs: account.createdAtMs || Date.now(),
     updatedAtMs: Date.now(),
   };
@@ -324,6 +416,62 @@ export async function deleteProductsBatchFromFirestore(
   }
 }
 
+export async function renameOrReassignCategoryInCloud(params: {
+  ownerId: string;
+  categories: string[];
+  affectedProducts: ProductRecord[];
+  affectedBillItems: BillItemRecord[];
+  affectedDeductions: DeductionRecord[];
+}): Promise<void> {
+  const {
+    ownerId,
+    categories,
+    affectedProducts,
+    affectedBillItems,
+    affectedDeductions,
+  } = params;
+  const cleanOwner = sanitizeId(ownerId);
+  await saveCategoriesToCloud(cleanOwner, categories);
+
+  for (const p of affectedProducts) {
+    await syncToRtdbSafe(`workspaces/${cleanOwner}/products/${sanitizeId(p.id)}`, p);
+  }
+  for (const bi of affectedBillItems) {
+    await syncToRtdbSafe(`workspaces/${cleanOwner}/bill_items/${sanitizeId(bi.id)}`, bi);
+  }
+  for (const d of affectedDeductions) {
+    await syncToRtdbSafe(`workspaces/${cleanOwner}/deductions/${sanitizeId(d.id)}`, d);
+  }
+
+  if (!isFirestoreCloudActive()) return;
+
+  try {
+    for (const p of affectedProducts) {
+      await updateDoc(doc(db, 'products', sanitizeId(p.id)), {
+        productName: truncateStr(p.productName, 150, 'Sản phẩm'),
+        category: truncateStr(p.category, 80, 'Khác'),
+        unitPrice: Math.max(0, Math.round(p.unitPrice || 0)),
+        unit: truncateStr(p.unit, 40, 'Phần'),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    for (const bi of affectedBillItems) {
+      await updateDoc(doc(db, 'bill_items', sanitizeId(bi.id)), {
+        billDate: bi.billDate,
+        productName: truncateStr(bi.productName, 150, 'Món ăn'),
+        category: truncateStr(bi.category, 80, 'Khác'),
+        quantity: Math.max(1, Math.round(bi.quantity)),
+        returnedQuantity: Math.max(0, Math.round(bi.returnedQuantity)),
+        unitPrice: Math.max(0, Math.round(bi.unitPrice)),
+        subtotal: Math.max(0, Math.round(bi.subtotal)),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'categories_reassign');
+  }
+}
+
 // BILLS FIREBASE CRUD
 export async function saveNewBillToCloud(params: {
   ownerId: string;
@@ -428,7 +576,10 @@ export async function saveNewBillToCloud(params: {
     if (existing) {
       existing.totalSold += it.quantity;
       existing.totalRevenue += it.subtotal;
-      if (it.unitPrice > 0) existing.unitPrice = it.unitPrice;
+      // Giữ nguyên giá mặc định (existing.unitPrice) của sản phẩm trong Menu khi chỉnh giá trong Bill
+      if (existing.unitPrice <= 0 && it.unitPrice > 0) {
+        existing.unitPrice = it.unitPrice;
+      }
       existing.updatedAtMs = now;
       productsMap.set(key, existing);
       touchedProducts.push(existing);

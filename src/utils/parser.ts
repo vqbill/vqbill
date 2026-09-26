@@ -1,4 +1,4 @@
-import { ExtractedBillJSON, PaymentType, STANDARD_CATEGORIES } from '../types';
+import { ExtractedBillJSON, PaymentType } from '../types';
 
 export function sanitizeId(raw: string): string {
   const cleaned = raw.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 120);
@@ -20,8 +20,16 @@ export function formatNumber(amount: number): string {
   return num.toLocaleString('vi-VN');
 }
 
-export function inferCategory(productName: string): string {
+export function inferCategory(productName: string, customCategories?: string[]): string {
   const lower = productName.toLowerCase();
+  if (Array.isArray(customCategories) && customCategories.length > 0) {
+    for (const c of customCategories) {
+      const cLow = c.toLowerCase().trim();
+      if (cLow && cLow !== 'khác' && lower.includes(cLow)) {
+        return c;
+      }
+    }
+  }
   if (
     /(bia|tiger|heineken|sài gòn|sai gon|larue|budweiser|333|ken|sapporo|huda|ruby|tháp bia)/i.test(
       lower
@@ -89,6 +97,132 @@ export function normalizeMoneyNumber(raw: string | number): number {
   return val;
 }
 
+export interface BulkParsedProduct {
+  productName: string;
+  category: string;
+  unitPrice: number;
+  unit: string;
+}
+
+/**
+ * Parses bulk product lines strictly following the logic:
+ * Tên sản phẩm, Danh mục, Giá bán (supports comma ',', pipe '|', semicolon ';', tab '\t', or ' - ')
+ */
+export function parseBulkProductsByLogic(
+  rawText: string,
+  availableCategories?: string[]
+): BulkParsedProduct[] {
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const results: BulkParsedProduct[] = [];
+
+  for (const rawLine of lines) {
+    // Strip leading numbering like "1. " or "- "
+    const line = rawLine.replace(/^(?:\d+[\.\)]\s*|\-\s*|\*\s*)/, '').trim();
+    if (!line) continue;
+
+    // Skip header row if pasted from Excel/CSV
+    if (
+      /^(tên sản phẩm|ten san pham|tên món|sản phẩm|product)/i.test(line) &&
+      /(danh mục|category|giá bán|đơn giá|price)/i.test(line)
+    ) {
+      continue;
+    }
+
+    // Try splitting by comma, pipe, semicolon, or tab first (Tên sản phẩm, Danh mục, Giá bán)
+    let parts = line
+      .split(/\t|,|\||;/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    if (parts.length < 2 && line.includes(' - ')) {
+      parts = line
+        .split(' - ')
+        .map((p) => p.trim())
+        .filter(Boolean);
+    }
+
+    if (parts.length >= 3) {
+      // Standard 3-part format: Tên sản phẩm, Danh mục, Giá bán (and optional 4th part: Đơn vị)
+      const productName = parts[0];
+      const rawCategory = parts[1];
+      let unitPrice = normalizeMoneyNumber(parts[2]);
+      if (unitPrice > 0 && unitPrice < 1000) {
+        unitPrice *= 1000;
+      }
+
+      // Match existing category case-insensitively if available
+      let matchedCategory = rawCategory || inferCategory(productName, availableCategories);
+      if (Array.isArray(availableCategories) && rawCategory) {
+        const found = availableCategories.find(
+          (c) => c.toLowerCase().trim() === rawCategory.toLowerCase().trim()
+        );
+        if (found) matchedCategory = found;
+      }
+
+      const unit = parts[3] ? parts[3] : inferUnit(productName, matchedCategory);
+
+      if (productName) {
+        results.push({
+          productName,
+          category: matchedCategory,
+          unitPrice,
+          unit,
+        });
+        continue;
+      }
+    }
+
+    if (parts.length === 2) {
+      // 2-part format: could be "Tên sản phẩm, Giá bán" OR "Tên sản phẩm, Danh mục"
+      const p0 = parts[0];
+      const p1 = parts[1];
+      const priceFromP1 = normalizeMoneyNumber(p1);
+      if (priceFromP1 > 0 || /\d/.test(p1)) {
+        let uPrice = priceFromP1;
+        if (uPrice > 0 && uPrice < 1000) uPrice *= 1000;
+        const cat = inferCategory(p0, availableCategories);
+        results.push({
+          productName: p0,
+          category: cat,
+          unitPrice: uPrice,
+          unit: inferUnit(p0, cat),
+        });
+        continue;
+      } else {
+        const cat = p1 || inferCategory(p0, availableCategories);
+        results.push({
+          productName: p0,
+          category: cat,
+          unitPrice: 0,
+          unit: inferUnit(p0, cat),
+        });
+        continue;
+      }
+    }
+
+    // Fallback single-string pattern: "Tên sản phẩm ... Giá bán"
+    const m = line.match(/^(.+?)\s+[\-|:]?\s*(\d[\d.,]*)\s*(k|đ|vnđ|d)?$/i);
+    if (m) {
+      const name = m[1].trim();
+      let price = normalizeMoneyNumber(m[2] + (m[3] || ''));
+      if (price > 0 && price < 1000) price *= 1000;
+      const cat = inferCategory(name, availableCategories);
+      results.push({
+        productName: name,
+        category: cat,
+        unitPrice: price,
+        unit: inferUnit(name, cat),
+      });
+    }
+  }
+
+  return results;
+}
+
 export function parseRawTextToBillJSON(
   rawText: string,
   defaultDate: string
@@ -146,13 +280,11 @@ export function parseRawTextToBillJSON(
       continue;
     }
 
-    // Pattern A: "ProductName | Qty | UnitPrice | Subtotal" or "ProductName - x15 - 20.000đ"
-    // Pattern B: "15 Bia Tiger Lùn 22k 330k" or "Bia Tiger Lùn x15 22.000 330.000"
     let matched = false;
 
     // Try matching: Name ... Qty ... UnitPrice ... (optional Subtotal)
     const regex1 =
-      /^(.+?)\s+(?:SL[:\s]*|x\s*)?(\d{1,4})\s*(?:lon|chai|phần|đĩa|nồi|cái|ly|ca|suất|bịch|gói)?\s*[\-x|:@]?\s*([\d.,]+\s*(?:k|đ|vnđ|d)?)(?:\s*[\-=|:]?\s*([\d.,]+\s*(?:k|đ|vnđ|d)?))?$/i;
+      /^(.+?)\s+(?:SL[:\s]*|x\s*)?(\d{1,4})\s*(?:lon|chai|phần|đĩa|nồi|cái|ly|ca|suất|bịch|gói|con)?\s*[\-x|:@]?\s*([\d.,]+\s*(?:k|đ|vnđ|d)?)(?:\s*[\-=|:]?\s*([\d.,]+\s*(?:k|đ|vnđ|d)?))?$/i;
     const m1 = line.match(regex1);
     if (m1) {
       const name = m1[1].replace(/^[\d]+\.\s*/, '').replace(/[\-|:]$/, '').trim();
@@ -162,13 +294,11 @@ export function parseRawTextToBillJSON(
       if (uPrice > 0 && uPrice < 1000) uPrice *= 1000;
       if (sub > 0 && sub < 1000) sub *= 1000;
 
-      // If user only wrote Name + Qty + Subtotal (or UnitPrice)
       if (sub === 0) {
         sub = qty * uPrice;
       } else if (sub === qty * uPrice) {
         // exact match
       } else if (uPrice > sub && qty > 1) {
-        // swapped
         const tmp = sub;
         sub = uPrice;
         uPrice = tmp;
@@ -191,7 +321,7 @@ export function parseRawTextToBillJSON(
     if (!matched) {
       // Pattern C: Leading quantity: "15 lon Bia Tiger Lùn 22k"
       const regex2 =
-        /^(\d{1,4})\s*(?:lon|chai|phần|đĩa|nồi|cái|ly|ca)?\s+(.+?)\s+[\-x|:@]?\s*([\d.,]+\s*(?:k|đ|vnđ|d)?)(?:\s+([\d.,]+\s*(?:k|đ|vnđ|d)?))?$/i;
+        /^(\d{1,4})\s*(?:lon|chai|phần|đĩa|nồi|cái|ly|ca|con)?\s+(.+?)\s+[\-x|:@]?\s*([\d.,]+\s*(?:k|đ|vnđ|d)?)(?:\s+([\d.,]+\s*(?:k|đ|vnđ|d)?))?$/i;
       const m2 = line.match(regex2);
       if (m2) {
         const qty = Math.max(1, parseInt(m2[1], 10) || 1);

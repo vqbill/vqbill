@@ -3,8 +3,8 @@ import { X, Plus, Trash2, Save } from 'lucide-react';
 import {
   BillRecord,
   BillItemRecord,
+  ProductRecord,
   PaymentType,
-  STANDARD_CATEGORIES,
   ConfirmRequestOptions,
 } from '../types';
 import { formatVND, inferCategory, sanitizeId, truncateStr } from '../utils/parser';
@@ -12,6 +12,8 @@ import { formatVND, inferCategory, sanitizeId, truncateStr } from '../utils/pars
 interface BillEditModalProps {
   bill: BillRecord;
   items: BillItemRecord[];
+  categories: string[];
+  products: ProductRecord[];
   onClose: () => void;
   onSaveEdit: (updatedBill: BillRecord, updatedItems: BillItemRecord[]) => Promise<void>;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
@@ -20,6 +22,8 @@ interface BillEditModalProps {
 export const BillEditModal: React.FC<BillEditModalProps> = ({
   bill,
   items,
+  categories,
+  products,
   onClose,
   onSaveEdit,
   requestConfirm,
@@ -49,14 +53,27 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
         if (i !== idx) return it;
         const copy = { ...it };
         if (field === 'productName') {
-          copy.productName = String(val);
-          copy.category = inferCategory(copy.productName);
+          const nameStr = String(val);
+          copy.productName = nameStr;
+          const catalogProd = products.find(
+            (p) => p.productName.toLowerCase().trim() === nameStr.toLowerCase().trim()
+          );
+          if (catalogProd) {
+            copy.category = catalogProd.category;
+            if (copy.unitPrice === 0 || it.productName !== nameStr) {
+              copy.unitPrice = catalogProd.unitPrice;
+              copy.subtotal = copy.quantity * copy.unitPrice;
+            }
+          } else {
+            copy.category = inferCategory(copy.productName, categories);
+          }
         } else if (field === 'category') {
           copy.category = String(val);
         } else if (field === 'quantity') {
           copy.quantity = Math.max(1, Math.round(Number(val) || 1));
           copy.subtotal = copy.quantity * copy.unitPrice;
         } else if (field === 'unitPrice') {
+          // Chỉnh giá trực tiếp trong bill, giữ nguyên giá mặc định của sản phẩm trong Menu
           copy.unitPrice = Math.max(0, Math.round(Number(val) || 0));
           copy.subtotal = copy.quantity * copy.unitPrice;
         }
@@ -73,6 +90,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
       variant: 'primary',
       onConfirm: () => {
         const now = Date.now();
+        const defaultProd = products[0];
         setEditItems((prev) => [
           ...prev,
           {
@@ -80,12 +98,12 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             ownerId: bill.ownerId,
             billId: bill.id,
             billDate,
-            productName: 'Bia Tiger Lùn',
-            category: 'Bia',
+            productName: defaultProd ? defaultProd.productName : 'Bia Tiger Lùn',
+            category: defaultProd ? defaultProd.category : categories[0] || 'Bia',
             quantity: 1,
             returnedQuantity: 0,
-            unitPrice: 22000,
-            subtotal: 22000,
+            unitPrice: defaultProd ? defaultProd.unitPrice : 22000,
+            subtotal: defaultProd ? defaultProd.unitPrice : 22000,
             createdAtMs: now,
             updatedAtMs: now,
           },
@@ -115,10 +133,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     if (valid.length === 0) return;
 
     requestConfirm({
-      title: 'Xác nhận Cập Nhật Hóa Đơn',
+      title: 'Xác nhận Cập Nhật Hóa Đơn & Giá Món Trong Bill',
       message: `Bạn có chắc chắn muốn lưu thay đổi cho hóa đơn ${bill.billCode} (Tổng mới: ${formatVND(
         computedTotal
-      )}) lên Firebase không?`,
+      )}) lên Firebase không? (Lưu ý: Giá chỉnh sửa trong bill này không làm thay đổi giá mặc định của sản phẩm trong Menu).`,
       confirmLabel: 'Lưu thay đổi Bill',
       variant: 'warning',
       onConfirm: async () => {
@@ -134,12 +152,14 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             ...bill,
             billDate,
             paymentType,
-            debtorName: paymentType === 'debt' ? debtorName.trim() : '',
+            debtorName: paymentType === 'debt' ? debtorName.trim() : bill.debtorName,
             debtStatus:
               paymentType === 'debt'
                 ? debtStatus === 'none'
                   ? 'unpaid'
                   : debtStatus
+                : bill.debtStatus === 'paid'
+                ? 'paid'
                 : 'none',
             totalAmount: computedTotal,
             itemsSummary: summaryStr,
@@ -169,10 +189,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <div>
             <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Chỉnh sửa Hóa Đơn {bill.billCode}
+              Chỉnh sửa Hóa Đơn & Giá Sản Phẩm Trong Bill ({bill.billCode})
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Cập nhật ngày, hình thức thanh toán, tên người nợ hoặc số lượng các món trong bill
+              Bạn có thể chỉnh trực tiếp đơn giá của từng món trong bill này mà không làm thay đổi giá mặc định trong Menu.
             </p>
           </div>
           <button
@@ -256,82 +276,111 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             </div>
 
             <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs min-w-[520px]">
+              <table className="w-full text-left border-collapse text-xs min-w-[560px]">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500">
                     <th className="py-2 px-3">Tên món</th>
                     <th className="py-2 px-2 w-36">Danh mục</th>
                     <th className="py-2 px-2 w-20 text-right">SL</th>
-                    <th className="py-2 px-2 w-28 text-right">Đơn giá</th>
+                    <th className="py-2 px-2 w-36 text-right">
+                      Đơn giá trong Bill (₫)
+                    </th>
                     <th className="py-2 px-3 w-28 text-right">Thành tiền</th>
                     <th className="py-2 px-2 w-10"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                  {editItems.map((it, idx) => (
-                    <tr key={it.id}>
-                      <td className="p-2">
-                        <input
-                          type="text"
-                          value={it.productName}
-                          onChange={(e) =>
-                            handleItemChange(idx, 'productName', e.target.value)
-                          }
-                          className="w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <select
-                          value={it.category}
-                          onChange={(e) =>
-                            handleItemChange(idx, 'category', e.target.value)
-                          }
-                          className="w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                        >
-                          {STANDARD_CATEGORIES.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="number"
-                          min={1}
-                          value={it.quantity}
-                          onChange={(e) =>
-                            handleItemChange(idx, 'quantity', e.target.value)
-                          }
-                          className="w-full px-2 py-1 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="number"
-                          min={0}
-                          step={1000}
-                          value={it.unitPrice}
-                          onChange={(e) =>
-                            handleItemChange(idx, 'unitPrice', e.target.value)
-                          }
-                          className="w-full px-2 py-1 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                        />
-                      </td>
-                      <td className="p-2 text-right font-mono font-semibold">
-                        {formatVND(it.quantity * it.unitPrice)}
-                      </td>
-                      <td className="p-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveRow(idx)}
-                          className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {editItems.map((it, idx) => {
+                    const catalogMatch = products.find(
+                      (p) =>
+                        p.productName.toLowerCase().trim() ===
+                        it.productName.toLowerCase().trim()
+                    );
+                    const isCustomPrice =
+                      catalogMatch &&
+                      catalogMatch.unitPrice > 0 &&
+                      catalogMatch.unitPrice !== it.unitPrice;
+                    const categoryOptions = Array.from(
+                      new Set([...categories, it.category].filter(Boolean))
+                    );
+
+                    return (
+                      <tr key={it.id}>
+                        <td className="p-2 align-top">
+                          <input
+                            type="text"
+                            list="vqbill-menu-products-list"
+                            value={it.productName}
+                            onChange={(e) =>
+                              handleItemChange(idx, 'productName', e.target.value)
+                            }
+                            className="w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                          />
+                        </td>
+                        <td className="p-2 align-top">
+                          <select
+                            value={it.category}
+                            onChange={(e) =>
+                              handleItemChange(idx, 'category', e.target.value)
+                            }
+                            className="w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                          >
+                            {categoryOptions.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="p-2 align-top">
+                          <input
+                            type="number"
+                            min={1}
+                            value={it.quantity}
+                            onChange={(e) =>
+                              handleItemChange(idx, 'quantity', e.target.value)
+                            }
+                            className="w-full px-2 py-1 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                          />
+                        </td>
+                        <td className="p-2 align-top">
+                          <input
+                            type="number"
+                            min={0}
+                            step={1000}
+                            value={it.unitPrice}
+                            onChange={(e) =>
+                              handleItemChange(idx, 'unitPrice', e.target.value)
+                            }
+                            className="w-full px-2 py-1 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                          />
+                          {catalogMatch && (
+                            <div className="text-[10px] text-right mt-0.5 font-mono text-slate-400">
+                              {isCustomPrice ? (
+                                <span className="text-amber-600 dark:text-amber-400">
+                                  Giá gốc Menu: {formatVND(catalogMatch.unitPrice)} (Giữ nguyên)
+                                </span>
+                              ) : (
+                                <span>Giá gốc Menu: {formatVND(catalogMatch.unitPrice)}</span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-2 align-top text-right font-mono font-semibold pt-2.5">
+                          {formatVND(it.quantity * it.unitPrice)}
+                        </td>
+                        <td className="p-2 align-top text-center pt-2">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRow(idx)}
+                            className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

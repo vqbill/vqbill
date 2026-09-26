@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Shield,
   Plus,
@@ -10,17 +10,31 @@ import {
   X,
   UserCheck,
   KeyRound,
+  Layers,
+  CheckSquare,
+  RotateCcw,
+  Lock,
 } from 'lucide-react';
 import {
   StaffAccount,
   UserRole,
   ROLE_LABELS,
   ConfirmRequestOptions,
+  MANAGEMENT_TABS,
+  ManagementTabId,
+  RolePermissionsMap,
+  DEFAULT_ROLE_PERMISSIONS,
+  getEffectiveRolePermissions,
 } from '../types';
 
 interface AccountsManagerTabProps {
   staffAccounts: StaffAccount[];
   currentAccount: StaffAccount;
+  rolePermissions: RolePermissionsMap;
+  onSaveRolePermissions: (
+    updatedMap: RolePermissionsMap,
+    syncAccountsOfRoles: boolean
+  ) => Promise<void>;
   onCreateAccount: (acc: Omit<StaffAccount, 'id'>) => Promise<void>;
   onUpdateAccount: (acc: StaffAccount) => Promise<void>;
   onDeleteAccount: (id: string) => Promise<void>;
@@ -29,9 +43,18 @@ interface AccountsManagerTabProps {
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
 
+const ROLE_ORDER: UserRole[] = [
+  UserRole.ADMIN,
+  UserRole.MANAGER,
+  UserRole.CASHIER,
+  UserRole.VIEWER,
+];
+
 export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   staffAccounts,
   currentAccount,
+  rolePermissions,
+  onSaveRolePermissions,
   onCreateAccount,
   onUpdateAccount,
   onDeleteAccount,
@@ -39,19 +62,137 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   onSwitchAccount,
   requestConfirm,
 }) => {
+  // Role Permissions Matrix Draft State
+  const [draftRolePerms, setDraftRolePerms] = useState<RolePermissionsMap>(
+    rolePermissions
+  );
+  const [syncRoleToAccounts, setSyncRoleToAccounts] = useState<boolean>(true);
+
+  useEffect(() => {
+    setDraftRolePerms(rolePermissions);
+  }, [rolePermissions]);
+
   // New Account Form State
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newInfo, setNewInfo] = useState('');
   const [newRole, setNewRole] = useState<UserRole>(UserRole.CASHIER);
+  const [newUseCustomTabs, setNewUseCustomTabs] = useState<boolean>(false);
+  const [newAllowedTabs, setNewAllowedTabs] = useState<ManagementTabId[]>(
+    rolePermissions[UserRole.CASHIER]?.allowedTabs ||
+      DEFAULT_ROLE_PERMISSIONS[UserRole.CASHIER].allowedTabs
+  );
+
+  // Sync newAllowedTabs when newRole changes if not custom
+  useEffect(() => {
+    if (!newUseCustomTabs) {
+      setNewAllowedTabs(
+        rolePermissions[newRole]?.allowedTabs ||
+          DEFAULT_ROLE_PERMISSIONS[newRole].allowedTabs
+      );
+    }
+  }, [newRole, newUseCustomTabs, rolePermissions]);
 
   // Edit Account State
   const [editingAcc, setEditingAcc] = useState<StaffAccount | null>(null);
   const [visiblePasswords, setVisiblePasswords] = useState<Record<string, boolean>>({});
+  const [showNewPassword, setShowNewPassword] = useState<boolean>(false);
+  const [showEditPassword, setShowEditPassword] = useState<boolean>(false);
 
   const toggleShowPassword = (id: string) => {
     setVisiblePasswords((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  // Toggle a tab in the Role Matrix
+  const handleToggleRoleTab = (role: UserRole, tabId: ManagementTabId) => {
+    // Admin must always keep 'accounts' tab
+    if (role === UserRole.ADMIN && tabId === 'accounts') return;
+
+    setDraftRolePerms((prev) => {
+      const currentRoleCfg = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const exists = currentRoleCfg.allowedTabs.includes(tabId);
+      let nextTabs = exists
+        ? currentRoleCfg.allowedTabs.filter((t) => t !== tabId)
+        : [...currentRoleCfg.allowedTabs, tabId];
+
+      if (nextTabs.length === 0) {
+        nextTabs = ['dashboard'];
+      }
+      if (role === UserRole.ADMIN && !nextTabs.includes('accounts')) {
+        nextTabs.push('accounts');
+      }
+
+      // Keep canonical order
+      const ordered = MANAGEMENT_TABS.map((m) => m.id).filter((id) =>
+        nextTabs.includes(id)
+      );
+
+      return {
+        ...prev,
+        [role]: {
+          ...currentRoleCfg,
+          allowedTabs: ordered,
+        },
+      };
+    });
+  };
+
+  const handleToggleRoleCapability = (
+    role: UserRole,
+    field: 'canWrite' | 'canDelete',
+    value: boolean
+  ) => {
+    if (role === UserRole.ADMIN) return;
+    setDraftRolePerms((prev) => ({
+      ...prev,
+      [role]: {
+        ...(prev[role] || DEFAULT_ROLE_PERMISSIONS[role]),
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleSaveRoleMatrixClick = () => {
+    requestConfirm({
+      title: 'Xác nhận Lưu Phân Phối Danh Mục Quản Lý Theo Role',
+      message: `Bạn có chắc chắn muốn lưu cấu hình danh mục quản lý cho các Role (${
+        syncRoleToAccounts
+          ? 'đồng thời áp dụng danh mục mới cho các tài khoản thuộc Role tương ứng'
+          : 'chỉ áp dụng cho các tài khoản mặc định theo Role'
+      }) lên Firebase không?`,
+      confirmLabel: 'Lưu phân quyền Role',
+      variant: 'primary',
+      onConfirm: async () => {
+        await onSaveRolePermissions(draftRolePerms, syncRoleToAccounts);
+      },
+    });
+  };
+
+  const handleResetRoleMatrixClick = () => {
+    requestConfirm({
+      title: 'Xác nhận Khôi Phục Phân Quyền Role Mặc Định',
+      message:
+        'Bạn có chắc chắn muốn khôi phục cấu hình danh mục quản lý mặc định cho tất cả các Role không?',
+      confirmLabel: 'Khôi phục mặc định',
+      variant: 'warning',
+      onConfirm: async () => {
+        setDraftRolePerms(DEFAULT_ROLE_PERMISSIONS);
+        await onSaveRolePermissions(DEFAULT_ROLE_PERMISSIONS, true);
+      },
+    });
+  };
+
+  // Toggle a tab in the New Account Form
+  const handleToggleNewAccountTab = (tabId: ManagementTabId) => {
+    if (newRole === UserRole.ADMIN && tabId === 'accounts') return;
+    setNewUseCustomTabs(true);
+    setNewAllowedTabs((prev) => {
+      const exists = prev.includes(tabId);
+      const next = exists ? prev.filter((t) => t !== tabId) : [...prev, tabId];
+      if (next.length === 0) return ['dashboard'];
+      return MANAGEMENT_TABS.map((m) => m.id).filter((id) => next.includes(id));
+    });
   };
 
   const handleAddSubmit = (e: React.FormEvent) => {
@@ -61,9 +202,18 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     const d = newDisplayName.trim();
     if (!u || !p || !d) return;
 
+    const assignedTabs =
+      newAllowedTabs.length > 0
+        ? newAllowedTabs
+        : rolePermissions[newRole]?.allowedTabs || ['dashboard'];
+
+    const tabLabels = MANAGEMENT_TABS.filter((t) => assignedTabs.includes(t.id))
+      .map((t) => t.shortLabel)
+      .join(', ');
+
     requestConfirm({
-      title: 'Xác nhận Thêm Tài Khoản Mới',
-      message: `Bạn có chắc chắn muốn tạo tài khoản mới "@${u}" (${d}) với quyền "${ROLE_LABELS[newRole]}" và lưu vào Firebase không?`,
+      title: 'Xác nhận Thêm Tài Khoản & Phân Danh Mục Quản Lý',
+      message: `Bạn có chắc chắn muốn tạo tài khoản "@${u}" (${d}) — Role "${ROLE_LABELS[newRole]}" với quyền truy cập ${assignedTabs.length} danh mục quản lý (${tabLabels}) và lưu vào Firebase không?`,
       confirmLabel: 'Xác nhận Tạo tài khoản',
       variant: 'primary',
       onConfirm: async () => {
@@ -74,12 +224,69 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           info: newInfo.trim() || 'Nhân sự cửa hàng',
           role: newRole,
           active: true,
+          allowedTabs: assignedTabs,
+          useCustomTabs: newUseCustomTabs,
         });
         setNewUsername('');
         setNewPassword('');
         setNewDisplayName('');
         setNewInfo('');
+        setNewUseCustomTabs(false);
+        setNewAllowedTabs(
+          rolePermissions[newRole]?.allowedTabs ||
+            DEFAULT_ROLE_PERMISSIONS[newRole].allowedTabs
+        );
       },
+    });
+  };
+
+  // Open Edit Drawer with effective tabs populated
+  const handleOpenEditAccount = (acc: StaffAccount) => {
+    const eff = getEffectiveRolePermissions(acc, rolePermissions);
+    setEditingAcc({
+      ...acc,
+      allowedTabs: eff.allowedTabs,
+      useCustomTabs: Boolean(acc.useCustomTabs),
+    });
+  };
+
+  const handleToggleEditingAccountTab = (tabId: ManagementTabId) => {
+    if (!editingAcc) return;
+    if (
+      (editingAcc.username === 'admin' || editingAcc.role === UserRole.ADMIN) &&
+      tabId === 'accounts'
+    ) {
+      return;
+    }
+
+    const currentTabs =
+      editingAcc.allowedTabs && editingAcc.allowedTabs.length > 0
+        ? editingAcc.allowedTabs
+        : rolePermissions[editingAcc.role]?.allowedTabs || ['dashboard'];
+
+    const exists = currentTabs.includes(tabId);
+    let next = exists
+      ? currentTabs.filter((t) => t !== tabId)
+      : [...currentTabs, tabId];
+
+    if (next.length === 0) {
+      next = ['dashboard'];
+    }
+    if (
+      (editingAcc.username === 'admin' || editingAcc.role === UserRole.ADMIN) &&
+      !next.includes('accounts')
+    ) {
+      next.push('accounts');
+    }
+
+    const ordered = MANAGEMENT_TABS.map((m) => m.id).filter((id) =>
+      next.includes(id)
+    );
+
+    setEditingAcc({
+      ...editingAcc,
+      allowedTabs: ordered,
+      useCustomTabs: true,
     });
   };
 
@@ -91,9 +298,23 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     const d = editingAcc.displayName.trim();
     if (!u || !p || !d) return;
 
+    const finalTabs =
+      editingAcc.useCustomTabs &&
+      editingAcc.allowedTabs &&
+      editingAcc.allowedTabs.length > 0
+        ? editingAcc.allowedTabs
+        : rolePermissions[editingAcc.role]?.allowedTabs ||
+          DEFAULT_ROLE_PERMISSIONS[editingAcc.role].allowedTabs;
+
+    const tabLabels = MANAGEMENT_TABS.filter((t) => finalTabs.includes(t.id))
+      .map((t) => t.shortLabel)
+      .join(', ');
+
     requestConfirm({
-      title: 'Xác nhận Cập Nhật Tài Khoản',
-      message: `Bạn có chắc chắn muốn lưu thay đổi thông tin, tên hiển thị và mật khẩu cho tài khoản "@${u}" (${d}) lên Firebase không?`,
+      title: 'Xác nhận Cập Nhật Tài Khoản & Danh Mục Quản Lý',
+      message: `Bạn có chắc chắn muốn lưu thay đổi cho tài khoản "@${u}" (${d}) — Role "${
+        ROLE_LABELS[editingAcc.role]
+      }", được phép truy cập ${finalTabs.length} danh mục quản lý (${tabLabels}) lên Firebase không?`,
       confirmLabel: 'Lưu thay đổi',
       variant: 'warning',
       onConfirm: async () => {
@@ -103,6 +324,8 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           password: p,
           displayName: d,
           info: editingAcc.info.trim(),
+          allowedTabs: finalTabs,
+          useCustomTabs: Boolean(editingAcc.useCustomTabs),
         });
         setEditingAcc(null);
       },
@@ -148,10 +371,10 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           </div>
           <div>
             <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-              Quản Lý Tài Khoản & Phân Quyền Hệ Thống (Admin)
+              Quản Lý Tài Khoản & Phân Phối Danh Mục Quản Lý (Admin)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Tùy chỉnh mật khẩu (Password), tên hiển thị, thông tin liên hệ và vai trò phân quyền cho từng tài khoản. Dữ liệu đồng bộ trực tiếp lên Firebase.
+              Phân phối các Danh mục quản lý cho từng Role (Loại tài khoản) hoặc tùy chỉnh riêng cho từng tài khoản nhân sự. Mỗi tài khoản khi đăng nhập chỉ có thể truy cập đúng những Danh mục quản lý mà Admin đã cấp quyền.
             </p>
           </div>
         </div>
@@ -166,14 +389,183 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         </button>
       </div>
 
-      {/* Add New Account Card */}
+      {/* SECTION 1: ROLE-BASED MANAGEMENT TABS PERMISSION MATRIX */}
+      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-start gap-2.5">
+            <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                1. Bảng Phân Phối Danh Mục Quản Lý Theo Loại Tài Khoản (Role)
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Tick chọn các danh mục quản lý được phép truy cập cho từng Role: Chủ quán (Admin), Quản lý, Thu ngân, Kế toán
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 mr-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={syncRoleToAccounts}
+                onChange={(e) => setSyncRoleToAccounts(e.target.checked)}
+                className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
+              />
+              <span>Áp dụng đồng bộ ngay cho các tài khoản thuộc Role tương ứng</span>
+            </label>
+
+            <button
+              type="button"
+              onClick={handleResetRoleMatrixClick}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Khôi phục mặc định</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSaveRoleMatrixClick}
+              className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Lưu Phân Quyền Theo Role</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
+          <table className="w-full text-left border-collapse min-w-[880px] text-xs">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                <th className="py-2.5 px-3 w-48">Loại tài khoản (Role)</th>
+                {MANAGEMENT_TABS.map((tab) => (
+                  <th key={tab.id} className="py-2.5 px-2.5 text-center">
+                    <div className="text-slate-800 dark:text-slate-200 font-semibold">
+                      {tab.shortLabel}
+                    </div>
+                  </th>
+                ))}
+                <th className="py-2.5 px-3 text-center">Quyền Thao Tác Dữ Liệu</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+              {ROLE_ORDER.map((roleKey) => {
+                const cfg =
+                  draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
+                const isAdminRole = roleKey === UserRole.ADMIN;
+                return (
+                  <tr
+                    key={roleKey}
+                    className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
+                  >
+                    <td className="py-3 px-3">
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        {ROLE_LABELS[roleKey]}
+                      </div>
+                      <div className="text-[11px] text-slate-500 font-mono">
+                        Role ID: {roleKey} ({cfg.allowedTabs.length}/
+                        {MANAGEMENT_TABS.length} mục)
+                      </div>
+                    </td>
+
+                    {MANAGEMENT_TABS.map((tab) => {
+                      const checked = cfg.allowedTabs.includes(tab.id);
+                      const isLockedAdminTab =
+                        isAdminRole && tab.id === 'accounts';
+                      return (
+                        <td
+                          key={tab.id}
+                          className="py-3 px-2.5 text-center align-middle"
+                        >
+                          <label
+                            className={`inline-flex flex-col items-center justify-center gap-1 px-2 py-1.5 rounded-lg border transition-colors ${
+                              checked
+                                ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
+                                : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900 text-slate-400'
+                            } ${
+                              isLockedAdminTab
+                                ? 'opacity-80 cursor-not-allowed'
+                                : 'cursor-pointer'
+                            }`}
+                            title={tab.description}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={isLockedAdminTab}
+                              onChange={() => handleToggleRoleTab(roleKey, tab.id)}
+                              className="w-4 h-4 rounded border-slate-300 text-emerald-600"
+                            />
+                            <span className="text-[10px] font-medium">
+                              {checked ? 'Được phép' : 'Ẩn / Khóa'}
+                            </span>
+                          </label>
+                        </td>
+                      );
+                    })}
+
+                    <td className="py-3 px-3 text-center">
+                      <div className="flex flex-col items-start gap-1.5 text-[11px]">
+                        <label
+                          className={`inline-flex items-center gap-1.5 ${
+                            isAdminRole ? 'opacity-80' : 'cursor-pointer'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isAdminRole ? true : cfg.canWrite}
+                            disabled={isAdminRole}
+                            onChange={(e) =>
+                              handleToggleRoleCapability(
+                                roleKey,
+                                'canWrite',
+                                e.target.checked
+                              )
+                            }
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
+                          />
+                          <span>Cho phép Thêm / Sửa</span>
+                        </label>
+                        <label
+                          className={`inline-flex items-center gap-1.5 ${
+                            isAdminRole ? 'opacity-80' : 'cursor-pointer'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isAdminRole ? true : cfg.canDelete}
+                            disabled={isAdminRole}
+                            onChange={(e) =>
+                              handleToggleRoleCapability(
+                                roleKey,
+                                'canDelete',
+                                e.target.checked
+                              )
+                            }
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-rose-600"
+                          />
+                          <span>Cho phép Xóa</span>
+                        </label>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* SECTION 2: ADD NEW ACCOUNT WITH ROLE & MANAGEMENT TABS ASSIGNMENT */}
       <form
         onSubmit={handleAddSubmit}
         className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4"
       >
         <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
           <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-            Thêm tài khoản nhân sự / phân quyền mới
+            2. Thêm Tài Khoản Nhân Sự Mới & Phân Phối Danh Mục Quản Lý
           </h3>
           <span className="text-xs text-slate-500">
             Yêu cầu xác nhận trước khi lưu vào Firebase
@@ -196,17 +588,51 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              Mật khẩu (Password) *
-            </label>
-            <input
-              type="text"
-              required
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Nhập mật khẩu..."
-              className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-            />
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                Mật khẩu (Password) *
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowNewPassword((prev) => !prev)}
+                className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+              >
+                {showNewPassword ? (
+                  <>
+                    <EyeOff className="w-3 h-3" />
+                    <span>Ẩn</span>
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-3 h-3" />
+                    <span>Hiện</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="relative">
+              <input
+                type={showNewPassword ? 'text' : 'password'}
+                required
+                value={newUsername.trim().toLowerCase() === 'admin' ? 'admin123' : newPassword}
+                readOnly={newUsername.trim().toLowerCase() === 'admin'}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Nhập mật khẩu..."
+                className="w-full pl-3 pr-9 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+              <button
+                type="button"
+                onClick={() => setShowNewPassword((prev) => !prev)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                title={showNewPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu để kiểm tra'}
+              >
+                {showNewPassword ? (
+                  <EyeOff className="w-3.5 h-3.5" />
+                ) : (
+                  <Eye className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
           </div>
 
           <div>
@@ -238,11 +664,19 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
 
           <div>
             <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              Vai trò phân quyền
+              Vai trò (Role)
             </label>
             <select
               value={newRole}
-              onChange={(e) => setNewRole(e.target.value as UserRole)}
+              onChange={(e) => {
+                const selectedRole = e.target.value as UserRole;
+                setNewRole(selectedRole);
+                setNewUseCustomTabs(false);
+                setNewAllowedTabs(
+                  rolePermissions[selectedRole]?.allowedTabs ||
+                    DEFAULT_ROLE_PERMISSIONS[selectedRole].allowedTabs
+                );
+              }}
               className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
             >
               <option value={UserRole.ADMIN}>Chủ quán (Admin)</option>
@@ -250,6 +684,67 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               <option value={UserRole.CASHIER}>Thu ngân</option>
               <option value={UserRole.VIEWER}>Kế toán (Chỉ xem)</option>
             </select>
+          </div>
+        </div>
+
+        {/* Selectable Management Tabs for the New Account */}
+        <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
+              <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+              <span>
+                Danh mục quản lý được phép truy cập cho tài khoản này (
+                {newAllowedTabs.length}/{MANAGEMENT_TABS.length} danh mục):
+              </span>
+              <span className="text-[11px] font-normal text-slate-500">
+                {newUseCustomTabs
+                  ? '(Đang tùy chỉnh riêng cho tài khoản)'
+                  : `(Đang áp dụng mặc định theo Role: ${ROLE_LABELS[newRole]})`}
+              </span>
+            </div>
+
+            {newUseCustomTabs && (
+              <button
+                type="button"
+                onClick={() => {
+                  setNewUseCustomTabs(false);
+                  setNewAllowedTabs(
+                    rolePermissions[newRole]?.allowedTabs ||
+                      DEFAULT_ROLE_PERMISSIONS[newRole].allowedTabs
+                  );
+                }}
+                className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+              >
+                Đặt lại theo mặc định Role ({ROLE_LABELS[newRole]})
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            {MANAGEMENT_TABS.map((tab) => {
+              const checked = newAllowedTabs.includes(tab.id);
+              const locked =
+                newRole === UserRole.ADMIN && tab.id === 'accounts';
+              return (
+                <label
+                  key={tab.id}
+                  className={`flex items-center gap-2 p-2 rounded-lg border text-xs transition-colors ${
+                    checked
+                      ? 'border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-medium'
+                      : 'border-slate-200 dark:border-slate-800 bg-slate-100/60 dark:bg-slate-900/40 text-slate-400'
+                  } ${locked ? 'opacity-80 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={locked}
+                    onChange={() => handleToggleNewAccountTab(tab.id)}
+                    className="w-4 h-4 rounded border-slate-300 text-emerald-600"
+                  />
+                  <span className="truncate">{tab.label}</span>
+                </label>
+              );
+            })}
           </div>
         </div>
 
@@ -271,7 +766,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
             <div className="flex items-center gap-2">
               <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                Tùy chỉnh Tài khoản: @{editingAcc.username}
+                Tùy chỉnh Tài khoản & Phân phối Danh mục Quản lý: @{editingAcc.username}
               </h3>
             </div>
             <button
@@ -292,27 +787,74 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 <input
                   type="text"
                   required
+                  disabled={editingAcc.username.toLowerCase() === 'admin'}
                   value={editingAcc.username}
                   onChange={(e) =>
                     setEditingAcc({ ...editingAcc, username: e.target.value })
                   }
-                  className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white disabled:opacity-60"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Mật khẩu mới (Password)
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editingAcc.password}
-                  onChange={(e) =>
-                    setEditingAcc({ ...editingAcc, password: e.target.value })
-                  }
-                  className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    {editingAcc.username.toLowerCase() === 'admin'
+                      ? 'Mật khẩu Admin (Cố định)'
+                      : 'Mật khẩu mới (Password)'}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword((prev) => !prev)}
+                    className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    {showEditPassword ? (
+                      <>
+                        <EyeOff className="w-3 h-3" />
+                        <span>Ẩn</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3 h-3" />
+                        <span>Hiện</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showEditPassword ? 'text' : 'password'}
+                    required
+                    disabled={editingAcc.username.toLowerCase() === 'admin'}
+                    value={
+                      editingAcc.username.toLowerCase() === 'admin'
+                        ? 'admin123'
+                        : editingAcc.password
+                    }
+                    onChange={(e) =>
+                      setEditingAcc({
+                        ...editingAcc,
+                        password:
+                          editingAcc.username.toLowerCase() === 'admin'
+                            ? 'admin123'
+                            : e.target.value,
+                      })
+                    }
+                    className="w-full pl-3 pr-9 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword((prev) => !prev)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                    title={showEditPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu để kiểm tra'}
+                  >
+                    {showEditPassword ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -347,16 +889,23 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Vai trò phân quyền
+                  Vai trò phân quyền (Role)
                 </label>
                 <select
                   value={editingAcc.role}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const nextRole = e.target.value as UserRole;
+                    const roleTabs =
+                      rolePermissions[nextRole]?.allowedTabs ||
+                      DEFAULT_ROLE_PERMISSIONS[nextRole].allowedTabs;
                     setEditingAcc({
                       ...editingAcc,
-                      role: e.target.value as UserRole,
-                    })
-                  }
+                      role: nextRole,
+                      allowedTabs: editingAcc.useCustomTabs
+                        ? editingAcc.allowedTabs
+                        : roleTabs,
+                    });
+                  }}
                   className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 >
                   <option value={UserRole.ADMIN}>Chủ quán (Admin)</option>
@@ -364,6 +913,101 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   <option value={UserRole.CASHIER}>Thu ngân</option>
                   <option value={UserRole.VIEWER}>Kế toán (Chỉ xem)</option>
                 </select>
+              </div>
+            </div>
+
+            {/* Per-Account Management Tabs Assignment */}
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold text-slate-900 dark:text-white">
+                    Phân phối Danh mục Quản lý được phép truy cập cho @{editingAcc.username}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Tài khoản này sẽ chỉ nhìn thấy và truy cập được các danh mục quản lý được tick chọn bên dưới
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const roleTabs =
+                        rolePermissions[editingAcc.role]?.allowedTabs ||
+                        DEFAULT_ROLE_PERMISSIONS[editingAcc.role].allowedTabs;
+                      setEditingAcc({
+                        ...editingAcc,
+                        allowedTabs: roleTabs,
+                        useCustomTabs: false,
+                      });
+                    }}
+                    className={`px-2.5 py-1 rounded border text-[11px] font-medium cursor-pointer ${
+                      !editingAcc.useCustomTabs
+                        ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    Theo mặc định Role ({ROLE_LABELS[editingAcc.role]})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditingAcc({
+                        ...editingAcc,
+                        allowedTabs: MANAGEMENT_TABS.map((t) => t.id),
+                        useCustomTabs: true,
+                      })
+                    }
+                    className="px-2.5 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-300 cursor-pointer"
+                  >
+                    Chọn tất cả
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                {MANAGEMENT_TABS.map((tab) => {
+                  const activeList =
+                    editingAcc.useCustomTabs &&
+                    editingAcc.allowedTabs &&
+                    editingAcc.allowedTabs.length > 0
+                      ? editingAcc.allowedTabs
+                      : rolePermissions[editingAcc.role]?.allowedTabs ||
+                        DEFAULT_ROLE_PERMISSIONS[editingAcc.role].allowedTabs;
+                  const checked = activeList.includes(tab.id);
+                  const locked =
+                    (editingAcc.username === 'admin' ||
+                      editingAcc.role === UserRole.ADMIN) &&
+                    tab.id === 'accounts';
+
+                  return (
+                    <label
+                      key={tab.id}
+                      className={`flex items-start gap-2 p-2.5 rounded-lg border text-xs transition-colors ${
+                        checked
+                          ? 'border-emerald-400 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30 text-slate-900 dark:text-white'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 text-slate-400'
+                      } ${
+                        locked ? 'opacity-80 cursor-not-allowed' : 'cursor-pointer'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={locked}
+                        onChange={() => handleToggleEditingAccountTab(tab.id)}
+                        className="w-4 h-4 mt-0.5 rounded border-slate-300 text-emerald-600"
+                      />
+                      <div className="min-w-0">
+                        <div className="font-semibold truncate">{tab.label}</div>
+                        <div className="text-[10px] text-slate-500 line-clamp-1">
+                          {tab.description}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
@@ -393,7 +1037,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>Lưu thay đổi tài khoản</span>
+                  <span>Lưu thay đổi tài khoản & phân quyền</span>
                 </button>
               </div>
             </div>
@@ -401,26 +1045,25 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         </div>
       )}
 
-      {/* Accounts List Table */}
+      {/* SECTION 3: ACCOUNTS LIST TABLE */}
       <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
         <div>
           <h3 className="text-base font-bold text-slate-900 dark:text-white">
-            Danh Sách Tài Khoản Trên Hệ Thống ({staffAccounts.length})
+            3. Danh Sách Tài Khoản & Danh Mục Quản Lý Đang Phân Phối ({staffAccounts.length})
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Bấm "Tùy chỉnh" để đổi mật khẩu, tên hiển thị, thông tin hoặc quyền hạn cho bất kỳ tài khoản nào
+            Bấm "Phân danh mục / Sửa" để tùy chỉnh mật khẩu, tên hiển thị, Role hoặc chỉ định các Danh mục quản lý riêng cho từng tài khoản
           </p>
         </div>
 
         <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[760px] text-xs">
+          <table className="w-full text-left border-collapse min-w-[920px] text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                <th className="py-2.5 px-3">Username</th>
+                <th className="py-2.5 px-3">Username / Tên hiển thị</th>
                 <th className="py-2.5 px-3">Mật khẩu (Password)</th>
-                <th className="py-2.5 px-3">Tên hiển thị</th>
-                <th className="py-2.5 px-3">Thông tin chi tiết</th>
-                <th className="py-2.5 px-3">Vai trò phân quyền</th>
+                <th className="py-2.5 px-3">Vai trò (Role)</th>
+                <th className="py-2.5 px-3">Danh mục quản lý được Admin phân phối</th>
                 <th className="py-2.5 px-3">Trạng thái</th>
                 <th className="py-2.5 px-3 text-right">Thao tác</th>
               </tr>
@@ -429,14 +1072,32 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               {staffAccounts.map((acc) => {
                 const isShown = Boolean(visiblePasswords[acc.id]);
                 const isCurrent = acc.username === currentAccount.username;
+                const eff = getEffectiveRolePermissions(acc, rolePermissions);
+                const allowedMeta = MANAGEMENT_TABS.filter((t) =>
+                  eff.allowedTabs.includes(t.id)
+                );
+                const blockedCount =
+                  MANAGEMENT_TABS.length - allowedMeta.length;
+
                 return (
                   <tr
                     key={acc.id}
                     className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
                   >
-                    <td className="py-3 px-3 font-mono font-bold text-slate-900 dark:text-white">
-                      @{acc.username}
+                    <td className="py-3 px-3">
+                      <div className="font-mono font-bold text-slate-900 dark:text-white">
+                        @{acc.username}
+                      </div>
+                      <div className="font-semibold text-slate-700 dark:text-slate-300 mt-0.5">
+                        {acc.displayName}
+                      </div>
+                      {acc.info && (
+                        <div className="text-[11px] text-slate-400 truncate max-w-[200px]">
+                          {acc.info}
+                        </div>
+                      )}
                     </td>
+
                     <td className="py-3 px-3 font-mono">
                       <div className="inline-flex items-center gap-2">
                         <span className="text-slate-800 dark:text-slate-200">
@@ -456,15 +1117,40 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         </button>
                       </div>
                     </td>
-                    <td className="py-3 px-3 font-semibold text-slate-900 dark:text-white">
-                      {acc.displayName}
+
+                    <td className="py-3 px-3">
+                      <div className="font-semibold text-slate-800 dark:text-slate-200">
+                        {ROLE_LABELS[acc.role]}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {eff.isCustomAccountTabs
+                          ? 'Phân quyền riêng theo TK'
+                          : 'Theo chuẩn Role'}
+                      </div>
                     </td>
-                    <td className="py-3 px-3 text-slate-600 dark:text-slate-300 max-w-xs">
-                      {acc.info || '—'}
+
+                    <td className="py-3 px-3 max-w-md">
+                      <div className="flex flex-wrap gap-1">
+                        {allowedMeta.map((m) => (
+                          <span
+                            key={m.id}
+                            className="px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/70 dark:bg-emerald-950/40 text-[11px] font-medium text-emerald-700 dark:text-emerald-300"
+                          >
+                            {m.shortLabel}
+                          </span>
+                        ))}
+                      </div>
+                      {blockedCount > 0 && (
+                        <div className="mt-1 text-[11px] text-slate-400 flex items-center gap-1">
+                          <Lock className="w-3 h-3" />
+                          <span>
+                            Đã giới hạn ({allowedMeta.length}/
+                            {MANAGEMENT_TABS.length} danh mục được phép truy cập)
+                          </span>
+                        </div>
+                      )}
                     </td>
-                    <td className="py-3 px-3 font-medium text-slate-700 dark:text-slate-300">
-                      {ROLE_LABELS[acc.role]}
-                    </td>
+
                     <td className="py-3 px-3">
                       {acc.active ? (
                         <span className="text-emerald-600 dark:text-emerald-400 font-medium">
@@ -476,14 +1162,15 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         </span>
                       )}
                     </td>
+
                     <td className="py-3 px-3 text-right whitespace-nowrap space-x-1.5">
                       <button
                         type="button"
-                        onClick={() => setEditingAcc({ ...acc })}
+                        onClick={() => handleOpenEditAccount(acc)}
                         className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
                       >
                         <Edit3 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Tùy chỉnh / Sửa</span>
+                        <span>Phân danh mục / Sửa</span>
                       </button>
 
                       {!isCurrent && (
@@ -491,7 +1178,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                           type="button"
                           onClick={() => onSwitchAccount(acc)}
                           className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer"
-                          title="Chuyển phiên làm việc sang tài khoản này"
+                          title="Chuyển phiên làm việc sang tài khoản này để kiểm tra phân quyền"
                         >
                           <UserCheck className="w-3.5 h-3.5" />
                           <span>Chuyển</span>
