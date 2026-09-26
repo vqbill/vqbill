@@ -5,51 +5,95 @@ import {
   AlertCircle,
   Search,
   Trash2,
+  Plus,
+  Receipt,
 } from 'lucide-react';
 import {
   BillRecord,
   BillItemRecord,
   DeductionRecord,
+  ReturnRecord,
   PAYMENT_LABELS,
   ConfirmRequestOptions,
 } from '../types';
 import { formatVND, formatNumber, getCurrentBusinessDate } from '../utils/parser';
 
 interface ReturnsDeductionsTabProps {
+  mode: 'deductions' | 'returns';
   bills: BillRecord[];
   billItems: BillItemRecord[];
   deductions: DeductionRecord[];
+  returns: ReturnRecord[];
   canWrite: boolean;
   canDelete: boolean;
   preselectedBillId?: string | null;
+  onAddExpenseDeduction: (params: {
+    deductionDate: string;
+    expenseTitle: string;
+    category: string;
+    amount: number;
+    note: string;
+  }) => Promise<void>;
   onRecordReturn: (params: {
     bill: BillRecord;
     billItem: BillItemRecord;
     returnQty: number;
-    deductionDate: string;
+    returnDate: string;
     note: string;
   }) => Promise<void>;
   onDeleteDeductionsBatch: (deductionIds: string[]) => Promise<void>;
+  onDeleteReturnsBatch: (returnIds: string[]) => Promise<void>;
   onDeleteAllMenuProducts: () => void;
   menuProductsCount: number;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
 
+const EXPENSE_PRESETS = [
+  { title: 'Mua bánh mì', category: 'Mua bánh mì / Rau / Gia vị', defaultAmount: 50000 },
+  { title: 'Mua rau & gia vị bếp', category: 'Mua bánh mì / Rau / Gia vị', defaultAmount: 120000 },
+  { title: 'Trả tiền nguyên liệu tươi sống', category: 'Nguyên liệu / Thực phẩm', defaultAmount: 500000 },
+  { title: 'Mua đá cây / đá bi / gas', category: 'Vật tư / Đá / Gas', defaultAmount: 100000 },
+  { title: 'Tiền bồi hoàn cho khách', category: 'Bồi hoàn / Hoàn trả khách', defaultAmount: 100000 },
+  { title: 'Khoản hoàn trả khách (Nhập thủ công)', category: 'Bồi hoàn / Hoàn trả khách', defaultAmount: 50000 },
+];
+
+const EXPENSE_CATEGORIES = [
+  'Mua bánh mì / Rau / Gia vị',
+  'Nguyên liệu / Thực phẩm',
+  'Bồi hoàn / Hoàn trả khách',
+  'Vật tư / Đá / Gas',
+  'Chi phí vận hành trong ngày',
+  'Khác',
+];
+
 export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
+  mode,
   bills,
   billItems,
   deductions,
+  returns,
   canWrite,
   canDelete,
   preselectedBillId,
+  onAddExpenseDeduction,
   onRecordReturn,
   onDeleteDeductionsBatch,
+  onDeleteReturnsBatch,
   onDeleteAllMenuProducts,
   menuProductsCount,
   requestConfirm,
 }) => {
   const todayStr = getCurrentBusinessDate();
 
+  // State for Manual Expense Deduction ("Khoản trừ")
+  const [deductionDate, setDeductionDate] = useState<string>(todayStr);
+  const [expenseTitle, setExpenseTitle] = useState<string>('');
+  const [expenseCategory, setExpenseCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
+  const [expenseAmount, setExpenseAmount] = useState<number>(50000);
+  const [expenseNote, setExpenseNote] = useState<string>('');
+  const [searchDeduction, setSearchDeduction] = useState('');
+
+  // State for Customer Item Return ("Hoàn trả")
   const availableBillDates = useMemo(() => {
     const set = new Set(bills.map((b) => b.billDate));
     return Array.from(set).sort((a, b) => b.localeCompare(a));
@@ -59,14 +103,18 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   const [selectedBillId, setSelectedBillId] = useState<string>('');
   const [selectedItemId, setSelectedItemId] = useState<string>('');
   const [returnQty, setReturnQty] = useState<number>(1);
-  const [deductionDate, setDeductionDate] = useState<string>(todayStr);
-  const [note, setNote] = useState<string>('');
+  const [returnDate, setReturnDate] = useState<string>(todayStr);
+  const [returnNote, setReturnNote] = useState<string>('');
+  const [searchReturn, setSearchReturn] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(
     null
   );
-  const [searchDeduction, setSearchDeduction] = useState('');
+
+  useEffect(() => {
+    setStatusMsg(null);
+  }, [mode]);
 
   useEffect(() => {
     if (preselectedBillId) {
@@ -119,6 +167,127 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     }
   }, [maxReturnableQty, returnQty]);
 
+  // Handlers for Khoản Trừ (Daily Expenses)
+  const handleAddExpenseSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatusMsg(null);
+
+    if (!canWrite) {
+      setStatusMsg({
+        type: 'err',
+        text: 'Tài khoản Chỉ xem không có quyền thêm khoản trừ.',
+      });
+      return;
+    }
+
+    const cleanTitle = expenseTitle.trim();
+    if (!cleanTitle) {
+      setStatusMsg({
+        type: 'err',
+        text: 'Vui lòng nhập nội dung chi tiêu (VD: Mua bánh mì, mua rau, trả tiền nguyên liệu...).',
+      });
+      return;
+    }
+
+    const safeAmt = Math.max(0, Math.round(Number(expenseAmount) || 0));
+    if (safeAmt <= 0) {
+      setStatusMsg({
+        type: 'err',
+        text: 'Vui lòng nhập số tiền khoản trừ lớn hơn 0đ.',
+      });
+      return;
+    }
+
+    requestConfirm({
+      title: 'Xác nhận Ghi Nhận Khoản Trừ (Chi Tiêu Ngày)',
+      message: `Bạn có chắc chắn muốn lưu khoản trừ "${cleanTitle}" (-${formatVND(
+        safeAmt
+      )}, ngày ${deductionDate}) vào hệ thống? Khoản này sẽ được trừ trực tiếp vào Doanh thu tổng ngày (Tiền mặt + Chuyển khoản - Khoản trừ).`,
+      confirmLabel: 'Lưu Khoản Trừ',
+      variant: 'warning',
+      onConfirm: async () => {
+        setIsSubmitting(true);
+        try {
+          await onAddExpenseDeduction({
+            deductionDate,
+            expenseTitle: cleanTitle,
+            category: expenseCategory,
+            amount: safeAmt,
+            note: expenseNote.trim() || cleanTitle,
+          });
+          setStatusMsg({
+            type: 'ok',
+            text: `Đã lưu khoản trừ "${cleanTitle}" (-${formatVND(
+              safeAmt
+            )}) vào ngày ${deductionDate}!`,
+          });
+          setExpenseTitle('');
+          setExpenseNote('');
+        } catch (err: any) {
+          setStatusMsg({
+            type: 'err',
+            text: err?.message || 'Lỗi khi lưu khoản trừ.',
+          });
+        } finally {
+          setIsSubmitting(false);
+        }
+      },
+    });
+  };
+
+  const handleDeleteOneDeduction = (ded: DeductionRecord) => {
+    if (!canDelete) return;
+    requestConfirm({
+      title: 'Xác nhận Xóa Khoản Trừ',
+      message: `Bạn có chắc chắn muốn xóa khoản trừ "${ded.productName}" (-${formatVND(
+        ded.amount
+      )}) khỏi lịch sử trên Firebase không?`,
+      confirmLabel: 'Xóa khoản trừ',
+      variant: 'danger',
+      onConfirm: async () => {
+        await onDeleteDeductionsBatch([ded.id]);
+      },
+    });
+  };
+
+  const filteredDeductions = useMemo(() => {
+    return deductions
+      .filter((d) => {
+        if (!searchDeduction.trim()) return true;
+        const q = searchDeduction.toLowerCase();
+        return (
+          d.productName.toLowerCase().includes(q) ||
+          d.category.toLowerCase().includes(q) ||
+          d.deductionDate.includes(q) ||
+          d.note.toLowerCase().includes(q)
+        );
+      })
+      .sort(
+        (a, b) =>
+          b.deductionDate.localeCompare(a.deductionDate) || b.createdAtMs - a.createdAtMs
+      );
+  }, [deductions, searchDeduction]);
+
+  const totalDeductionsAmount = useMemo(
+    () => filteredDeductions.reduce((s, d) => s + d.amount, 0),
+    [filteredDeductions]
+  );
+
+  const handleDeleteAllDeductionsClick = () => {
+    if (!canDelete || filteredDeductions.length === 0) return;
+    const ids = filteredDeductions.map((d) => d.id);
+    requestConfirm({
+      title: 'Xác nhận Xóa Tất Cả Khoản Trừ',
+      message: `Bạn có chắc chắn muốn xóa toàn bộ ${ids.length} khoản trừ đang hiển thị khỏi Firebase không?`,
+      confirmLabel: 'Xóa tất cả khoản trừ',
+      variant: 'danger',
+      onConfirm: async () => {
+        await onDeleteDeductionsBatch(ids);
+      },
+    });
+  };
+
+  // Handlers for Hoàn Trả (Customer Returns)
   const handleConfirmReturn = (e: React.FormEvent) => {
     e.preventDefault();
     setStatusMsg(null);
@@ -151,12 +320,12 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     const refundAmt = safeQty * activeBillItem.unitPrice;
 
     requestConfirm({
-      title: 'Xác nhận Hoàn Trả Hàng Hóa & Ghi Khoản Trừ',
-      message: `Bạn có chắc chắn muốn hoàn trả ${safeQty} "${
+      title: 'Xác nhận Hoàn Trả Bia / Món Thừa',
+      message: `Bạn có chắc chắn muốn ghi nhận khách hoàn trả ${safeQty} "${
         activeBillItem.productName
-      }" (Số tiền trừ: -${formatVND(refundAmt)}) từ Bill ${activeBill.billCode} (ngày ${
+      }" (Tiền hoàn lại: ${formatVND(refundAmt)}) từ Bill ${activeBill.billCode} (ngày ${
         activeBill.billDate
-      }) và lưu vào Firebase không?`,
+      }) không? Lưu ý: Khoản hoàn trả này được lưu riêng ở mục Hoàn trả và KHÔNG tự động cộng vào Khoản trừ chi tiêu trong ngày.`,
       confirmLabel: 'Xác nhận Hoàn trả',
       variant: 'warning',
       onConfirm: async () => {
@@ -166,18 +335,18 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             bill: activeBill,
             billItem: activeBillItem,
             returnQty: safeQty,
-            deductionDate,
+            returnDate,
             note:
-              note.trim() ||
-              `Hoàn trả ${safeQty} ${activeBillItem.productName} từ bill ${activeBill.billCode} (ngày ${activeBill.billDate})`,
+              returnNote.trim() ||
+              `Khách trả lại ${safeQty} ${activeBillItem.productName} từ bill ${activeBill.billCode} (ngày ${activeBill.billDate})`,
           });
           setStatusMsg({
             type: 'ok',
-            text: `Đã hoàn trả ${safeQty} ${activeBillItem.productName} (${formatVND(
+            text: `Đã ghi nhận hoàn trả ${safeQty} ${activeBillItem.productName} (${formatVND(
               refundAmt
-            )}) và lưu vào Khoản trừ trên Firebase!`,
+            )}) vào tab Hoàn trả (Không tự động cộng vào Khoản trừ)!`,
           });
-          setNote('');
+          setReturnNote('');
         } catch (err: any) {
           setStatusMsg({
             type: 'err',
@@ -190,70 +359,311 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     });
   };
 
-  const handleDeleteOneDeduction = (ded: DeductionRecord) => {
-    if (!canDelete) return;
-    requestConfirm({
-      title: 'Xác nhận Xóa Khoản Trừ',
-      message: `Bạn có chắc chắn muốn xóa khoản trừ "${ded.productName}" (-${formatVND(
-        ded.amount
-      )}) khỏi lịch sử trên Firebase không?`,
-      confirmLabel: 'Xóa khoản trừ',
-      variant: 'danger',
-      onConfirm: async () => {
-        await onDeleteDeductionsBatch([ded.id]);
-      },
-    });
-  };
-
-  const handleDeleteAllDeductionsClick = () => {
-    if (!canDelete || filteredDeductions.length === 0) return;
-    const ids = filteredDeductions.map((d) => d.id);
-    requestConfirm({
-      title: 'Xác nhận Xóa Tất Cả Khoản Trừ',
-      message: `Bạn có chắc chắn muốn xóa toàn bộ ${ids.length} khoản trừ đang hiển thị khỏi Firebase không?`,
-      confirmLabel: 'Xóa tất cả khoản trừ',
-      variant: 'danger',
-      onConfirm: async () => {
-        await onDeleteDeductionsBatch(ids);
-      },
-    });
-  };
-
-  const filteredDeductions = useMemo(() => {
-    return deductions
-      .filter((d) => {
-        if (!searchDeduction.trim()) return true;
-        const q = searchDeduction.toLowerCase();
+  const filteredReturns = useMemo(() => {
+    return returns
+      .filter((r) => {
+        if (!searchReturn.trim()) return true;
+        const q = searchReturn.toLowerCase();
         return (
-          d.productName.toLowerCase().includes(q) ||
-          d.billCode.toLowerCase().includes(q) ||
-          d.billDate.includes(q) ||
-          d.deductionDate.includes(q) ||
-          d.note.toLowerCase().includes(q)
+          r.productName.toLowerCase().includes(q) ||
+          r.billCode.toLowerCase().includes(q) ||
+          r.billDate.includes(q) ||
+          r.returnDate.includes(q) ||
+          r.note.toLowerCase().includes(q)
         );
       })
       .sort(
         (a, b) =>
-          b.deductionDate.localeCompare(a.deductionDate) || b.createdAtMs - a.createdAtMs
+          b.returnDate.localeCompare(a.returnDate) || b.createdAtMs - a.createdAtMs
       );
-  }, [deductions, searchDeduction]);
+  }, [returns, searchReturn]);
 
-  const totalDeductionsAmount = useMemo(
-    () => filteredDeductions.reduce((s, d) => s + d.amount, 0),
-    [filteredDeductions]
+  const totalReturnsAmount = useMemo(
+    () => filteredReturns.reduce((s, r) => s + r.amount, 0),
+    [filteredReturns]
   );
 
+  const handleDeleteOneReturn = (ret: ReturnRecord) => {
+    if (!canDelete) return;
+    requestConfirm({
+      title: 'Xác nhận Xóa Bản Ghi Hoàn Trả',
+      message: `Bạn có chắc chắn muốn xóa bản ghi hoàn trả "${ret.productName}" (${formatVND(
+        ret.amount
+      )}) khỏi Firebase không?`,
+      confirmLabel: 'Xóa bản ghi hoàn trả',
+      variant: 'danger',
+      onConfirm: async () => {
+        await onDeleteReturnsBatch([ret.id]);
+      },
+    });
+  };
+
+  const handleDeleteAllReturnsClick = () => {
+    if (!canDelete || filteredReturns.length === 0) return;
+    const ids = filteredReturns.map((r) => r.id);
+    requestConfirm({
+      title: 'Xác nhận Xóa Tất Cả Bản Ghi Hoàn Trả',
+      message: `Bạn có chắc chắn muốn xóa toàn bộ ${ids.length} bản ghi hoàn trả đang hiển thị khỏi Firebase không?`,
+      confirmLabel: 'Xóa tất cả hoàn trả',
+      variant: 'danger',
+      onConfirm: async () => {
+        await onDeleteReturnsBatch(ids);
+      },
+    });
+  };
+
+  // RENDER MODE 1: KHOẢN TRỪ (DAILY EXPENSES)
+  if (mode === 'deductions') {
+    return (
+      <div className="space-y-4 sm:space-y-6">
+        <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+                <span>Quản Lý Khoản Trừ (Chi Tiêu Trong Ngày)</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                Khoản trừ là những tiền chi ra trong ngày (ví dụ: <strong>mua bánh mì, mua rau, trả tiền nguyên liệu, tiền bồi hoàn cho khách, hoặc các khoản hoàn trả nhập thủ công</strong>). Công thức: <strong>Doanh thu tổng ngày = Tiền mặt + Chuyển khoản - Khoản trừ</strong>.
+              </p>
+            </div>
+          </div>
+
+          {statusMsg && (
+            <div
+              className={`p-3 rounded-xl border flex items-center gap-2 text-xs ${
+                statusMsg.type === 'ok'
+                  ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                  : 'border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+              }`}
+            >
+              {statusMsg.type === 'ok' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0" />
+              )}
+              <span>{statusMsg.text}</span>
+            </div>
+          )}
+
+          {/* Quick Expense Presets */}
+          <div className="space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+              Chọn nhanh khoản chi phổ biến trong ngày:
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {EXPENSE_PRESETS.map((preset) => (
+                <button
+                  key={preset.title}
+                  type="button"
+                  onClick={() => {
+                    setExpenseTitle(preset.title);
+                    setExpenseCategory(preset.category);
+                    setExpenseAmount(preset.defaultAmount);
+                  }}
+                  className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-rose-500 dark:hover:border-rose-500 bg-slate-50 dark:bg-slate-800/50 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+                >
+                  + {preset.title}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <form
+            onSubmit={handleAddExpenseSubmit}
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800"
+          >
+            <div className="lg:col-span-2">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Ngày chi (Khoản trừ)
+              </label>
+              <input
+                type="date"
+                value={deductionDate}
+                onChange={(e) => setDeductionDate(e.target.value)}
+                className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+            </div>
+
+            <div className="lg:col-span-3">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Nội dung khoản chi *
+              </label>
+              <input
+                type="text"
+                value={expenseTitle}
+                onChange={(e) => setExpenseTitle(e.target.value)}
+                placeholder="VD: Mua bánh mì, mua rau, trả nguyên liệu..."
+                className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Nhóm khoản trừ
+              </label>
+              <select
+                value={expenseCategory}
+                onChange={(e) => setExpenseCategory(e.target.value)}
+                className="w-full h-10 px-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+              >
+                {EXPENSE_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Số tiền chi (₫) *
+              </label>
+              <input
+                type="number"
+                min={1000}
+                step={1000}
+                value={expenseAmount}
+                onChange={(e) => setExpenseAmount(Number(e.target.value))}
+                className="w-full h-10 px-3 text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+            </div>
+
+            <div className="lg:col-span-3 flex flex-col justify-end">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Ghi chú thêm
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={expenseNote}
+                  onChange={(e) => setExpenseNote(e.target.value)}
+                  placeholder="Ghi chú (tùy chọn)..."
+                  className="flex-1 h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !canWrite}
+                  className="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shrink-0 shadow-xs"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Lưu Khoản Trừ</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        {/* Deductions History Table */}
+        <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                Danh Sách Khoản Trừ Trong Ngày / Kỳ ({filteredDeductions.length})
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Tổng tiền khoản trừ (Trừ vào Doanh thu ngày):{' '}
+                <strong className="font-mono text-rose-600 dark:text-rose-400">
+                  -{formatVND(totalDeductionsAmount)}
+                </strong>
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 sm:w-56">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchDeduction}
+                  onChange={(e) => setSearchDeduction(e.target.value)}
+                  placeholder="Tìm khoản chi, ngày, ghi chú..."
+                  className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              {canDelete && filteredDeductions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleDeleteAllDeductionsClick}
+                  className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Xóa tất cả ({filteredDeductions.length})</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {filteredDeductions.length === 0 ? (
+            <div className="py-10 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+              Chưa có khoản trừ (chi tiêu trong ngày) nào trong kỳ này.
+            </div>
+          ) : (
+            <div className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <th className="py-2.5 px-3">Ngày chi</th>
+                    <th className="py-2.5 px-3">Khoản chi / Nội dung</th>
+                    <th className="py-2.5 px-3">Nhóm chi phí</th>
+                    <th className="py-2.5 px-3 text-right">Số tiền trừ</th>
+                    <th className="py-2.5 px-3">Ghi chú</th>
+                    {canDelete && <th className="py-2.5 px-3 text-right">Xóa</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {filteredDeductions.map((ded) => (
+                    <tr key={ded.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="py-2.5 px-3 font-mono text-slate-700 dark:text-slate-300">
+                        {ded.deductionDate}
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
+                        {ded.productName}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">
+                        {ded.category}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
+                        -{formatVND(ded.amount)}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                        {ded.note}
+                      </td>
+                      {canDelete && (
+                        <td className="py-2.5 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteOneDeduction(ded)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                            title="Xóa khoản trừ"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 inline" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // RENDER MODE 2: HOÀN TRẢ (CUSTOMER ITEM RETURNS - BEER / DISHES)
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* Return Builder Card */}
       <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-              Hoàn Trả Hàng Hóa & Ghi Nhận Khoản Trừ
+            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <RotateCcw className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+              <span>Quản Lý Hoàn Trả (Khách Trả Bia Thừa / Món Thừa)</span>
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Chọn ngày hóa đơn, chọn Bill và món khách trả lại để tự động trừ số lượng bán và ghi nhận vào Khoản trừ.
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+              Hoàn trả là khoản tiền hoàn lại cho khách khi khách trả bia thừa, món thừa theo hóa đơn. <strong>Hoàn trả KHÔNG tự động cập nhật vào Khoản trừ chi tiêu trong ngày</strong> (Nếu muốn tính vào chi tiêu ngày, bạn nhập thủ công bên tab Khoản trừ).
             </p>
           </div>
 
@@ -289,7 +699,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
         {/* Quick Date Picker Chips */}
         <div className="space-y-2">
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            Bước 1: Chọn Ngày Hóa Đơn cần hoàn trả
+            Bước 1: Chọn Ngày Hóa Đơn có bia / món khách trả lại
           </label>
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
             <button
@@ -297,7 +707,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
               onClick={() => setSelectedBillDate('all')}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
                 selectedBillDate === 'all'
-                  ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                  ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300'
                   : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
               }`}
             >
@@ -313,7 +723,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                 }}
                 className={`px-3 py-1.5 rounded-xl text-xs font-mono border transition-colors whitespace-nowrap cursor-pointer ${
                   selectedBillDate === d
-                    ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold'
+                    ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-bold'
                     : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
                 }`}
               >
@@ -332,7 +742,10 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           </div>
         </div>
 
-        <form onSubmit={handleConfirmReturn} className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 pt-1">
+        <form
+          onSubmit={handleConfirmReturn}
+          className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 pt-1"
+        >
           {/* Step 2: Select Bill & Item */}
           <div className="lg:col-span-7 space-y-4">
             <div>
@@ -356,62 +769,12 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
               </select>
             </div>
 
-            {/* Items in Selected Bill to Click & Return */}
             <div className="space-y-2">
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Bước 3: Chọn món trong Bill để hoàn trả
+                Bước 3: Chọn bia / món khách trả lại trong Bill
               </label>
 
-              {/* Mobile Cards (< sm) */}
-              <div className="sm:hidden space-y-2">
-                {itemsInActiveBill.map((it) => {
-                  const remain = Math.max(0, it.quantity - it.returnedQuantity);
-                  const isPicked = activeBillItem?.id === it.id;
-                  return (
-                    <div
-                      key={it.id}
-                      onClick={() => {
-                        setSelectedItemId(it.id);
-                        setReturnQty(Math.min(1, remain));
-                      }}
-                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 text-xs ${
-                        isPicked
-                          ? 'border-rose-500 bg-rose-50/60 dark:bg-rose-950/30'
-                          : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <input
-                          type="radio"
-                          name="returnItemMobile"
-                          checked={isPicked}
-                          onChange={() => setSelectedItemId(it.id)}
-                          className="text-rose-600 focus:ring-rose-500"
-                        />
-                        <div className="min-w-0">
-                          <div className="font-bold text-slate-900 dark:text-white truncate">
-                            {it.productName}
-                          </div>
-                          <div className="text-[11px] font-mono text-slate-500">
-                            Đơn giá: {formatVND(it.unitPrice)}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right font-mono shrink-0">
-                        <div className="text-[11px] text-slate-500">
-                          Mua: {it.quantity} · Trả: {it.returnedQuantity}
-                        </div>
-                        <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                          Còn lại: {remain}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Desktop Table (>= sm) */}
-              <div className="hidden sm:block border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-hidden">
+              <div className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
@@ -436,7 +799,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                           }}
                           className={`cursor-pointer transition-colors ${
                             isPicked
-                              ? 'bg-rose-50/70 dark:bg-rose-950/30'
+                              ? 'bg-indigo-50/70 dark:bg-indigo-950/30'
                               : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
                           }`}
                         >
@@ -446,14 +809,14 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                               name="returnItem"
                               checked={isPicked}
                               onChange={() => setSelectedItemId(it.id)}
-                              className="text-rose-600 focus:ring-rose-500"
+                              className="text-indigo-600 focus:ring-indigo-500"
                             />
                           </td>
                           <td className="py-2.5 px-3 font-sans font-semibold text-slate-900 dark:text-white">
                             {it.productName}
                           </td>
                           <td className="py-2.5 px-2 text-right">{it.quantity}</td>
-                          <td className="py-2.5 px-2 text-right text-rose-600 dark:text-rose-400">
+                          <td className="py-2.5 px-2 text-right text-indigo-600 dark:text-indigo-400">
                             {it.returnedQuantity}
                           </td>
                           <td className="py-2.5 px-2 text-right font-bold text-emerald-600 dark:text-emerald-400">
@@ -473,7 +836,9 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           <div className="lg:col-span-5 p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-slate-50/60 dark:bg-slate-950/40 flex flex-col justify-between space-y-4">
             <div className="space-y-3.5">
               <div className="pb-2.5 border-b border-slate-200 dark:border-slate-800">
-                <span className="text-[11px] text-slate-500 block">Món đang chọn hoàn trả:</span>
+                <span className="text-[11px] text-slate-500 block">
+                  Món / Bia đang chọn hoàn trả:
+                </span>
                 <span className="text-sm font-bold text-slate-900 dark:text-white">
                   {activeBillItem ? activeBillItem.productName : 'Chưa chọn món'}
                 </span>
@@ -496,12 +861,12 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
 
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Ngày ghi Khoản trừ
+                    Ngày hoàn trả
                   </label>
                   <input
                     type="date"
-                    value={deductionDate}
-                    onChange={(e) => setDeductionDate(e.target.value)}
+                    value={returnDate}
+                    onChange={(e) => setReturnDate(e.target.value)}
                     className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                   />
                 </div>
@@ -509,12 +874,12 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Ghi chú / Lý do hoàn trả
+                  Ghi chú hoàn trả (Bia thừa / Món thừa)
                 </label>
                 <textarea
                   rows={3}
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
+                  value={returnNote}
+                  onChange={(e) => setReturnNote(e.target.value)}
                   placeholder="Ví dụ: Khách trả lại 5 lon bia Tiger chưa khui..."
                   className="w-full p-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 />
@@ -523,22 +888,22 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
 
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
               <div className="flex items-center justify-between text-xs font-mono">
-                <span className="text-slate-500">Số tiền trừ doanh thu:</span>
-                <span className="text-base font-bold text-rose-600 dark:text-rose-400">
-                  -{formatVND((activeBillItem?.unitPrice || 0) * (returnQty || 0))}
+                <span className="text-slate-500">Tiền hoàn lại cho khách:</span>
+                <span className="text-base font-bold text-indigo-600 dark:text-indigo-400">
+                  {formatVND((activeBillItem?.unitPrice || 0) * (returnQty || 0))}
                 </span>
               </div>
 
               <button
                 type="submit"
                 disabled={isSubmitting || !canWrite || maxReturnableQty <= 0}
-                className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>
                   {isSubmitting
-                    ? 'Đang lưu khoản trừ...'
-                    : 'Xác Nhận Hoàn Trả & Lưu Khoản Trừ'}
+                    ? 'Đang lưu hoàn trả...'
+                    : 'Xác Nhận Hoàn Trả Bia / Món Thừa'}
                 </span>
               </button>
             </div>
@@ -546,17 +911,17 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
         </form>
       </div>
 
-      {/* Deduction History */}
+      {/* Returns History */}
       <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-              Lịch Sử Khoản Trừ & Hoàn Trả ({filteredDeductions.length})
+              Lịch Sử Hoàn Trả Bia Thừa / Món Thừa ({filteredReturns.length})
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Tổng tiền khoản trừ hiển thị:{' '}
-              <strong className="font-mono text-rose-600 dark:text-rose-400">
-                -{formatVND(totalDeductionsAmount)}
+              Tổng tiền hoàn trả hiển thị (Không tự cộng vào Khoản trừ):{' '}
+              <strong className="font-mono text-indigo-600 dark:text-indigo-400">
+                {formatVND(totalReturnsAmount)}
               </strong>
             </p>
           </div>
@@ -566,132 +931,86 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                value={searchDeduction}
-                onChange={(e) => setSearchDeduction(e.target.value)}
+                value={searchReturn}
+                onChange={(e) => setSearchReturn(e.target.value)}
                 placeholder="Tìm món trả, mã bill, ghi chú..."
                 className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
             </div>
 
-            {canDelete && filteredDeductions.length > 0 && (
+            {canDelete && filteredReturns.length > 0 && (
               <button
                 type="button"
-                onClick={handleDeleteAllDeductionsClick}
+                onClick={handleDeleteAllReturnsClick}
                 className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Xóa tất cả ({filteredDeductions.length})</span>
+                <span>Xóa tất cả ({filteredReturns.length})</span>
               </button>
             )}
           </div>
         </div>
 
-        {filteredDeductions.length === 0 ? (
+        {filteredReturns.length === 0 ? (
           <div className="py-10 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-            Chưa có khoản trừ / hoàn trả nào.
+            Chưa có bản ghi hoàn trả bia thừa / món thừa nào.
           </div>
         ) : (
-          <>
-            {/* Mobile Cards (< md) */}
-            <div className="md:hidden space-y-2.5">
-              {filteredDeductions.map((ded) => (
-                <div
-                  key={ded.id}
-                  className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 space-y-1.5 text-xs"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="font-bold text-slate-900 dark:text-white">
-                        {ded.productName}{' '}
-                        <span className="font-mono text-rose-600 dark:text-rose-400">
-                          (-{ded.quantity})
-                        </span>
-                      </div>
-                      <div className="text-[11px] font-mono text-slate-500">
-                        Ngày trừ: {ded.deductionDate} · Bill: {ded.billCode}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-rose-600 dark:text-rose-400">
-                        -{formatVND(ded.amount)}
-                      </span>
-                      {canDelete && (
+          <div className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                  <th className="py-2.5 px-3">Ngày trả</th>
+                  <th className="py-2.5 px-3">Bill gốc</th>
+                  <th className="py-2.5 px-3">Món / Bia hoàn trả</th>
+                  <th className="py-2.5 px-3">Danh mục</th>
+                  <th className="py-2.5 px-3 text-right">SL trả</th>
+                  <th className="py-2.5 px-3 text-right">Tiền hoàn trả</th>
+                  <th className="py-2.5 px-3">Ghi chú</th>
+                  {canDelete && <th className="py-2.5 px-3 text-right">Xóa</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {filteredReturns.map((ret) => (
+                  <tr key={ret.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                    <td className="py-2.5 px-3 font-mono text-slate-700 dark:text-slate-300">
+                      {ret.returnDate}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-400">
+                      {ret.billCode} ({ret.billDate})
+                    </td>
+                    <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
+                      {ret.productName}
+                    </td>
+                    <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">
+                      {ret.category}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      {formatNumber(ret.quantity)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      {formatVND(ret.amount)}
+                    </td>
+                    <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                      {ret.note}
+                    </td>
+                    {canDelete && (
+                      <td className="py-2.5 px-3 text-right">
                         <button
                           type="button"
-                          onClick={() => handleDeleteOneDeduction(ded)}
+                          onClick={() => handleDeleteOneReturn(ret)}
                           className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                          title="Xóa hoàn trả"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5 inline" />
                         </button>
-                      )}
-                    </div>
-                  </div>
-                  {ded.note && (
-                    <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                      {ded.note}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Desktop Table (>= md) */}
-            <div className="hidden md:block border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                    <th className="py-2.5 px-3">Ngày trừ</th>
-                    <th className="py-2.5 px-3">Bill gốc</th>
-                    <th className="py-2.5 px-3">Món hoàn trả</th>
-                    <th className="py-2.5 px-3">Danh mục</th>
-                    <th className="py-2.5 px-3 text-right">SL trả</th>
-                    <th className="py-2.5 px-3 text-right">Số tiền trừ</th>
-                    <th className="py-2.5 px-3">Ghi chú</th>
-                    {canDelete && <th className="py-2.5 px-3 text-right">Xóa</th>}
+                      </td>
+                    )}
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                  {filteredDeductions.map((ded) => (
-                    <tr key={ded.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="py-2.5 px-3 font-mono text-slate-700 dark:text-slate-300">
-                        {ded.deductionDate}
-                      </td>
-                      <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-400">
-                        {ded.billCode} ({ded.billDate})
-                      </td>
-                      <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
-                        {ded.productName}
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">
-                        {ded.category}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
-                        -{formatNumber(ded.quantity)}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
-                        -{formatVND(ded.amount)}
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                        {ded.note}
-                      </td>
-                      {canDelete && (
-                        <td className="py-2.5 px-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteOneDeduction(ded)}
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
-                            title="Xóa khoản trừ"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 inline" />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

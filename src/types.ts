@@ -10,9 +10,12 @@ export type ManagementTabId =
   | 'ocr'
   | 'categories'
   | 'debts'
+  | 'deductions'
   | 'returns'
   | 'products'
   | 'accounts';
+
+export type PeriodPreset = 'today' | 'yesterday' | 'week' | 'month' | 'all' | 'custom';
 
 export interface ManagementTabMeta {
   id: ManagementTabId;
@@ -25,49 +28,56 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
   {
     id: 'dashboard',
     label: 'Tổng quan & Doanh thu',
-    shortLabel: 'Tổng quan & Doanh thu',
+    shortLabel: 'Tổng quan',
     description:
-      'Bảng đối soát doanh thu tiền mặt, chuyển khoản, khoản trừ, công nợ và danh sách hóa đơn',
+      'Bảng đối soát doanh thu tiền mặt, chuyển khoản, khoản trừ, công nợ riêng và danh sách hóa đơn',
   },
   {
     id: 'ocr',
     label: 'Chụp / Nhập Bill OCR',
-    shortLabel: 'Chụp / Nhập Bill OCR',
+    shortLabel: 'Nhập Bill',
     description:
-      'Quét ảnh hóa đơn bằng Gemini AI hoặc dán văn bản để tạo hóa đơn bán hàng mới',
+      'Quét ảnh hóa đơn bằng Gemini AI hoặc dán văn bản, tích chọn công nợ & người nợ để tạo bill mới',
   },
   {
     id: 'categories',
     label: 'Số lượng theo Danh mục',
-    shortLabel: 'Số lượng theo Danh mục',
+    shortLabel: 'Danh mục',
     description:
-      'Thống kê số lượng bán, hoàn trả và doanh thu theo từng nhóm danh mục hàng hóa',
+      'Thống kê số lượng bán (bao gồm cả món trong bill công nợ), hoàn trả và doanh thu theo danh mục',
   },
   {
     id: 'debts',
     label: 'Quản lý Công nợ',
-    shortLabel: 'Quản lý Công nợ',
+    shortLabel: 'Công nợ',
     description:
-      'Theo dõi khách nợ, xem món trong bill nợ, chỉnh giá món, tất toán hoặc xóa công nợ',
+      'Theo dõi khách nợ, thêm người nợ, chỉnh giá & ghi chú món trong bill nợ, tất toán hoặc xóa công nợ',
+  },
+  {
+    id: 'deductions',
+    label: 'Khoản trừ (Chi trong ngày)',
+    shortLabel: 'Khoản trừ',
+    description:
+      'Ghi nhận các khoản tiền chi ra trong ngày (mua bánh mì, mua rau, nguyên liệu, bồi hoàn khách...) trừ vào doanh thu ngày',
   },
   {
     id: 'returns',
-    label: 'Hoàn trả & Khoản trừ',
-    shortLabel: 'Hoàn trả & Khoản trừ',
+    label: 'Hoàn trả (Trả bia / món thừa)',
+    shortLabel: 'Hoàn trả',
     description:
-      'Ghi nhận khách hoàn trả món, tự động trừ số lượng bán và cập nhật khoản trừ',
+      'Ghi nhận khách trả lại bia thừa, món thừa theo hóa đơn (không tự động cộng vào Khoản trừ chi tiêu ngày)',
   },
   {
     id: 'products',
     label: 'Upload Sản phẩm / Menu',
-    shortLabel: 'Upload Sản phẩm / Menu',
+    shortLabel: 'Thực đơn',
     description:
       'Thêm/sửa/xóa sản phẩm, quản lý danh mục và upload thực đơn hàng loạt',
   },
   {
     id: 'accounts',
     label: 'Tài khoản & Phân quyền',
-    shortLabel: 'Tài khoản & Phân quyền',
+    shortLabel: 'Tài khoản',
     description:
       'Quản lý tài khoản, mật khẩu và phân phối danh mục quản lý cho từng Role & Tài khoản',
   },
@@ -90,6 +100,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'ocr',
       'categories',
       'debts',
+      'deductions',
       'returns',
       'products',
       'accounts',
@@ -104,6 +115,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'ocr',
       'categories',
       'debts',
+      'deductions',
       'returns',
       'products',
     ],
@@ -112,13 +124,13 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.CASHIER]: {
     role: UserRole.CASHIER,
-    allowedTabs: ['dashboard', 'ocr', 'debts', 'returns'],
+    allowedTabs: ['dashboard', 'ocr', 'debts', 'deductions', 'returns'],
     canWrite: true,
     canDelete: false,
   },
   [UserRole.VIEWER]: {
     role: UserRole.VIEWER,
-    allowedTabs: ['dashboard', 'categories', 'debts'],
+    allowedTabs: ['dashboard', 'categories', 'debts', 'deductions', 'returns'],
     canWrite: false,
     canDelete: false,
   },
@@ -155,6 +167,7 @@ export interface ExtractedBillJSON {
     rawDate?: string;
     checkInTime?: string;
     checkOutTime?: string;
+    tableName?: string;
     paymentType: PaymentType;
     debtorName: string;
     subtotalAmount?: number;
@@ -223,6 +236,23 @@ export interface DeductionRecord {
   billCode: string;
   billDate: string;
   deductionDate: string;
+  productName: string;
+  category: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  note: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface ReturnRecord {
+  id: string;
+  ownerId: string;
+  billId: string;
+  billCode: string;
+  billDate: string;
+  returnDate: string;
   productName: string;
   category: string;
   quantity: number;

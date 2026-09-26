@@ -20,6 +20,14 @@ interface CategoryAnalyticsTabProps {
   products: ProductRecord[];
   categories: string[];
   periodLabel: string;
+  periodType?: 'day' | 'yesterday' | 'week' | 'month' | 'all';
+  selectedDate?: string;
+  todayBusinessStr?: string;
+  yesterdayBusinessStr?: string;
+  onChangePeriod?: (
+    type: 'day' | 'yesterday' | 'week' | 'month' | 'all',
+    customDate?: string
+  ) => void;
   canWrite: boolean;
   onAddCategory: (categoryName: string) => Promise<void>;
   onRenameCategory: (oldName: string, newName: string) => Promise<void>;
@@ -55,6 +63,11 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
   products,
   categories,
   periodLabel,
+  periodType = 'day',
+  selectedDate,
+  todayBusinessStr,
+  yesterdayBusinessStr,
+  onChangePeriod,
   canWrite,
   onAddCategory,
   onRenameCategory,
@@ -284,11 +297,72 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
               Thống Kê Số Lượng Theo Danh Mục & Mặt Hàng
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Kỳ thống kê: <strong className="text-slate-800 dark:text-slate-200">{periodLabel}</strong> · Thêm, sửa tên hoặc xóa danh mục ngay tại đây.
+              Kỳ thống kê: <strong className="text-slate-800 dark:text-slate-200">{periodLabel}</strong> · Số lượng sản phẩm bán trong Công nợ vẫn được cộng đầy đủ vào thống kê trong ngày.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onChangePeriod && (
+              <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => onChangePeriod('day', todayBusinessStr)}
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    periodType === 'day' && (!todayBusinessStr || selectedDate === todayBusinessStr)
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Hôm nay
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangePeriod('yesterday', yesterdayBusinessStr)}
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    periodType === 'yesterday' ||
+                    (periodType === 'day' && yesterdayBusinessStr && selectedDate === yesterdayBusinessStr)
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Hôm qua
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangePeriod('week')}
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    periodType === 'week'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Tuần
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangePeriod('month')}
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    periodType === 'month'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Tháng
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangePeriod('all')}
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    periodType === 'all'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Tất cả
+                </button>
+              </div>
+            )}
+
             <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full sm:w-auto">
               <button
                 type="button"

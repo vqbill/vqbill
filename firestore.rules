@@ -109,8 +109,9 @@ service cloud.firestore {
           'note', 'status', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'ownerId', 'billCode', 'billDate', 'paymentType', 'debtorName',
-          'debtStatus', 'totalAmount', 'deductedAmount', 'itemsSummary',
+          'ownerId', 'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime',
+          'paymentType', 'debtorName', 'debtStatus', 'subtotalAmount', 'discountAmount',
+          'totalAmount', 'deductedAmount', 'itemsSummary',
           'note', 'status', 'createdAt', 'updatedAt'
         ]) &&
         data.ownerId == request.auth.uid &&
@@ -135,7 +136,7 @@ service cloud.firestore {
           'quantity', 'returnedQuantity', 'unitPrice', 'subtotal', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'ownerId', 'billId', 'billDate', 'productName', 'category',
+          'ownerId', 'billId', 'billDate', 'productName', 'note', 'category',
           'quantity', 'returnedQuantity', 'unitPrice', 'subtotal', 'createdAt', 'updatedAt'
         ]) &&
         data.ownerId == request.auth.uid &&
@@ -143,6 +144,7 @@ service cloud.firestore {
         data.billId is string && data.billId.size() >= 1 && data.billId.size() <= 128 && data.billId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
         data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
+        (!('note' in data) || (data.note is string && data.note.size() <= 500)) &&
         data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
         data.quantity is number && data.quantity > 0 &&
         data.returnedQuantity is number && data.returnedQuantity >= 0 && data.returnedQuantity <= data.quantity &&
@@ -169,6 +171,33 @@ service cloud.firestore {
         data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&
         data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
         data.deductionDate is string && data.deductionDate.size() == 10 && data.deductionDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.quantity is number && data.quantity > 0 &&
+        data.unitPrice is number && data.unitPrice >= 0 &&
+        data.amount is number && data.amount >= 0 &&
+        data.note is string && data.note.size() <= 500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidReturn(data) {
+      return data.keys().hasAll([
+          'ownerId', 'billId', 'billCode', 'billDate', 'returnDate',
+          'productName', 'category', 'quantity', 'unitPrice', 'amount',
+          'note', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'billId', 'billCode', 'billDate', 'returnDate',
+          'productName', 'category', 'quantity', 'unitPrice', 'amount',
+          'note', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.billId is string && data.billId.size() >= 1 && data.billId.size() <= 128 && data.billId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&
+        data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.returnDate is string && data.returnDate.size() == 10 && data.returnDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
         data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
         data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
         data.quantity is number && data.quantity > 0 &&
@@ -270,7 +299,8 @@ service cloud.firestore {
               incoming().diff(existing()).affectedKeys().hasOnly(['debtStatus', 'paymentType', 'note', 'updatedAt']) ||
               incoming().diff(existing()).affectedKeys().hasOnly(['deductedAmount', 'itemsSummary', 'note', 'updatedAt']) ||
               incoming().diff(existing()).affectedKeys().hasOnly([
-                'billCode', 'billDate', 'paymentType', 'debtorName', 'debtStatus',
+                'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime',
+                'paymentType', 'debtorName', 'debtStatus', 'subtotalAmount', 'discountAmount',
                 'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'updatedAt'
               ])
             )
@@ -298,7 +328,7 @@ service cloud.firestore {
             existing().ownerId == request.auth.uid && (
               incoming().diff(existing()).affectedKeys().hasOnly(['returnedQuantity', 'updatedAt']) ||
               incoming().diff(existing()).affectedKeys().hasOnly([
-                'billDate', 'productName', 'category', 'quantity',
+                'billDate', 'productName', 'note', 'category', 'quantity',
                 'returnedQuantity', 'unitPrice', 'subtotal', 'updatedAt'
               ])
             )
@@ -312,9 +342,7 @@ service cloud.firestore {
       allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
       allow create: if isVerified() && isValidId(deductionId) && isValidDeduction(incoming()) &&
         incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time &&
-        exists(/databases/$(database)/documents/bills/$(incoming().billId)) &&
-        get(/databases/$(database)/documents/bills/$(incoming().billId)).data.ownerId == request.auth.uid;
+        incoming().updatedAt == request.time;
       allow update: if isVerified() && isValidId(deductionId) && isValidDeduction(incoming()) &&
         incoming().ownerId == existing().ownerId &&
         incoming().billId == existing().billId &&
@@ -323,11 +351,32 @@ service cloud.firestore {
           isAdmin() || (
             existing().ownerId == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly([
-              'deductionDate', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
+              'deductionDate', 'productName', 'category', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
             ])
           )
         );
       allow delete: if isVerified() && isValidId(deductionId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /returns/{returnId} {
+      allow get: if isSignedIn() && isValidId(returnId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isVerified() && isValidId(returnId) && isValidReturn(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(returnId) && isValidReturn(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().billId == existing().billId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'returnDate', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerified() && isValidId(returnId) && (existing().ownerId == request.auth.uid || isAdmin());
     }
   }
 }

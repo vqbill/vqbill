@@ -49,6 +49,10 @@ export function getCurrentBusinessDate(now: Date = new Date()): string {
   return todayYmd;
 }
 
+export function getYesterdayBusinessDate(now: Date = new Date()): string {
+  return shiftDateByDays(getCurrentBusinessDate(now), -1);
+}
+
 export function parseTimeHourMinute(timeStr?: string): { hour: number; minute: number; formatted: string } | null {
   if (!timeStr || !timeStr.trim()) return null;
   const m = timeStr.trim().match(/\b([01]?\d|2[0-3])\s*[:hH]\s*([0-5]\d)?\b/);
@@ -573,11 +577,47 @@ function parseFullItemLine(
   // Reject lines wrapped in >>> ... <<< if they don't have a valid price at the end (>= 1000)
   const wasChevronWrapped = /^>{2,}.*<{2,}$/.test(line.trim());
 
+  // 0. Format 1 (VỊNH QUÁN / Thermal Receipt): "Tên hàng   Đ.Giá x SL   Thành tiền"
+  // Examples:
+  // - "Heineken bạc lon 330ml 26,000 x 72 1,872,000"
+  // - "Chíp hấp sả 109,000 x 2 218,000"
+  // - "Bê 89,000 x 1 89,000"
+  const regexPriceTimesQty =
+    /^(.+?)\s+(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)\s*[x×*]\s*(\d{1,4})\s*(?:lon|chai|phần|đĩa|dĩa|nồi|cái|ly|ca|suất|bịch|gói|con|combo)?\s+(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)$/i;
+  const m0 = cleaned.match(regexPriceTimesQty);
+  if (m0 && !wasChevronWrapped) {
+    const rawPrefixName = m0[1].replace(/^[\d]+[\.\)]\s*/, '').replace(/[\-|:]$/, '').trim();
+    let firstMoney = normalizeMoneyNumber(m0[2]);
+    const qtyCandidate = parseInt(m0[3], 10) || 1;
+    let subMoney = normalizeMoneyNumber(m0[4]);
+    if (firstMoney > 0 && firstMoney < 1000 && /k\b/i.test(m0[2])) firstMoney *= 1000;
+    if (subMoney > 0 && subMoney < 1000 && /k\b/i.test(m0[4])) subMoney *= 1000;
+
+    // If firstMoney >= 1000, this is UnitPrice x Qty = Subtotal (Format 1)
+    if (rawPrefixName && firstMoney >= 1000 && qtyCandidate >= 1) {
+      const qty = Math.max(1, qtyCandidate);
+      const uPrice = firstMoney;
+      const sub = subMoney >= uPrice ? subMoney : qty * uPrice;
+      const split = splitProductNameAndInlineNote(
+        rawPrefixName,
+        existingProducts,
+        customCategories
+      );
+      if (split.productName) {
+        return {
+          productName: split.productName,
+          note: split.note || '',
+          category: split.category,
+          quantity: qty,
+          unitPrice: uPrice,
+          subtotal: sub,
+        };
+      }
+    }
+  }
+
   // 1. Try matching: Name + explicit Qty + UnitPrice + (optional Subtotal)
   // Example: "1. Bia Tiger Lùn x24 lon 22.000đ 528.000đ" or "Gà biển kho nghệ 2 129000 258000"
-  // Notice: to avoid "Combo 2 459000" matching "Combo" + qty 2 + price 459000,
-  // if the word right before the number is "combo" / "set" / "bàn" / "mẫu" AND there is only ONE price after it,
-  // we skip Pattern 1 and let Pattern 3 ("Name + Single Price") handle "Combo 2" as the full name!
   const regexQtyAndPrice =
     /^(.+?)\s+(?:(?:SL|sl)\s*[:\-]?\s*|[x×]\s*)?(\d{1,4})\s*(?:lon|chai|phần|đĩa|dĩa|nồi|cái|ly|ca|suất|bịch|gói|con|combo)?\s*(?:[\-x×|:@]|\s+)\s*(?:giá\s*[:\-]?\s*)?(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)(?:\s*(?:[\-=|:]|\s+)\s*(\d[\d.,]*\s*(?:k|đ|vnđ|d)?))?$/i;
 
@@ -632,7 +672,6 @@ function parseFullItemLine(
   }
 
   // 2. Leading quantity pattern: "15 lon Bia Tiger Lùn 22k" or "2 Gà biển kho nghệ làm cay 129000"
-  // Make sure it's not a sub-item note like "1 dĩa trái cây" (which has NO price at the end!)
   const regexLeadingQty =
     /^(\d{1,4})\s*(?:lon|chai|phần|đĩa|dĩa|nồi|cái|ly|ca|con|suất)?\s+(.+?)\s+(?:giá\s*[:\-]?\s*|[\-x×|:@]\s*)?(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)(?:\s+(\d[\d.,]*\s*(?:k|đ|vnđ|d)?))?$/i;
   const m2 = cleaned.match(regexLeadingQty);
@@ -673,11 +712,6 @@ function parseFullItemLine(
   }
 
   // 3. Single-line Name + Price (Quantity = 1 implicitly):
-  // Examples:
-  // - "gà biển kho nghệ làm cay giá 129000"
-  // - "gà biển kho nghệ làm cay 129.000đ"
-  // - "combo 2 giá 459000"
-  // - "Combo 2: 459,000"
   const regexNameAndSinglePrice =
     /^(.+?)\s+(?:giá(?:\s*bán)?\s*[:\-=]?\s*|[\-|:=]\s*)?(\d[\d.,]*)\s*(k|đ|vnđ|d)?$/i;
   const m3 = cleaned.match(regexNameAndSinglePrice);
@@ -712,13 +746,25 @@ function parseFullItemLine(
   return null;
 }
 
+function normalizeTableName(rawTable: string): string {
+  const cleaned = rawTable
+    .replace(/\b(?:phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|hóa\s*đơn\s*bán\s*hàng|hóa\s*đơn\s*thanh\s*toán|hóa\s*đơn)\b.*$/i, '')
+    .replace(/^[=\-*_~><:\s]+|[=\-*_~><:\s]+$/g, '')
+    .trim();
+  if (!cleaned) return '';
+  if (/^bàn\b/i.test(cleaned)) {
+    return 'Bàn ' + cleaned.replace(/^bàn\s*/i, '').trim();
+  }
+  return cleaned;
+}
+
 /**
  * Multi-format & Multi-line Bill Text Parser:
- * Extracts:
- * - Ngày tháng (billDate) áp dụng khung giờ bán 09:00 sáng ngày D -> 08:00 sáng ngày D+1
- * - Giờ vào (checkInTime) & Giờ ra (checkOutTime)
- * - Tên món (productName), Ghi chú món (note), Số lượng (quantity), Đơn giá (unitPrice), Thành tiền (subtotal)
- * - Chiết khấu (discountAmount) & Tổng cộng (totalAmount)
+ * Supports:
+ * - Format 1 (VỊNH QUÁN / Bill in nhiệt): Bắt đầu từ "Tên hàng Đ.Giá SL Thành tiền", đọc "Đ.Giá x SL Thành tiền", chiết khấu, tổng cộng, số bàn (VD: Bàn 24)
+ * - Format 2 (KiotViet / POS copy): Bắt đầu từ "Phòng/bàn: BÀN 30" và các mã SP (SP010124...), tách tên món, ghi chú dòng dưới (VD: "3 lạng", "5lạng nấu thơm cà", "20k"), SL, đơn giá, thành tiền
+ * - Format 3 (Bill Combo >>> ... <<< và ghi chú món trên cùng 1 dòng)
+ * - Mặc định hình thức thanh toán là Tiền mặt ("cash") để người dùng chọn thủ công (Tiền mặt / Chuyển khoản / Công nợ)
  */
 export function parseRawTextToBillJSON(
   rawText: string,
@@ -738,6 +784,8 @@ export function parseRawTextToBillJSON(
   let checkInTime = '';
   let checkOutTime = '';
   let dateIsCheckoutDate = false;
+  let tableName = '';
+  // Mặc định là tiền mặt ('cash'); người dùng tự chọn Tiền mặt / Chuyển khoản / Công nợ trên giao diện
   let paymentType: PaymentType = 'cash';
   let debtorName = '';
   let explicitDiscountAmount = 0;
@@ -746,7 +794,26 @@ export function parseRawTextToBillJSON(
 
   const fullText = rawText || '';
 
-  // 1. Extract Date (YYYY-MM-DD, DD/MM/YYYY, or short DD/MM)
+  // 1. Extract Table Name (e.g., "BÀN 24 PHIẾU TÍNH TIỀN" -> "Bàn 24", or "Phòng/bàn:\nBÀN 30" -> "Bàn 30")
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (/^(?:phòng\s*\/\s*bàn|số\s*bàn|bàn\s*số)\s*[:\-]?\s*$/i.test(line) && rawLines[i + 1]) {
+      tableName = normalizeTableName(rawLines[i + 1]);
+      break;
+    }
+    const kvTable = line.match(/^(?:phòng\s*\/\s*bàn|số\s*bàn|bàn)\s*[:\-]\s*(.+)$/i);
+    if (kvTable) {
+      tableName = normalizeTableName('Bàn ' + kvTable[1]);
+      break;
+    }
+    const inlineTable = line.match(/\b(BÀN\s+(?:VIP\s*)?[A-Z0-9À-ỹ]+)\b/i);
+    if (inlineTable) {
+      tableName = normalizeTableName(inlineTable[1]);
+      break;
+    }
+  }
+
+  // 2. Extract Date (YYYY-MM-DD, DD/MM/YYYY, or short DD/MM)
   const ymdMatch = fullText.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
   const dmyFullMatch = fullText.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](20\d{2})\b/);
   const dmyShortMatch = fullText.match(
@@ -765,9 +832,9 @@ export function parseRawTextToBillJSON(
     calendarDate = `${fallbackYear}-${m}-${d}`;
   }
 
-  // 2. Extract Check-in / Check-out Times (Giờ vào / Giờ ra)
+  // 3. Extract Check-in / Check-out Times (supports same-line and next-line like "Giờ đến:\n26/09/2026 16:41")
   const checkInMatch = fullText.match(
-    /(?:giờ\s*vào|vào\s*lúc|tg\s*vào|check\s*in|mở\s*bàn)\s*[:\-]?\s*(?:(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](20\d{2}))?\s+)?([01]?\d|2[0-3])\s*[:hH]\s*([0-5]\d)?/i
+    /(?:giờ\s*vào|giờ\s*đến|vào\s*lúc|tg\s*vào|check\s*in|mở\s*bàn)\s*[:\-]?\s*(?:(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](20\d{2}))?\s+)?([01]?\d|2[0-3])\s*[:hH]\s*([0-5]\d)?/i
   );
   if (checkInMatch) {
     const hh = String(checkInMatch[4]).padStart(2, '0');
@@ -781,7 +848,7 @@ export function parseRawTextToBillJSON(
   }
 
   const checkOutMatch = fullText.match(
-    /(?:giờ\s*ra|ra\s*lúc|tg\s*ra|check\s*out|giờ\s*thanh\s*toán|giờ\s*in)\s*[:\-]?\s*(?:(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](20\d{2}))?\s+)?([01]?\d|2[0-3])\s*[:hH]\s*([0-5]\d)?/i
+    /(?:giờ\s*ra|thời\s*gian\s*\(\s*giờ\s*đi\s*\)|giờ\s*đi|ra\s*lúc|tg\s*ra|check\s*out|giờ\s*thanh\s*toán|giờ\s*in)\s*[:\-]?\s*(?:(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](20\d{2}))?\s+)?([01]?\d|2[0-3])\s*[:hH]\s*([0-5]\d)?/i
   );
   if (checkOutMatch) {
     const hh = String(checkOutMatch[4]).padStart(2, '0');
@@ -794,7 +861,6 @@ export function parseRawTextToBillJSON(
     }
   }
 
-  // Combined time range on one line: e.g. "Giờ: 19:30 - 22:45" or "Thời gian: 21h00 -> 01h30"
   if (!checkInTime && !checkOutTime) {
     const rangeTimeMatch = fullText.match(
       /(?:giờ(?:\s*ra\s*vào|\s*vào\s*ra)?|thời\s*gian|time)\s*[:\-]?\s*([01]?\d|2[0-3])\s*[:hH]\s*([0-5]\d)?\s*(?:\-|–|->|~|đến|tới)\s*([01]?\d|2[0-3])\s*[:hH]\s*([0-5]\d)?/i
@@ -803,7 +869,6 @@ export function parseRawTextToBillJSON(
       checkInTime = `${String(rangeTimeMatch[1]).padStart(2, '0')}:${String(rangeTimeMatch[2] || '00').padStart(2, '0')}`;
       checkOutTime = `${String(rangeTimeMatch[3]).padStart(2, '0')}:${String(rangeTimeMatch[4] || '00').padStart(2, '0')}`;
     } else {
-      // Single time on date/time line: e.g. "Ngày: 21/08/2026 01:30" or "Giờ: 01:30"
       const singleTimeMatch =
         fullText.match(
           /(?:giờ|lúc|time)\s*[:\-]?\s*([01]?\d|2[0-3])\s*[:hH]\s*([0-5]\d)\b/i
@@ -825,26 +890,182 @@ export function parseRawTextToBillJSON(
     dateIsCheckoutDate
   );
 
-  // 3. Payment Type & Debtor Name
-  if (/(chuyển khoản|\bck\b|mã qr|vietqr|banking)/i.test(fullText)) {
-    paymentType = 'transfer';
-  }
-  if (/(công nợ|ghi nợ|ký nợ|\bnợ\b|khách nợ)/i.test(fullText)) {
-    paymentType = 'debt';
-    const debtLine = rawLines.find((l) =>
-      /(công nợ|ghi nợ|ký nợ|\bnợ\b|khách nợ)/i.test(l)
-    );
-    if (debtLine) {
-      const cleanedDebtor = debtLine
-        .replace(/(hình thức|thanh toán|công nợ|ghi nợ|ký nợ|khách nợ|nợ)\s*[:\-]?\s*/gi, '')
-        .trim();
-      if (cleanedDebtor && cleanedDebtor.length <= 80) {
-        debtorName = cleanedDebtor;
+  // Only set paymentType if there is an explicit "Hình thức:" or "Thanh toán:" header line,
+  // otherwise always default to 'cash' (Tiền mặt) as requested by user!
+  for (const l of rawLines) {
+    if (/^(?:hình\s*thức|thanh\s*toán)\s*[:\-]/i.test(l)) {
+      if (/(chuyển\s*khoản|\bck\b|vietqr|banking)/i.test(l)) {
+        paymentType = 'transfer';
+      } else if (/(công\s*nợ|ghi\s*nợ|ký\s*nợ|khách\s*nợ)/i.test(l)) {
+        paymentType = 'debt';
+        const cleanedDebtor = l
+          .replace(/(hình\s*thức|thanh\s*toán|công\s*nợ|ghi\s*nợ|ký\s*nợ|khách\s*nợ|nợ)\s*[:\-]?\s*/gi, '')
+          .trim();
+        if (cleanedDebtor && cleanedDebtor.length <= 80) {
+          debtorName = cleanedDebtor;
+        }
       }
     }
   }
 
-  // 4. Filter & Classify Body Lines for Multi-line & Multi-format Item Extraction
+  // 4. Check if this bill is Format 2 (POS / KiotViet multi-line blocks with SP codes like SP010124)
+  const hasSpCodes = rawLines.some((l) => /^SP\d{3,}$/i.test(l));
+  if (hasSpCodes) {
+    const spItems: ExtractedBillItem[] = [];
+
+    // Extract multi-line totals & discount in Format 2
+    for (let i = 0; i < rawLines.length; i++) {
+      const l = rawLines[i];
+      if (/^(?:giảm\s*giá|chiết\s*khấu)\b/i.test(l)) {
+        const sameLineVal = normalizeMoneyNumber(l);
+        if (sameLineVal > 0) {
+          explicitDiscountAmount = sameLineVal < 1000 ? sameLineVal * 1000 : sameLineVal;
+        } else if (rawLines[i + 1] && /^\d[\d.,]*$/.test(rawLines[i + 1])) {
+          const nextVal = normalizeMoneyNumber(rawLines[i + 1]);
+          explicitDiscountAmount = nextVal > 0 && nextVal < 1000 ? nextVal * 1000 : nextVal;
+        }
+      }
+      if (/^(?:khách\s*cần\s*trả|tổng\s*cộng|tổng\s*tiền\s*hàng)\b/i.test(l)) {
+        const cleanedNoParens = l.replace(/\(\d+\)/g, '');
+        const sameLineVal = normalizeMoneyNumber(cleanedNoParens);
+        if (sameLineVal >= 1000) {
+          explicitTotalAmount = sameLineVal;
+        } else if (rawLines[i + 1] && /^\d[\d.,]*$/.test(rawLines[i + 1])) {
+          const nextVal = normalizeMoneyNumber(rawLines[i + 1]);
+          if (nextVal >= 1000) {
+            explicitTotalAmount = nextVal;
+          }
+        }
+      }
+    }
+
+    // Parse each SPxxxxxx block
+    const isFooterStartLine = (s: string) =>
+      /^(?:chưa\s*có\s*ghi\s*chú|hàng\s*đã\s*hủy|tổng\s*tiền\s*hàng|giảm\s*giá|chiết\s*khấu|khách\s*cần\s*trả|khách\s*đã\s*trả|tổng\s*cộng)\b/i.test(
+        s
+      );
+
+    let idx = 0;
+    while (idx < rawLines.length) {
+      if (!/^SP\d{3,}$/i.test(rawLines[idx])) {
+        idx++;
+        continue;
+      }
+      // Found SP code at idx
+      const blockLines: string[] = [];
+      let k = idx + 1;
+      while (k < rawLines.length && !/^SP\d{3,}$/i.test(rawLines[k]) && !isFooterStartLine(rawLines[k])) {
+        blockLines.push(rawLines[k]);
+        k++;
+      }
+      idx = k;
+
+      if (blockLines.length >= 2) {
+        const rawDishName = blockLines[0].trim();
+        const rest = blockLines.slice(1);
+
+        // Count how many trailing lines are pure numbers (e.g. ['59', '21,000', '21,000', '1,239,000'])
+        const isPureNumericLine = (s: string) => /^\d[\d.,]*$/.test(s.trim());
+        let numericTailCount = 0;
+        for (let r = rest.length - 1; r >= 0; r--) {
+          if (isPureNumericLine(rest[r])) {
+            numericTailCount++;
+          } else {
+            break;
+          }
+        }
+
+        // In KiotViet POS, the trailing numeric lines are either 4 numbers [qty, basePrice, sellPrice, subtotal]
+        // or 3 numbers [qty, unitPrice, subtotal]
+        const tailLen = numericTailCount >= 4 ? 4 : numericTailCount >= 3 ? 3 : numericTailCount;
+        const noteLines = rest.slice(0, Math.max(0, rest.length - tailLen));
+        const numLines = rest.slice(Math.max(0, rest.length - tailLen));
+
+        let qty = 1;
+        let uPrice = 0;
+        let sub = 0;
+
+        if (numLines.length >= 4) {
+          qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
+          uPrice = normalizeMoneyNumber(numLines[2]) || normalizeMoneyNumber(numLines[1]);
+          sub = normalizeMoneyNumber(numLines[3]);
+        } else if (numLines.length === 3) {
+          qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
+          uPrice = normalizeMoneyNumber(numLines[1]);
+          sub = normalizeMoneyNumber(numLines[2]);
+        } else if (numLines.length === 2) {
+          qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
+          uPrice = normalizeMoneyNumber(numLines[1]);
+          sub = qty * uPrice;
+        } else if (numLines.length === 1) {
+          uPrice = normalizeMoneyNumber(numLines[0]);
+          sub = uPrice;
+        }
+
+        if (uPrice > 0 && uPrice < 1000) uPrice *= 1000;
+        if (sub > 0 && sub < 1000) sub *= 1000;
+        if (sub === 0 && uPrice > 0) sub = qty * uPrice;
+        if (uPrice > 0 && sub !== qty * uPrice) sub = qty * uPrice;
+
+        const split = splitProductNameAndInlineNote(
+          rawDishName,
+          existingProducts,
+          customCategories
+        );
+        const combinedNote = [split.note, ...noteLines.map((n) => n.trim())]
+          .filter(Boolean)
+          .join(', ');
+
+        if (split.productName && uPrice > 0) {
+          spItems.push({
+            productName: split.productName,
+            note: combinedNote,
+            category: split.category,
+            quantity: qty,
+            unitPrice: uPrice,
+            subtotal: sub,
+          });
+        }
+      }
+    }
+
+    if (spItems.length > 0) {
+      const subtotalAmount = spItems.reduce((acc, it) => acc + it.subtotal, 0);
+      const discountAmount = Math.min(subtotalAmount, Math.max(0, explicitDiscountAmount));
+      const totalAmount = Math.max(0, subtotalAmount - discountAmount);
+      return {
+        billInfo: {
+          billDate,
+          rawDate: calendarDate !== billDate ? calendarDate : undefined,
+          checkInTime: checkInTime || undefined,
+          checkOutTime: checkOutTime || undefined,
+          tableName: tableName || undefined,
+          paymentType,
+          debtorName: paymentType === 'debt' ? debtorName : '',
+          subtotalAmount,
+          discountAmount,
+          totalAmount: totalAmount || explicitTotalAmount,
+        },
+        items: spItems,
+      };
+    }
+  }
+
+  // 5. Find if there is an explicit table header like "Tên hàng Đ.Giá SL Thành tiền" (Format 1)
+  // If present, start extracting items strictly AFTER that header line!
+  let bodyStartIdx = 0;
+  for (let i = 0; i < rawLines.length; i++) {
+    const cleaned = cleanDecorativeLine(rawLines[i]);
+    if (
+      /^(?:stt\s+)?(?:tên\s*hàng|tên\s*món|mặt\s*hàng|sản\s*phẩm)\b.*(?:đ\.?\s*giá|đơn\s*giá|sl|số\s*lượng|thành\s*tiền)/i.test(
+        cleaned
+      )
+    ) {
+      bodyStartIdx = i + 1;
+      break;
+    }
+  }
+
   const items: ExtractedBillItem[] = [];
   let unpricedBuffer: Array<{ text: string; isExplicitNote: boolean }> = [];
 
@@ -860,7 +1081,7 @@ export function parseRawTextToBillJSON(
     unpricedBuffer = [];
   };
 
-  for (let i = 0; i < rawLines.length; i++) {
+  for (let i = bodyStartIdx; i < rawLines.length; i++) {
     const rawLine = rawLines[i];
 
     // Skip pure decorative lines like "======================" or "----------"
@@ -873,11 +1094,11 @@ export function parseRawTextToBillJSON(
 
     // Check if it's a Discount / Chiết khấu line
     if (/^(?:chiết\s*khấu|giảm\s*giá|khuyến\s*mãi|giảm\s*bill|voucher|discount)\b/i.test(cleanedLine)) {
+      flushBufferToLastItemAsNote();
       const pctMatch = cleanedLine.match(/(\d{1,2}(?:\.\d+)?)\s*%/);
       if (pctMatch) {
         explicitDiscountPercent = parseFloat(pctMatch[1]) || 0;
       }
-      // Remove percentage token before extracting money amount
       const withoutPct = cleanedLine.replace(/\d{1,2}(?:\.\d+)?\s*%/g, '');
       let discMoney = normalizeMoneyNumber(withoutPct);
       if (discMoney > 0 && discMoney < 1000) discMoney *= 1000;
@@ -888,7 +1109,8 @@ export function parseRawTextToBillJSON(
     }
 
     // Check if it's a Grand Total / Subtotal line
-    if (/^(?:tổng\s*cộng|tổng\s*tiền|tổng\s*thanh\s*toán|khách\s*phải\s*trả|thực\s*thu|tổng\s*bill|total)\b/i.test(cleanedLine)) {
+    if (/^(?:tổng\s*cộng|tổng\s*tiền|tổng\s*thanh\s*toán|khách\s*phải\s*trả|khách\s*cần\s*trả|thực\s*thu|tổng\s*bill|total)\b/i.test(cleanedLine)) {
+      flushBufferToLastItemAsNote();
       let tot = normalizeMoneyNumber(cleanedLine);
       if (tot > 0 && tot < 1000) tot *= 1000;
       if (tot >= 1000) {
@@ -897,15 +1119,18 @@ export function parseRawTextToBillJSON(
       continue;
     }
 
-    if (/^(?:tạm\s*tính|cộng\s*tiền\s*hàng|tổng\s*tạm\s*tính)\b/i.test(cleanedLine)) {
+    if (/^(?:tạm\s*tính|cộng\s*tiền\s*hàng|tổng\s*tạm\s*tính|tổng\s*tiền\s*hàng|khách\s*đã\s*trả|hàng\s*đã\s*hủy|chưa\s*có\s*ghi\s*chú)\b/i.test(cleanedLine)) {
+      flushBufferToLastItemAsNote();
       continue;
     }
 
-    // Skip metadata / header lines
+    // Skip metadata / header lines (including store name, address ĐC:, phone ĐT:, order code 110-88, BÀN 24 PHIẾU TÍNH TIỀN)
     if (
-      /^(?:hóa\s*đơn|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|in|thanh\s*toán)?\s*[:\-]|thời\s*gian\s*[:\-]|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|stt\s+tên\s*món|tên\s*món\s+sl)/i.test(
+      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+\d+|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá)/i.test(
         cleanedLine
-      )
+      ) ||
+      /^\d{2,4}\-\d{1,4}$/.test(cleanedLine) ||
+      /^HD\d{4,}$/i.test(cleanedLine)
     ) {
       continue;
     }
@@ -914,7 +1139,6 @@ export function parseRawTextToBillJSON(
     const priceOnly = parsePriceOnlyLine(rawLine);
     if (priceOnly) {
       if (unpricedBuffer.length > 0) {
-        // The first buffered line is the dish name (e.g. "combo 2"), and remaining buffered lines are notes!
         const firstLine = unpricedBuffer[0].text;
         const extraNoteLines = unpricedBuffer.slice(1).map((b) => b.text).filter(Boolean);
         const split = splitProductNameAndInlineNote(
@@ -955,7 +1179,7 @@ export function parseRawTextToBillJSON(
       continue;
     }
 
-    // Check if this line is a Key-Value dish name or quantity line (e.g. "Tên món: Gà biển kho nghệ" or "Số lượng: 2")
+    // Check if this line is a Key-Value dish name or quantity line
     const kvDishMatch = cleanedLine.match(/^(?:tên\s*món|món\s*ăn|món|sản\s*phẩm)\s*[:\-]\s*(.+)$/i);
     if (kvDishMatch) {
       flushBufferToLastItemAsNote();
@@ -983,8 +1207,35 @@ export function parseRawTextToBillJSON(
     // Check if this line is a FULL ITEM LINE (contains both dish name and price)
     const fullItem = parseFullItemLine(rawLine, existingProducts, customCategories);
     if (fullItem) {
-      // Flush any previous unpriced buffer as notes to the preceding item
-      flushBufferToLastItemAsNote();
+      // Check if unpricedBuffer has wrapped dish name lines (non-explicit notes, e.g. "Gỏi bò bóp thấu" before "Bê 89,000 x 1 89,000")
+      const explicitNotes = unpricedBuffer.filter((b) => b.isExplicitNote);
+      const wrappedNameLines = unpricedBuffer.filter((b) => !b.isExplicitNote);
+
+      if (explicitNotes.length > 0 && items.length > 0) {
+        const lastItem = items[items.length - 1];
+        lastItem.note = [lastItem.note, ...explicitNotes.map((b) => b.text)]
+          .filter(Boolean)
+          .join(', ');
+      }
+
+      if (wrappedNameLines.length > 0) {
+        const prefixDish = wrappedNameLines.map((b) => b.text).join(' ').trim();
+        const splitPrefix = splitProductNameAndInlineNote(
+          prefixDish,
+          existingProducts,
+          customCategories
+        );
+        // E.g. prefixDish = "Gỏi bò bóp thấu", fullItem.productName = "Bê" -> productName: "Gỏi bò bóp thấu", note: "Bê"
+        const mergedNote = [splitPrefix.note, fullItem.productName, fullItem.note]
+          .filter(Boolean)
+          .join(', ');
+        fullItem.productName = splitPrefix.productName || prefixDish;
+        fullItem.note = mergedNote;
+        fullItem.category =
+          splitPrefix.category || inferCategory(fullItem.productName, customCategories);
+      }
+
+      unpricedBuffer = [];
       items.push(fullItem);
       continue;
     }
@@ -1000,18 +1251,15 @@ export function parseRawTextToBillJSON(
       continue;
     }
 
-    // Check if this line starts a new multi-line block (e.g. "combo 2 ======================" or matches a catalog product)
+    // Check if this line starts a new multi-line block (e.g. "combo 2 ======================")
     const hasTrailingEqualsOrDashes = /[=\-]{4,}\s*$/.test(rawLine.trim());
     if (hasTrailingEqualsOrDashes && unpricedBuffer.length > 0 && items.length > 0) {
       flushBufferToLastItemAsNote();
     }
 
-    // Otherwise, this line is an unpriced text line (could be a dish name waiting for its price on a lower line,
-    // like "combo 2 ======================", OR a note line like "làm cay"!)
     unpricedBuffer.push({ text: cleanedLine, isExplicitNote: false });
   }
 
-  // If any unpriced lines remain at the end of the bill:
   if (unpricedBuffer.length > 0) {
     flushBufferToLastItemAsNote();
   }
@@ -1031,7 +1279,6 @@ export function parseRawTextToBillJSON(
     discountAmount === 0 &&
     subtotalAmount > explicitTotalAmount
   ) {
-    // If bill had an explicit total lower than sum of items, infer discountAmount
     discountAmount = subtotalAmount - explicitTotalAmount;
     totalAmount = explicitTotalAmount;
   }
@@ -1042,6 +1289,7 @@ export function parseRawTextToBillJSON(
       rawDate: calendarDate !== billDate ? calendarDate : undefined,
       checkInTime: checkInTime || undefined,
       checkOutTime: checkOutTime || undefined,
+      tableName: tableName || undefined,
       paymentType,
       debtorName: paymentType === 'debt' ? debtorName : '',
       subtotalAmount,
@@ -1052,7 +1300,129 @@ export function parseRawTextToBillJSON(
   };
 }
 
+export const parseInvoiceText = parseRawTextToBillJSON;
+export const parseBulkProductsInput = parseBulkProductsByLogic;
+
 export const SAMPLE_BILL_TEMPLATES = [
+  {
+    id: 'sample_vinh_quan_ban24',
+    label: 'Mẫu Bill Vịnh Quán (Bàn 24)',
+    description: 'Bắt đầu từ "Tên hàng Đ.Giá SL Thành tiền", tách Chíp hấp sả, Gỏi bò bóp thấu (Bê), Tổng: 3.039.000đ',
+    rawText: `VỊNH QUÁN
+ĐC: 131 Chu Huy Mân, Đà nẵng
+ĐT: 0702.444.449
+BÀN 24 PHIẾU TÍNH TIỀN
+110-88
+Giờ vào: 26/09/2026 20:20 Giờ in: 22:47
+Tên hàng Đ.Giá SL Thành tiền
+Heineken bạc lon 330ml 26,000 x 72 1,872,000
+Gỏi bò bóp thấu 89,000 x 1 89,000
+Tiger bạc lon 330ml 24,000 x 4 96,000
+Sườn heo nướng 169,000 x 2 338,000
+Hàu nướng mỡ hành 119,000 x 2 238,000
+Sụn gà chiên mắm 89,000 x 1 89,000
+Gỏi bò bóp thấu
+Bê 89,000 x 1 89,000
+Nước suối Aqua 10,000 x 1 10,000
+Chíp hấp sả 109,000 x 2 218,000
+Tổng tiền hàng: 3,039,000
+Chiết khấu: 0
+Tổng Cộng: 3,039,000`,
+  },
+  {
+    id: 'sample_pos_ban30',
+    label: 'Mẫu Bill POS KiotViet (Bàn 30)',
+    description: 'Bắt đầu từ Bàn 30 & mã SP, tự tách ghi chú "3 lạng", "5lạng nấu thơm cà", Tổng: 2.008.000đ',
+    rawText: `Khách lẻ
+HD004935
+Hoàn thành
+Chi nhánh trung tâm
+Người tạo:
+Chủ
+Người nhận đơn:
+Quyên
+Giờ đến:
+26/09/2026 16:41
+Thời gian (giờ đi):
+26/09/2026 19:04
+Mã đặt hàng
+110-86
+Kênh bán:
+Khách đến trực tiếp
+Bảng giá:
+Bảng giá chung
+Phòng/bàn:
+BÀN 30
+Số khách:
+1
+SP010124
+Tiger bạc lon nhỏ 250ml
+59
+21,000
+21,000
+1,239,000
+SP000238
+Khăn lạnh
+3
+5,000
+5,000
+15,000
+SP010016
+Gỏi ốc giác
+1
+119,000
+119,000
+119,000
+SP010067
+Mực cơm chiên mắm
+3 lạng
+1
+165,000
+165,000
+165,000
+SP010101
+Cá dìa nấu khế
+5lạng nấu thơm cà
+1
+280,000
+280,000
+280,000
+SP010123
+Huda lon
+2
+18,000
+18,000
+36,000
+SP010038
+Cánh gà chiên mắm
+1
+99,000
+99,000
+99,000
+SP000241
+Thuốc con ngựa
+1
+35,000
+35,000
+35,000
+SP010211
+Khách mượn tiền
+20k
+1
+20,000
+20,000
+20,000
+Chưa có ghi chú
+Hàng đã hủy sau khi báo bếp: 3 Huda lon, 13 Tiger bạc lon nhỏ 250ml, 3 Khăn lạnh
+Tổng tiền hàng (70)
+2,008,000
+Giảm giá
+0
+Khách cần trả
+2,008,000
+Khách đã trả
+2,008,000`,
+  },
   {
     id: 'sample_combo_and_note',
     label: 'Mẫu Bill Có Ghi Chú Món & Combo (20/08)',
@@ -1077,42 +1447,6 @@ giá 459000
 Bia Tiger Lùn x10 lon 22.000đ 220.000đ
 Chiết khấu: 28.000đ
 Tổng cộng: 780.000đ`,
-  },
-  {
-    id: 'sample_cash_today',
-    label: 'Mẫu Bill Tiền Mặt (Bàn VIP 1)',
-    description: 'Bill tiền mặt gồm Bia Tiger Lùn, Ếch sapo, Gà chiên mắm, Khai vị',
-    rawText: `HÓA ĐƠN BÁN HÀNG - BÀN VIP 1
-Ngày: ${getCurrentBusinessDate()}
-Giờ vào: 18:30 - Giờ ra: 21:45
-Thanh toán: Tiền mặt
-1. Bia Tiger Lùn x24 lon 22.000đ 528.000đ
-2. Bia Sài Gòn Special x12 lon 18.000đ 216.000đ
-3. Nước ngọt Redbull x4 lon 18.000đ 72.000đ
-4. Khăn lạnh x10 cái 3.000đ 30.000đ
-5. Ếch sapo làm cay x2 phần 135.000đ 270.000đ
-6. Ếch chiên bơ x2 phần 125.000đ 250.000đ
-7. Gà chiên mắm x2 đĩa 165.000đ 330.000đ
-8. Đậu hũ chiên giòn x2 đĩa 45.000đ 90.000đ
-9. Lẩu thái hải sản x1 nồi 280.000đ 280.000đ
-Tổng cộng: 2.066.000đ`,
-  },
-  {
-    id: 'sample_transfer_qr',
-    label: 'Mẫu Bill Chuyển Khoản (VietQR)',
-    description: 'Tự nhận diện từ khóa VietQR / Chuyển khoản -> paymentType: "transfer"',
-    rawText: `HÓA ĐƠN THANH TOÁN - BÀN SÂN VƯỜN 05
-Ngày: ${getCurrentBusinessDate()}
-Giờ vào: 19:00 - Giờ ra: 22:30
-Hình thức: Chuyển khoản VietQR
-1. Bia Heineken Silver x30 lon 25k 750k
-2. Nước suối Aquafina x6 chai 10k 60k
-3. Coca Cola x5 lon 15k 75k
-4. Khoai tây chiên bơ x2 đĩa 55k 110k
-5. Ếch rơm x3 phần 140k 420k
-6. Lẩu gà lá é x2 nồi 260k 520k
-7. Mực nướng sa tế x2 đĩa 185k 370k
-Tổng cộng: 2.305.000đ`,
   },
   {
     id: 'sample_debt_customer',

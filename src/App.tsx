@@ -33,6 +33,7 @@ import {
   CheckCircle2,
   KeyRound,
   Lock,
+  Receipt,
 } from 'lucide-react';
 import {
   auth,
@@ -46,6 +47,8 @@ import {
   BillItemRecord,
   ProductRecord,
   DeductionRecord,
+  ReturnRecord,
+  PeriodPreset,
   StaffAccount,
   UserRole,
   ROLE_LABELS,
@@ -67,6 +70,7 @@ import {
   sanitizeId,
   truncateStr,
   getCurrentBusinessDate,
+  getYesterdayBusinessDate,
 } from './utils/parser';
 import {
   fetchGeminiStatus,
@@ -83,6 +87,7 @@ import {
   saveLocalMirror,
   fetchRtdbWorkspaceOnce,
   saveCategoriesToCloud,
+  saveDebtorsToCloud,
   saveRolePermissionsToCloud,
   renameOrReassignCategoryInCloud,
   saveStaffAccountToFirebase,
@@ -92,8 +97,10 @@ import {
   saveNewBillToCloud,
   updateBillAndItemsInCloud,
   deleteBillsBatchFromCloud,
+  saveExpenseDeductionToCloud,
   deleteDeductionsBatchFromCloud,
-  recordReturnDeductionToCloud,
+  recordItemReturnToCloud,
+  deleteReturnsBatchFromCloud,
 } from './services/dataService';
 import { AuthScreen } from './components/AuthScreen';
 import { RevenueColumnChart, DailyRevenuePoint } from './components/RevenueCharts';
@@ -109,10 +116,9 @@ import { GeminiKeyBar } from './components/GeminiKeyBar';
 
 type ActiveTab = ManagementTabId;
 
-type PeriodPreset = 'today' | 'week' | 'month' | 'all' | 'custom';
-
 export default function App() {
   const todayStr = getCurrentBusinessDate();
+  const yesterdayStr = getYesterdayBusinessDate();
 
   // Theme State
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -152,6 +158,8 @@ export default function App() {
         bills: cached.bills || [],
         billItems: cached.billItems || [],
         deductions: cached.deductions || [],
+        returns: cached.returns || [],
+        debtors: cached.debtors || [],
         staffAccounts: normalizeStaffAccountsWithFixedAdmin(
           cached.staffAccounts
         ),
@@ -166,6 +174,8 @@ export default function App() {
       bills: seed.bills,
       billItems: seed.billItems,
       deductions: seed.deductions,
+      returns: seed.returns,
+      debtors: seed.debtors,
       staffAccounts: normalizeStaffAccountsWithFixedAdmin(DEFAULT_STAFF_ACCOUNTS),
     };
   }, [ownerId]);
@@ -188,6 +198,12 @@ export default function App() {
   );
   const [deductions, setDeductions] = useState<DeductionRecord[]>(
     initialWorkspaceData.deductions
+  );
+  const [returns, setReturns] = useState<ReturnRecord[]>(
+    initialWorkspaceData.returns
+  );
+  const [debtors, setDebtors] = useState<string[]>(
+    initialWorkspaceData.debtors
   );
   const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>(
     initialWorkspaceData.staffAccounts
@@ -382,6 +398,8 @@ export default function App() {
       bills,
       billItems,
       deductions,
+      returns,
+      debtors,
       staffAccounts,
     });
   }, [
@@ -393,6 +411,8 @@ export default function App() {
     bills,
     billItems,
     deductions,
+    returns,
+    debtors,
     staffAccounts,
   ]);
 
@@ -416,6 +436,8 @@ export default function App() {
         if (cloudSnap.bills) setBills(cloudSnap.bills);
         if (cloudSnap.billItems) setBillItems(cloudSnap.billItems);
         if (cloudSnap.deductions) setDeductions(cloudSnap.deductions);
+        if (cloudSnap.returns) setReturns(cloudSnap.returns);
+        if (cloudSnap.debtors) setDebtors(cloudSnap.debtors);
       } else if (cloudSnap.rolePermissions) {
         setRolePermissions({
           ...DEFAULT_ROLE_PERMISSIONS,
@@ -491,6 +513,7 @@ export default function App() {
     const qItems = query(collection(db, 'bill_items'), where('ownerId', '==', uid));
     const qProducts = query(collection(db, 'products'), where('ownerId', '==', uid));
     const qDeductions = query(collection(db, 'deductions'), where('ownerId', '==', uid));
+    const qReturns = query(collection(db, 'returns'), where('ownerId', '==', uid));
     const qStaff = query(collection(db, 'staff_accounts'), where('ownerId', '==', uid));
 
     const unsubBills = onSnapshot(
@@ -610,6 +633,35 @@ export default function App() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'deductions')
     );
 
+    const unsubReturns = onSnapshot(
+      qReturns,
+      (snap) => {
+        if (!snap.empty || workspaceInitialized) {
+          const loaded: ReturnRecord[] = snap.docs.map((d) => {
+            const data = d.data();
+            return {
+              id: d.id,
+              ownerId: data.ownerId,
+              billId: data.billId,
+              billCode: data.billCode,
+              billDate: data.billDate,
+              returnDate: data.returnDate || data.billDate,
+              productName: data.productName,
+              category: data.category,
+              quantity: Number(data.quantity) || 1,
+              unitPrice: Number(data.unitPrice) || 0,
+              amount: Number(data.amount) || 0,
+              note: data.note || '',
+              createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+              updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+            };
+          });
+          setReturns(loaded);
+        }
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'returns')
+    );
+
     const unsubStaff = onSnapshot(
       qStaff,
       (snap) => {
@@ -666,6 +718,7 @@ export default function App() {
       unsubItems();
       unsubProducts();
       unsubDeductions();
+      unsubReturns();
       unsubStaff();
     };
   }, [authReady, firebaseUser?.uid, workspaceInitialized]);
@@ -674,6 +727,7 @@ export default function App() {
   const isDateInPeriod = (dateStr: string): boolean => {
     if (periodPreset === 'all') return true;
     if (periodPreset === 'today') return dateStr === todayStr;
+    if (periodPreset === 'yesterday') return dateStr === yesterdayStr;
     if (periodPreset === 'week') {
       const target = new Date(dateStr + 'T00:00:00').getTime();
       const now = new Date(todayStr + 'T00:00:00').getTime();
@@ -693,16 +747,17 @@ export default function App() {
 
   const periodLabel = useMemo(() => {
     if (periodPreset === 'today') return `Hôm nay (${todayStr})`;
+    if (periodPreset === 'yesterday') return `Hôm qua (${yesterdayStr})`;
     if (periodPreset === 'week') return '7 ngày gần nhất';
     if (periodPreset === 'month') return `Tháng ${todayStr.slice(5, 7)}/${todayStr.slice(0, 4)}`;
     if (periodPreset === 'custom') return `Từ ${customStartDate} đến ${customEndDate}`;
     return 'Toàn bộ thời gian';
-  }, [periodPreset, todayStr, customStartDate, customEndDate]);
+  }, [periodPreset, todayStr, yesterdayStr, customStartDate, customEndDate]);
 
   // Filtered Bills & Deductions for Active Period + Search + Category + Payment
   const periodBills = useMemo(() => {
     return bills.filter((b) => isDateInPeriod(b.billDate));
-  }, [bills, periodPreset, customStartDate, customEndDate, todayStr]);
+  }, [bills, periodPreset, customStartDate, customEndDate, todayStr, yesterdayStr]);
 
   const periodBillIds = useMemo(() => new Set(periodBills.map((b) => b.id)), [periodBills]);
 
@@ -711,10 +766,8 @@ export default function App() {
   }, [billItems, periodBillIds]);
 
   const periodDeductions = useMemo(() => {
-    return deductions.filter(
-      (d) => isDateInPeriod(d.deductionDate) || periodBillIds.has(d.billId)
-    );
-  }, [deductions, periodBillIds, periodPreset, customStartDate, customEndDate]);
+    return deductions.filter((d) => isDateInPeriod(d.deductionDate));
+  }, [deductions, periodPreset, customStartDate, customEndDate, todayStr, yesterdayStr]);
 
   // Advanced Filtered Bills for Table Display
   const displayedBills = useMemo(() => {
@@ -764,7 +817,8 @@ export default function App() {
 
     const netCashRevenue = grossCash - totalDeductions;
     const netTransferRevenue = grossTransfer;
-    const netDayTotal = grossCash + grossTransfer - totalDeductions - totalDebt;
+    // Doanh thu tổng ngày = Tiền mặt + Chuyển khoản - Khoản trừ (Công nợ tính riêng)
+    const netDayTotal = grossCash + grossTransfer - totalDeductions;
     const totalAllBillsGross = grossCash + grossTransfer + totalDebt;
 
     return {
@@ -825,7 +879,7 @@ export default function App() {
           deduction: vals.deduction,
           debt: vals.debt,
           netCash: vals.cash - vals.deduction,
-          netDayTotal: vals.cash + vals.transfer - vals.deduction - vals.debt,
+          netDayTotal: vals.cash + vals.transfer - vals.deduction,
         };
       });
   }, [periodBills, periodDeductions]);
@@ -950,6 +1004,36 @@ export default function App() {
     setStaffAccounts((prev) => prev.filter((a) => !ids.includes(a.id)));
     await deleteStaffAccountsFromFirebase(ownerId, ids);
     showToast(`Đã xóa ${ids.length} tài khoản nhân viên phụ khỏi Firebase.`);
+  };
+
+  // Effective Debtors list (combined from saved debtors and any debtorName on bills)
+  const effectiveDebtors = useMemo(() => {
+    const result: string[] = [];
+    const seen = new Set<string>();
+    const addDebtor = (name?: string) => {
+      const clean = (name || '').trim();
+      if (!clean) return;
+      const lower = clean.toLowerCase();
+      if (!seen.has(lower)) {
+        seen.add(lower);
+        result.push(clean);
+      }
+    };
+    debtors.forEach(addDebtor);
+    bills.forEach((b) => addDebtor(b.debtorName));
+    return result;
+  }, [debtors, bills]);
+
+  const handleAddDebtor = async (newDebtorName: string) => {
+    const clean = newDebtorName.trim();
+    if (!clean) return;
+    setWorkspaceInitialized(true);
+    if (!effectiveDebtors.some((d) => d.toLowerCase() === clean.toLowerCase())) {
+      const next = [...effectiveDebtors, clean];
+      setDebtors(next);
+      await saveDebtorsToCloud(ownerId, next);
+      showToast(`Đã thêm khách nợ "${clean}" vào Quản lý Công nợ!`);
+    }
   };
 
   // Always ensure categories include any category present in products or billItems
@@ -1162,6 +1246,19 @@ export default function App() {
       await saveCategoriesToCloud(ownerId, mergedCatsToSave);
     }
 
+    if (params.paymentType === 'debt' && params.debtorName.trim()) {
+      const cleanDebtor = params.debtorName.trim();
+      if (
+        !effectiveDebtors.some(
+          (d) => d.toLowerCase() === cleanDebtor.toLowerCase()
+        )
+      ) {
+        const nextDebtors = [...effectiveDebtors, cleanDebtor];
+        setDebtors(nextDebtors);
+        await saveDebtorsToCloud(ownerId, nextDebtors);
+      }
+    }
+
     const res = await saveNewBillToCloud({
       ownerId,
       billDate: params.billDate,
@@ -1214,7 +1311,8 @@ export default function App() {
   const handleUpdateBillItemPriceInline = async (
     bill: BillRecord,
     targetItem: BillItemRecord,
-    newUnitPrice: number
+    newUnitPrice: number,
+    newNote?: string
   ) => {
     const cleanPrice = Math.max(0, Math.round(Number(newUnitPrice) || 0));
     const currentItems = billItems.filter((it) => it.billId === bill.id);
@@ -1223,18 +1321,29 @@ export default function App() {
         ? {
             ...it,
             unitPrice: cleanPrice,
+            note: newNote !== undefined ? newNote : it.note,
             subtotal: it.quantity * cleanPrice,
             updatedAtMs: Date.now(),
           }
         : it
     );
-    const newTotal = updatedItems.reduce(
+    const newSubtotal = updatedItems.reduce(
       (sum, it) => sum + Math.round(it.quantity * it.unitPrice),
       0
     );
+    const newTotal = Math.max(0, newSubtotal - (bill.discountAmount || 0));
+    const summaryStr = truncateStr(
+      updatedItems
+        .map((it) => `${it.productName}${it.note ? ` (${it.note})` : ''} x${it.quantity}`)
+        .join(', '),
+      1000,
+      ''
+    );
     const updatedBill: BillRecord = {
       ...bill,
+      subtotalAmount: newSubtotal,
       totalAmount: newTotal,
+      itemsSummary: summaryStr,
       updatedAtMs: Date.now(),
     };
     await handleSaveEditedBill(updatedBill, updatedItems);
@@ -1245,12 +1354,14 @@ export default function App() {
     setWorkspaceInitialized(true);
     const bItems = billItems.filter((it) => it.billId === bill.id);
     const bDeds = deductions.filter((d) => d.billId === bill.id);
+    const bRets = returns.filter((r) => r.billId === bill.id);
 
     setBills((prev) => prev.filter((b) => b.id !== bill.id));
     setBillItems((prev) => prev.filter((it) => it.billId !== bill.id));
     setDeductions((prev) => prev.filter((d) => d.billId !== bill.id));
+    setReturns((prev) => prev.filter((r) => r.billId !== bill.id));
 
-    await deleteBillsBatchFromCloud(ownerId, [bill.id], bItems, bDeds);
+    await deleteBillsBatchFromCloud(ownerId, [bill.id], bItems, bDeds, bRets);
     showToast(`Đã xóa hóa đơn ${bill.billCode} khỏi Firebase.`);
   };
 
@@ -1311,11 +1422,35 @@ export default function App() {
     );
   };
 
+  const handleAddExpenseDeduction = async (params: {
+    deductionDate: string;
+    expenseTitle: string;
+    category: string;
+    amount: number;
+    note: string;
+  }) => {
+    setWorkspaceInitialized(true);
+    const ded = await saveExpenseDeductionToCloud({
+      ownerId,
+      deductionDate: params.deductionDate,
+      expenseTitle: params.expenseTitle,
+      category: params.category,
+      amount: params.amount,
+      note: params.note,
+    });
+    setDeductions((prev) => [ded, ...prev]);
+    showToast(
+      `Đã lưu khoản trừ "${params.expenseTitle}" (-${formatVND(
+        params.amount
+      )}) vào ngày ${params.deductionDate}!`
+    );
+  };
+
   const handleRecordReturn = async (params: {
     bill: BillRecord;
     billItem: BillItemRecord;
     returnQty: number;
-    deductionDate: string;
+    returnDate: string;
     note: string;
   }) => {
     setWorkspaceInitialized(true);
@@ -1325,17 +1460,17 @@ export default function App() {
         params.billItem.productName.toLowerCase().trim()
     );
 
-    const res = await recordReturnDeductionToCloud({
+    const res = await recordItemReturnToCloud({
       ownerId,
       bill: params.bill,
       billItem: params.billItem,
       returnQty: params.returnQty,
-      deductionDate: params.deductionDate,
+      returnDate: params.returnDate,
       note: params.note,
       existingProduct: matchingProd,
     });
 
-    setDeductions((prev) => [res.deduction, ...prev]);
+    setReturns((prev) => [res.returnRecord, ...prev]);
     setBills((prev) =>
       prev.map((b) => (b.id === res.updatedBill.id ? res.updatedBill : b))
     );
@@ -1348,9 +1483,9 @@ export default function App() {
       );
     }
     showToast(
-      `Đã ghi nhận hoàn trả ${params.returnQty} ${params.billItem.productName} (-${formatVND(
-        res.deduction.amount
-      )}) lên Firebase!`
+      `Đã ghi nhận hoàn trả ${params.returnQty} ${params.billItem.productName} (${formatVND(
+        res.returnRecord.amount
+      )}) tại tab Hoàn trả (Không tự động cộng vào Khoản trừ)!`
     );
   };
 
@@ -1361,6 +1496,15 @@ export default function App() {
     setDeductions((prev) => prev.filter((d) => !idSet.has(d.id)));
     await deleteDeductionsBatchFromCloud(ownerId, deductionIds);
     showToast(`Đã xóa ${deductionIds.length} khoản trừ khỏi Firebase.`);
+  };
+
+  const handleDeleteReturnsBatch = async (returnIds: string[]) => {
+    if (!canDelete || returnIds.length === 0) return;
+    setWorkspaceInitialized(true);
+    const idSet = new Set(returnIds);
+    setReturns((prev) => prev.filter((r) => !idSet.has(r.id)));
+    await deleteReturnsBatchFromCloud(ownerId, returnIds);
+    showToast(`Đã xóa ${returnIds.length} bản ghi hoàn trả khỏi Firebase.`);
   };
 
   // Product Catalog Handlers
@@ -1599,7 +1743,10 @@ export default function App() {
         setBills(fresh.bills);
         setBillItems(fresh.billItems);
         setDeductions(fresh.deductions);
+        setReturns(fresh.returns);
+        setDebtors(fresh.debtors);
         await saveCategoriesToCloud(ownerId, stdCats);
+        await saveDebtorsToCloud(ownerId, fresh.debtors);
         for (const p of fresh.products) {
           await createOrUpdateProductInFirestore(ownerId, p, false);
         }
@@ -1653,8 +1800,14 @@ export default function App() {
       icon: <CreditCard className="w-4 h-4" />,
     },
     {
+      id: 'deductions',
+      label: 'Khoản trừ (Chi trong ngày)',
+      shortLabel: 'Khoản trừ',
+      icon: <Receipt className="w-4 h-4" />,
+    },
+    {
       id: 'returns',
-      label: 'Hoàn trả & Khoản trừ',
+      label: 'Hoàn trả (Bia / Món thừa)',
       shortLabel: 'Hoàn trả',
       icon: <RotateCcw className="w-4 h-4" />,
     },
@@ -1986,6 +2139,7 @@ export default function App() {
                     {(
                       [
                         { id: 'today', label: 'Hôm nay' },
+                        { id: 'yesterday', label: 'Hôm qua' },
                         { id: 'week', label: 'Theo Tuần' },
                         { id: 'month', label: 'Theo Tháng' },
                         { id: 'all', label: 'Tất cả' },
@@ -2073,19 +2227,19 @@ export default function App() {
 
                 <div className="p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs">
                   <div className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
-                    3. Khoản trừ (Trả món)
+                    3. Khoản trừ (Chi trong ngày)
                   </div>
                   <div className="mt-1 text-base sm:text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 truncate">
                     -{formatVND(financialSummary.totalDeductions)}
                   </div>
                   <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                    {periodDeductions.length} lượt hoàn trả
+                    {periodDeductions.length} khoản chi tiêu ngày
                   </div>
                 </div>
 
                 <div className="p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs">
                   <div className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
-                    4. Công nợ chưa thu
+                    4. Công nợ (Tính riêng)
                   </div>
                   <div className="mt-1 text-base sm:text-2xl font-bold font-mono text-amber-600 dark:text-amber-400 truncate">
                     {formatVND(financialSummary.totalDebt)}
@@ -2096,7 +2250,7 @@ export default function App() {
                         (b) => b.paymentType === 'debt' && b.debtStatus !== 'paid'
                       ).length
                     }{' '}
-                    bill ghi nợ
+                    bill ghi nợ (SL món vẫn tính vào TK ngày)
                   </div>
                 </div>
               </div>
@@ -2109,7 +2263,7 @@ export default function App() {
                       Đối Soát Doanh Thu Thực Nhận & Tổng Ngày
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Công thức: Tiền mặt + Chuyển khoản - Khoản trừ - Công nợ
+                      Công thức: Doanh thu tổng ngày = Tiền mặt + Chuyển khoản - Khoản trừ (Công nợ tính thành phần riêng)
                     </p>
                   </div>
 
@@ -2193,21 +2347,21 @@ export default function App() {
                       </span>
                     </div>
                     <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-800">
-                      <span>(-) Tổng Khoản trừ (Hoàn trả món):</span>
+                      <span>(-) Tổng Khoản trừ (Chi tiêu trong ngày):</span>
                       <span className="font-semibold text-rose-600">
                         -{formatVND(financialSummary.totalDeductions)}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-800">
-                      <span>(-) Tổng Công nợ chưa thu:</span>
-                      <span className="font-semibold text-amber-600">
-                        -{formatVND(financialSummary.totalDebt)}
-                      </span>
-                    </div>
                     <div className="flex items-center justify-between pt-2 text-sm font-bold text-slate-900 dark:text-white">
-                      <span>(=) TỔNG NGÀY:</span>
+                      <span>(=) DOANH THU TỔNG NGÀY (Tiền mặt + CK - Khoản trừ):</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
                         {formatVND(financialSummary.netDayTotal)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between pt-2 border-t border-dashed border-slate-200 dark:border-slate-800 text-xs text-amber-600 dark:text-amber-400">
+                      <span>(Thành phần riêng) Công nợ trong kỳ:</span>
+                      <span className="font-semibold">
+                        {formatVND(financialSummary.totalDebt)}
                       </span>
                     </div>
                   </div>
@@ -2517,6 +2671,7 @@ export default function App() {
               canWrite={canWrite}
               categories={effectiveCategories}
               products={products}
+              existingDebtors={effectiveDebtors}
               autoAddProducts={autoAddProducts}
               onToggleAutoAddProducts={setAutoAddProducts}
               onSaveExtractedBill={handleSaveExtractedBill}
@@ -2538,6 +2693,33 @@ export default function App() {
               products={products}
               categories={effectiveCategories}
               periodLabel={periodLabel}
+              periodType={
+                periodPreset === 'today'
+                  ? 'day'
+                  : periodPreset === 'yesterday'
+                  ? 'yesterday'
+                  : periodPreset === 'week'
+                  ? 'week'
+                  : periodPreset === 'month'
+                  ? 'month'
+                  : 'all'
+              }
+              selectedDate={
+                periodPreset === 'today'
+                  ? todayStr
+                  : periodPreset === 'yesterday'
+                  ? yesterdayStr
+                  : customStartDate
+              }
+              todayBusinessStr={todayStr}
+              yesterdayBusinessStr={yesterdayStr}
+              onChangePeriod={(type) => {
+                if (type === 'day') setPeriodPreset('today');
+                else if (type === 'yesterday') setPeriodPreset('yesterday');
+                else if (type === 'week') setPeriodPreset('week');
+                else if (type === 'month') setPeriodPreset('month');
+                else setPeriodPreset('all');
+              }}
               canWrite={canWrite}
               onDeleteAllMenuProducts={handleRequestDeleteAllMenuProducts}
               onDeleteCategoryMenuProducts={handleRequestDeleteCategoryMenuProducts}
@@ -2554,6 +2736,8 @@ export default function App() {
               bills={bills}
               billItems={billItems}
               products={products}
+              debtors={effectiveDebtors}
+              onAddDebtor={handleAddDebtor}
               canWrite={canWrite}
               canDelete={canDelete}
               onEditBill={(bill) => setEditingBill(bill)}
@@ -2571,17 +2755,42 @@ export default function App() {
             />
           )}
 
-          {/* TAB 5: RETURNS & DEDUCTIONS */}
-          {activeTab === 'returns' && allowedTabs.includes('returns') && (
+          {/* TAB 5A: DEDUCTIONS (DAILY EXPENSES) */}
+          {activeTab === 'deductions' && allowedTabs.includes('deductions') && (
             <ReturnsDeductionsTab
+              mode="deductions"
               bills={bills}
               billItems={billItems}
               deductions={deductions}
+              returns={returns}
               canWrite={canWrite}
               canDelete={canDelete}
               preselectedBillId={preselectedReturnBillId}
+              onAddExpenseDeduction={handleAddExpenseDeduction}
               onRecordReturn={handleRecordReturn}
               onDeleteDeductionsBatch={handleDeleteDeductionsBatch}
+              onDeleteReturnsBatch={handleDeleteReturnsBatch}
+              onDeleteAllMenuProducts={handleRequestDeleteAllMenuProducts}
+              menuProductsCount={products.length}
+              requestConfirm={requestConfirm}
+            />
+          )}
+
+          {/* TAB 5B: RETURNS (CUSTOMER BEER / DISH RETURNS) */}
+          {activeTab === 'returns' && allowedTabs.includes('returns') && (
+            <ReturnsDeductionsTab
+              mode="returns"
+              bills={bills}
+              billItems={billItems}
+              deductions={deductions}
+              returns={returns}
+              canWrite={canWrite}
+              canDelete={canDelete}
+              preselectedBillId={preselectedReturnBillId}
+              onAddExpenseDeduction={handleAddExpenseDeduction}
+              onRecordReturn={handleRecordReturn}
+              onDeleteDeductionsBatch={handleDeleteDeductionsBatch}
+              onDeleteReturnsBatch={handleDeleteReturnsBatch}
               onDeleteAllMenuProducts={handleRequestDeleteAllMenuProducts}
               menuProductsCount={products.length}
               requestConfirm={requestConfirm}
@@ -2745,6 +2954,7 @@ export default function App() {
           items={billItems.filter((it) => it.billId === editingBill.id)}
           categories={effectiveCategories}
           products={products}
+          debtors={effectiveDebtors}
           onClose={() => setEditingBill(null)}
           onSaveEdit={handleSaveEditedBill}
           requestConfirm={requestConfirm}

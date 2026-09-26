@@ -42,6 +42,7 @@ interface OcrScannerTabProps {
   canWrite: boolean;
   categories: string[];
   products: ProductRecord[];
+  existingDebtors: string[];
   geminiApiKey: string;
   geminiStatus: GeminiKeyStatus;
   onSaveGeminiKey: (newKey: string) => Promise<void>;
@@ -69,6 +70,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   canWrite,
   categories,
   products,
+  existingDebtors,
   geminiApiKey,
   geminiStatus,
   onSaveGeminiKey,
@@ -120,6 +122,9 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [checkOutTime, setCheckOutTime] = useState<string>(
     initialParsed.current.billInfo.checkOutTime || ''
   );
+  const [tableName, setTableName] = useState<string>(
+    initialParsed.current.billInfo.tableName || ''
+  );
   const [discountAmount, setDiscountAmount] = useState<number>(
     initialParsed.current.billInfo.discountAmount || 0
   );
@@ -129,6 +134,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [debtorName, setDebtorName] = useState<string>(
     initialParsed.current.billInfo.debtorName || ''
   );
+  const [debtorSelectMode, setDebtorSelectMode] = useState<'existing' | 'new'>('new');
   const [note, setNote] = useState<string>('');
   const [items, setItems] = useState<ExtractedBillItem[]>(
     initialParsed.current.items
@@ -153,6 +159,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         : {}),
       checkInTime: checkInTime || '',
       checkOutTime: checkOutTime || '',
+      ...(tableName ? { tableName } : {}),
       paymentType,
       debtorName: paymentType === 'debt' ? debtorName : '',
       subtotalAmount,
@@ -174,6 +181,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setRawCalendarDate(result.billInfo.rawDate);
     setCheckInTime(result.billInfo.checkInTime || '');
     setCheckOutTime(result.billInfo.checkOutTime || '');
+    setTableName(result.billInfo.tableName || '');
     setDiscountAmount(Math.max(0, Math.round(result.billInfo.discountAmount || 0)));
     setPaymentType(result.billInfo.paymentType || 'cash');
     setDebtorName(
@@ -554,18 +562,20 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       return;
     }
     if (paymentType === 'debt' && !debtorName.trim()) {
-      setErrorMsg('Vui lòng nhập Tên người nợ đối với hóa đơn Công nợ.');
+      setErrorMsg('Vui lòng chọn hoặc nhập Tên người nợ đối với hóa đơn Công nợ.');
       return;
     }
 
+    const finalNote = [tableName.trim(), note.trim()].filter(Boolean).join(' - ');
+
     requestConfirm({
       title: 'Xác nhận Lưu Hóa Đơn Vào Hệ Thống',
-      message: `Bạn có chắc chắn muốn lưu hóa đơn ca ngày ${billDate} (${
-        validItems.length
-      } món, Chiết khấu: ${formatVND(safeDiscount)}, Tổng cộng: ${formatVND(
+      message: `Bạn có chắc chắn muốn lưu hóa đơn ca ngày ${billDate}${
+        tableName.trim() ? ` (${tableName.trim()})` : ''
+      } (${validItems.length} món, Chiết khấu: ${formatVND(safeDiscount)}, Tổng cộng: ${formatVND(
         totalAmount
-      )}, Hình thức: ${
-        PAYMENT_LABELS[paymentType]
+      )}, Hình thức: ${PAYMENT_LABELS[paymentType]}${
+        paymentType === 'debt' ? ` - Người nợ: ${debtorName.trim()}` : ''
       }) vào Firebase và cộng số lượng bán theo thời gian thực không?`,
       confirmLabel: 'Xác nhận Lưu Bill',
       variant: 'primary',
@@ -581,13 +591,15 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
             discountAmount: safeDiscount,
             paymentType,
             debtorName: paymentType === 'debt' ? debtorName.trim() : '',
-            note,
+            note: finalNote,
             items: validItems,
           });
           setSuccessMsg(
-            `Đã lưu hóa đơn ca ngày ${billDate} (Tổng cộng: ${formatVND(
-              totalAmount
-            )}) vào Firebase và cộng số lượng bán theo thời gian thực!`
+            `Đã lưu hóa đơn ca ngày ${billDate}${
+              tableName.trim() ? ` (${tableName.trim()})` : ''
+            } (Tổng cộng: ${formatVND(totalAmount)}, Hình thức: ${
+              PAYMENT_LABELS[paymentType]
+            }) vào Firebase và cộng số lượng sản phẩm bán trong ngày!`
           );
         } catch (err: any) {
           setErrorMsg(err?.message || 'Lỗi khi lưu hóa đơn.');
@@ -897,7 +909,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               </div>
             )}
 
-            {/* Bill Info Controls: Date, CheckIn, CheckOut, Discount, Payment, Debtor */}
+            {/* Bill Info Controls: Date, CheckIn, CheckOut, Table, Discount, Note, Manual Payment & Debt */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
@@ -945,6 +957,19 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Phòng / Bàn (Tự động hoặc nhập)
+                </label>
+                <input
+                  type="text"
+                  value={tableName}
+                  onChange={(e) => setTableName(e.target.value)}
+                  placeholder="VD: Bàn 24, Bàn 30..."
+                  className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Chiết khấu / Giảm giá (₫)
                 </label>
                 <div className="relative">
@@ -963,40 +988,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Hình thức thanh toán
-                </label>
-                <select
-                  value={paymentType}
-                  onChange={(e) => setPaymentType(e.target.value as PaymentType)}
-                  className="w-full h-10 px-3 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                >
-                  <option value="cash">Tiền mặt (Mặc định)</option>
-                  <option value="transfer">Chuyển khoản (CK)</option>
-                  <option value="debt">Công nợ / Ghi nợ</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Người nợ (Nếu ghi nợ)
-                </label>
-                <input
-                  type="text"
-                  disabled={paymentType !== 'debt'}
-                  value={paymentType === 'debt' ? debtorName : ''}
-                  onChange={(e) => setDebtorName(e.target.value)}
-                  placeholder={
-                    paymentType === 'debt'
-                      ? 'Nhập tên khách nợ...'
-                      : 'Không áp dụng (Tiền mặt/CK)'
-                  }
-                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white disabled:opacity-50"
-                />
-              </div>
-
-              <div>
+              <div className="sm:col-span-2">
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Ghi chú chung của Bill
                 </label>
@@ -1004,10 +996,159 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   type="text"
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  placeholder="VD: Bàn VIP 2, khách quen..."
+                  placeholder="VD: Khách quen, ghi chú thanh toán..."
                   className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                 />
               </div>
+            </div>
+
+            {/* Manual Payment Type & Debt Selection Box */}
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div>
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                    Hình thức thanh toán (Chọn thủ công — Mặc định: Tiền mặt)
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Công nợ tính thành phần riêng, nhưng số lượng món bán trong công nợ vẫn cộng vào thống kê sản phẩm trong ngày.
+                  </span>
+                </div>
+
+                <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-xs font-semibold text-amber-800 dark:text-amber-300 cursor-pointer select-none shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={paymentType === 'debt'}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setPaymentType('debt');
+                        if (existingDebtors.length > 0 && !debtorName) {
+                          setDebtorSelectMode('existing');
+                        } else {
+                          setDebtorSelectMode('new');
+                        }
+                      } else {
+                        setPaymentType('cash');
+                      }
+                    }}
+                    className="w-4 h-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                  />
+                  <span>Tích chọn Công nợ</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                {(['cash', 'transfer', 'debt'] as PaymentType[]).map((pt) => (
+                  <button
+                    key={pt}
+                    type="button"
+                    onClick={() => {
+                      setPaymentType(pt);
+                      if (pt === 'debt' && existingDebtors.length > 0 && !debtorName) {
+                        setDebtorSelectMode('existing');
+                      }
+                    }}
+                    className={`h-9 px-3 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
+                      paymentType === pt
+                        ? pt === 'debt'
+                          ? 'bg-amber-600 text-white border-amber-600'
+                          : pt === 'transfer'
+                          ? 'bg-sky-600 text-white border-sky-600'
+                          : 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {pt === 'cash'
+                      ? 'Tiền mặt (Mặc định)'
+                      : pt === 'transfer'
+                      ? 'Chuyển khoản'
+                      : 'Công nợ / Ghi nợ'}
+                  </button>
+                ))}
+              </div>
+
+              {paymentType === 'debt' && (
+                <div className="pt-2 border-t border-amber-200/70 dark:border-amber-900/50 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                      Chọn người nợ hoặc tạo người nợ mới (Tự động vào Quản lý Công nợ):
+                    </span>
+                    {existingDebtors.length > 0 && (
+                      <div className="inline-flex rounded-lg p-0.5 bg-amber-100/70 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDebtorSelectMode('existing');
+                            if (!debtorName && existingDebtors[0]) {
+                              setDebtorName(existingDebtors[0]);
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
+                            debtorSelectMode === 'existing'
+                              ? 'bg-white dark:bg-slate-900 text-amber-800 dark:text-amber-300 shadow-2xs'
+                              : 'text-amber-700 dark:text-amber-400'
+                          }`}
+                        >
+                          Chọn người nợ có sẵn ({existingDebtors.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDebtorSelectMode('new');
+                            setDebtorName('');
+                          }}
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
+                            debtorSelectMode === 'new'
+                              ? 'bg-white dark:bg-slate-900 text-amber-800 dark:text-amber-300 shadow-2xs'
+                              : 'text-amber-700 dark:text-amber-400'
+                          }`}
+                        >
+                          + Tạo người nợ mới
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {existingDebtors.length > 0 && debtorSelectMode === 'existing' ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <select
+                        value={existingDebtors.includes(debtorName) ? debtorName : ''}
+                        onChange={(e) => {
+                          if (e.target.value === '__NEW__') {
+                            setDebtorSelectMode('new');
+                            setDebtorName('');
+                          } else {
+                            setDebtorName(e.target.value);
+                          }
+                        }}
+                        className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      >
+                        <option value="">-- Chọn người nợ trong danh sách --</option>
+                        {existingDebtors.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                        <option value="__NEW__">+ Tạo người nợ mới...</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={debtorName}
+                        onChange={(e) => setDebtorName(e.target.value)}
+                        placeholder="Hoặc sửa / nhập tên người nợ..."
+                        className="w-full h-10 px-3 text-xs rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      value={debtorName}
+                      onChange={(e) => setDebtorName(e.target.value)}
+                      placeholder="Nhập tên người nợ mới (VD: Anh Hoàng, Chị Lan...) -> Sẽ tự động tạo trong Quản lý Công nợ"
+                      className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                    />
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Quick Gemini AI Add Item to Bill Bar */}

@@ -21,6 +21,7 @@ interface BillEditModalProps {
   items: BillItemRecord[];
   categories: string[];
   products: ProductRecord[];
+  debtors?: string[];
   onClose: () => void;
   onSaveEdit: (updatedBill: BillRecord, updatedItems: BillItemRecord[]) => Promise<void>;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
@@ -31,6 +32,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   items,
   categories,
   products,
+  debtors = [],
   onClose,
   onSaveEdit,
   requestConfirm,
@@ -345,27 +347,56 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               </label>
               <select
                 value={paymentType}
-                onChange={(e) => setPaymentType(e.target.value as PaymentType)}
+                onChange={(e) => {
+                  const nextType = e.target.value as PaymentType;
+                  setPaymentType(nextType);
+                  if (nextType === 'debt' && debtStatus === 'none') {
+                    setDebtStatus('unpaid');
+                  }
+                }}
                 className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
               >
-                <option value="cash">Tiền mặt (cash)</option>
-                <option value="transfer">Chuyển khoản (transfer)</option>
-                <option value="debt">Công nợ (debt)</option>
+                <option value="cash">Tiền mặt (Đã thanh toán)</option>
+                <option value="transfer">Chuyển khoản (Đã thanh toán)</option>
+                <option value="debt">Công nợ (Chưa thanh toán)</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Tên người nợ
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Người nợ (Chọn hoặc nhập mới)
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={paymentType === 'debt'}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setPaymentType('debt');
+                        if (debtStatus === 'none') setDebtStatus('unpaid');
+                      } else {
+                        setPaymentType('cash');
+                      }
+                    }}
+                    className="w-3.5 h-3.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                  />
+                  <span>Tích Công Nợ</span>
+                </label>
+              </div>
               <input
                 type="text"
-                disabled={paymentType !== 'debt'}
-                value={paymentType === 'debt' ? debtorName : ''}
+                list="vqbill-edit-debtors-list"
+                value={debtorName}
                 onChange={(e) => setDebtorName(e.target.value)}
-                placeholder="Nhập tên khách nợ..."
-                className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white disabled:opacity-50"
+                placeholder="Chọn hoặc nhập tên người nợ..."
+                className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
               />
+              <datalist id="vqbill-edit-debtors-list">
+                {debtors.map((d) => (
+                  <option key={d} value={d} />
+                ))}
+              </datalist>
             </div>
 
             <div>
@@ -376,7 +407,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                 type="text"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Ghi chú bàn, khách hàng..."
+                placeholder="Ghi chú bàn, khách hàng, yêu cầu..."
                 className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
               />
             </div>

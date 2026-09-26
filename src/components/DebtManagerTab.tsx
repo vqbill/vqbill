@@ -6,7 +6,10 @@ import {
   RotateCcw,
   Search,
   UserCheck,
+  UserPlus,
+  Users,
   Trash2,
+  MessageSquareText,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -21,13 +24,16 @@ interface DebtManagerTabProps {
   bills: BillRecord[];
   billItems: BillItemRecord[];
   products: ProductRecord[];
+  debtors?: string[];
+  onAddDebtor?: (name: string) => Promise<void>;
   canWrite: boolean;
   canDelete: boolean;
   onEditBill: (bill: BillRecord) => void;
   onUpdateBillItemPriceInline: (
     bill: BillRecord,
     item: BillItemRecord,
-    newUnitPrice: number
+    newUnitPrice: number,
+    newNote?: string
   ) => Promise<void>;
   onJumpToReturnForBill: (bill: BillRecord) => void;
   onSettleDebt: (bill: BillRecord, settledVia: 'cash' | 'transfer') => Promise<void>;
@@ -42,6 +48,8 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   bills,
   billItems,
   products,
+  debtors = [],
+  onAddDebtor,
   canWrite,
   canDelete,
   onEditBill,
@@ -50,18 +58,34 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   onSettleDebt,
   onDeleteBill,
   onDeleteAllDebtBills,
-  onDeleteAllMenuProducts,
-  menuProductsCount,
   requestConfirm,
 }) => {
   const detailSectionRef = useRef<HTMLDivElement | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedDebtorFilter, setSelectedDebtorFilter] = useState<string>('ALL');
+  const [newDebtorInput, setNewDebtorInput] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'paid'>('all');
   const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
   const [isSettling, setIsSettling] = useState(false);
   const [inlinePrices, setInlinePrices] = useState<Record<string, number>>({});
+  const [inlineNotes, setInlineNotes] = useState<Record<string, string>>({});
 
   const allowDeleteDebt = canDelete || canWrite;
+
+  const allDebtorNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of debtors) {
+      const clean = d.trim();
+      if (clean) map.set(clean.toLowerCase(), clean);
+    }
+    for (const b of bills) {
+      const clean = (b.debtorName || '').trim();
+      if (clean && !map.has(clean.toLowerCase())) {
+        map.set(clean.toLowerCase(), clean);
+      }
+    }
+    return Array.from(map.values());
+  }, [debtors, bills]);
 
   const debtBills = useMemo(() => {
     return bills
@@ -72,6 +96,15 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
           b.debtStatus === 'paid' ||
           b.debtorName.trim() !== ''
       )
+      .filter((b) => {
+        if (selectedDebtorFilter !== 'ALL') {
+          return (
+            b.debtorName.trim().toLowerCase() ===
+            selectedDebtorFilter.trim().toLowerCase()
+          );
+        }
+        return true;
+      })
       .filter((b) => {
         const isCompleted = b.debtStatus === 'paid' || b.paymentType !== 'debt';
         if (statusFilter === 'unpaid') return !isCompleted;
@@ -90,7 +123,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
         );
       })
       .sort((a, b) => b.billDate.localeCompare(a.billDate) || b.createdAtMs - a.createdAtMs);
-  }, [bills, statusFilter, searchQuery]);
+  }, [bills, selectedDebtorFilter, statusFilter, searchQuery]);
 
   const activeDebtBill = useMemo(() => {
     if (selectedBillId) {
@@ -193,19 +226,21 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
     if (!activeDebtBill || !canWrite) return;
     const newPrice =
       inlinePrices[item.id] !== undefined ? inlinePrices[item.id] : item.unitPrice;
-    if (newPrice === item.unitPrice) return;
+    const newNote =
+      inlineNotes[item.id] !== undefined ? inlineNotes[item.id] : item.note || '';
+    if (newPrice === item.unitPrice && newNote.trim() === (item.note || '').trim()) return;
 
     requestConfirm({
-      title: 'Xác nhận Đổi Giá Sản Phẩm Trong Bill Này',
-      message: `Bạn có chắc chắn muốn đổi đơn giá món "${item.productName}" trong bill ${
+      title: 'Xác nhận Cập Nhật Giá & Ghi Chú Món Trong Bill Công Nợ',
+      message: `Bạn có chắc chắn muốn cập nhật món "${item.productName}" trong bill ${
         activeDebtBill.billCode
-      } từ ${formatVND(item.unitPrice)} thành ${formatVND(
-        newPrice
-      )} không? (Giá mặc định trong Menu giữ nguyên).`,
-      confirmLabel: 'Lưu giá mới',
+      } (Đơn giá: ${formatVND(newPrice)}${
+        newNote.trim() ? `, Ghi chú: "${newNote.trim()}"` : ''
+      }) không? (Giá mặc định trong Menu giữ nguyên).`,
+      confirmLabel: 'Lưu thay đổi',
       variant: 'warning',
       onConfirm: async () => {
-        await onUpdateBillItemPriceInline(activeDebtBill, item, newPrice);
+        await onUpdateBillItemPriceInline(activeDebtBill, item, newPrice, newNote.trim());
       },
     });
   };
@@ -581,7 +616,13 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                   inlinePrices[item.id] !== undefined
                     ? inlinePrices[item.id]
                     : item.unitPrice;
-                const isModified = draftPrice !== item.unitPrice;
+                const draftNote =
+                  inlineNotes[item.id] !== undefined
+                    ? inlineNotes[item.id]
+                    : item.note || '';
+                const isModified =
+                  draftPrice !== item.unitPrice ||
+                  draftNote.trim() !== (item.note || '').trim();
 
                 return (
                   <div
@@ -608,31 +649,48 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                       </span>
                     </div>
                     {canWrite && (
-                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-200/70 dark:border-slate-800">
-                        <span className="text-[11px] text-slate-500">Đơn giá trong bill:</span>
-                        <div className="flex items-center gap-1.5">
+                      <div className="space-y-2 pt-1.5 border-t border-slate-200/70 dark:border-slate-800">
+                        <div className="relative">
+                          <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
                           <input
-                            type="number"
-                            min={0}
-                            step={1000}
-                            value={draftPrice}
+                            type="text"
+                            value={draftNote}
                             onChange={(e) =>
-                              setInlinePrices((prev) => ({
+                              setInlineNotes((prev) => ({
                                 ...prev,
-                                [item.id]: Math.max(0, Math.round(Number(e.target.value) || 0)),
+                                [item.id]: e.target.value,
                               }))
                             }
-                            className="w-28 px-2 py-1 text-right font-mono text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            placeholder="Ghi chú món trong bill..."
+                            className="w-full h-8 pl-8 pr-2.5 text-[11px] rounded-lg border border-amber-200 dark:border-amber-900/50 bg-white dark:bg-slate-900 text-slate-800 dark:text-amber-200"
                           />
-                          {isModified && (
-                            <button
-                              type="button"
-                              onClick={() => handleSaveInlinePrice(item)}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
-                            >
-                              Lưu
-                            </button>
-                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-slate-500">Đơn giá trong bill:</span>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1000}
+                              value={draftPrice}
+                              onChange={(e) =>
+                                setInlinePrices((prev) => ({
+                                  ...prev,
+                                  [item.id]: Math.max(0, Math.round(Number(e.target.value) || 0)),
+                                }))
+                              }
+                              className="w-28 px-2 py-1 text-right font-mono text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                            {isModified && (
+                              <button
+                                type="button"
+                                onClick={() => handleSaveInlinePrice(item)}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
+                              >
+                                Lưu
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -647,7 +705,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                     <th className="py-2.5 px-3">STT</th>
-                    <th className="py-2.5 px-3">Tên món</th>
+                    <th className="py-2.5 px-3">Tên món & Ghi chú</th>
                     <th className="py-2.5 px-3">Danh mục</th>
                     <th className="py-2.5 px-3 text-right">Số lượng</th>
                     <th className="py-2.5 px-3 text-right">Đã trả</th>
@@ -666,13 +724,42 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                       inlinePrices[item.id] !== undefined
                         ? inlinePrices[item.id]
                         : item.unitPrice;
-                    const isModified = draftPrice !== item.unitPrice;
+                    const draftNote =
+                      inlineNotes[item.id] !== undefined
+                        ? inlineNotes[item.id]
+                        : item.note || '';
+                    const isModified =
+                      draftPrice !== item.unitPrice ||
+                      draftNote.trim() !== (item.note || '').trim();
 
                     return (
                       <tr key={item.id}>
                         <td className="py-2.5 px-3 text-slate-400">{idx + 1}</td>
-                        <td className="py-2.5 px-3 font-sans font-semibold text-slate-900 dark:text-white">
-                          {item.productName}
+                        <td className="py-2.5 px-3 font-sans font-semibold text-slate-900 dark:text-white space-y-1">
+                          <div>{item.productName}</div>
+                          {canWrite ? (
+                            <div className="relative">
+                              <MessageSquareText className="w-3 h-3 text-amber-500 absolute left-2 top-1/2 -translate-y-1/2" />
+                              <input
+                                type="text"
+                                value={draftNote}
+                                onChange={(e) =>
+                                  setInlineNotes((prev) => ({
+                                    ...prev,
+                                    [item.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder="Ghi chú món..."
+                                className="w-full h-7 pl-6 pr-2 font-sans font-normal text-[11px] rounded-md border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 text-slate-700 dark:text-amber-200"
+                              />
+                            </div>
+                          ) : (
+                            item.note && (
+                              <div className="text-[11px] font-normal text-amber-600 dark:text-amber-400">
+                                Ghi chú: {item.note}
+                              </div>
+                            )
+                          )}
                           {catalogProd && (
                             <span className="block text-[10px] font-normal text-slate-400 font-mono">
                               Giá Menu: {formatVND(catalogProd.unitPrice)}
@@ -710,7 +797,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                                   onClick={() => handleSaveInlinePrice(item)}
                                   className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-sans text-[11px] font-semibold cursor-pointer whitespace-nowrap"
                                 >
-                                  Lưu giá
+                                  Lưu
                                 </button>
                               )}
                             </div>

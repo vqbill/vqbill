@@ -13,6 +13,7 @@ import {
   BillItemRecord,
   ProductRecord,
   DeductionRecord,
+  ReturnRecord,
   ExtractedBillItem,
   PaymentType,
   StaffAccount,
@@ -130,11 +131,13 @@ const LOCAL_CACHE_KEY = 'vqbill_cloud_mirror_v2';
 export interface WorkspaceCacheSnapshot {
   initialized: boolean;
   categories?: string[];
+  debtors?: string[];
   rolePermissions?: RolePermissionsMap;
   products: ProductRecord[];
   bills: BillRecord[];
   billItems: BillItemRecord[];
   deductions: DeductionRecord[];
+  returns?: ReturnRecord[];
   staffAccounts: StaffAccount[];
 }
 
@@ -185,11 +188,13 @@ export async function fetchRtdbWorkspaceOnce(
     return {
       initialized: Boolean(val.meta?.initialized),
       categories: Array.isArray(val.categories) ? val.categories : undefined,
+      debtors: Array.isArray(val.debtors) ? val.debtors : undefined,
       rolePermissions: val.role_permissions || undefined,
       products: val.products ? Object.values(val.products) : [],
       bills: val.bills ? Object.values(val.bills) : [],
       billItems: val.bill_items ? Object.values(val.bill_items) : [],
       deductions: val.deductions ? Object.values(val.deductions) : [],
+      returns: val.returns ? Object.values(val.returns) : [],
       staffAccounts: val.staff_accounts ? Object.values(val.staff_accounts) : undefined,
     };
   } catch {
@@ -203,6 +208,14 @@ export async function saveCategoriesToCloud(
 ): Promise<void> {
   const cleanOwner = sanitizeId(ownerId);
   await syncToRtdbSafe(`workspaces/${cleanOwner}/categories`, categories);
+}
+
+export async function saveDebtorsToCloud(
+  ownerId: string,
+  debtors: string[]
+): Promise<void> {
+  const cleanOwner = sanitizeId(ownerId);
+  await syncToRtdbSafe(`workspaces/${cleanOwner}/debtors`, debtors);
 }
 
 export async function saveRolePermissionsToCloud(
@@ -795,7 +808,8 @@ export async function deleteBillsBatchFromCloud(
   ownerId: string,
   billIds: string[],
   billItemsToDelete: BillItemRecord[],
-  deductionsToDelete: DeductionRecord[]
+  deductionsToDelete: DeductionRecord[],
+  returnsToDelete: ReturnRecord[] = []
 ): Promise<void> {
   const cleanOwnerId = sanitizeId(ownerId);
   await markWorkspaceInitializedInCloud(cleanOwnerId);
@@ -805,6 +819,9 @@ export async function deleteBillsBatchFromCloud(
   }
   for (const d of deductionsToDelete) {
     await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/deductions/${d.id}`);
+  }
+  for (const r of returnsToDelete) {
+    await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/returns/${r.id}`);
   }
   for (const bId of billIds) {
     await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/bills/${bId}`);
@@ -819,12 +836,97 @@ export async function deleteBillsBatchFromCloud(
     for (const d of deductionsToDelete) {
       await deleteDoc(doc(db, 'deductions', d.id));
     }
+    for (const r of returnsToDelete) {
+      await deleteDoc(doc(db, 'returns', r.id));
+    }
     for (const bId of billIds) {
       await deleteDoc(doc(db, 'bills', bId));
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, 'bills');
   }
+}
+
+export async function saveExpenseDeductionToCloud(params: {
+  ownerId: string;
+  deductionDate: string;
+  expenseTitle: string;
+  category: string;
+  quantity?: number;
+  unitPrice?: number;
+  amount: number;
+  billCode?: string;
+  billDate?: string;
+  note: string;
+}): Promise<DeductionRecord> {
+  const {
+    ownerId,
+    deductionDate,
+    expenseTitle,
+    category,
+    quantity = 1,
+    unitPrice,
+    amount,
+    billCode = 'CHI-TRONG-NGAY',
+    billDate,
+    note,
+  } = params;
+
+  const cleanOwnerId = sanitizeId(ownerId);
+  const now = Date.now();
+  const safeQty = Math.max(1, Math.round(quantity || 1));
+  const safeAmount = Math.max(0, Math.round(amount || 0));
+  const safeUnitPrice =
+    unitPrice !== undefined ? Math.max(0, Math.round(unitPrice)) : safeAmount;
+  const effDate = /^\d{4}-\d{2}-\d{2}$/.test(deductionDate)
+    ? deductionDate
+    : getCurrentBusinessDate();
+
+  const deductionId = sanitizeId(`ded_${now}_${Math.random().toString(36).slice(2, 6)}`);
+
+  const deduction: DeductionRecord = {
+    id: deductionId,
+    ownerId: cleanOwnerId,
+    billId: `expense_${now}`,
+    billCode: truncateStr(billCode || 'CHI-TRONG-NGAY', 64, 'CHI-TRONG-NGAY'),
+    billDate: billDate && /^\d{4}-\d{2}-\d{2}$/.test(billDate) ? billDate : effDate,
+    deductionDate: effDate,
+    productName: truncateStr(expenseTitle, 150, 'Khoản chi trong ngày'),
+    category: truncateStr(category || 'Chi phí trong ngày', 80, 'Chi phí trong ngày'),
+    quantity: safeQty,
+    unitPrice: safeUnitPrice,
+    amount: safeAmount,
+    note: truncateStr(note || expenseTitle, 500, ''),
+    createdAtMs: now,
+    updatedAtMs: now,
+  };
+
+  await markWorkspaceInitializedInCloud(cleanOwnerId);
+  await syncToRtdbSafe(`workspaces/${cleanOwnerId}/deductions/${deduction.id}`, deduction);
+
+  if (isFirestoreCloudActive()) {
+    try {
+      await setDoc(doc(db, 'deductions', deduction.id), {
+        ownerId: deduction.ownerId,
+        billId: deduction.billId,
+        billCode: deduction.billCode,
+        billDate: deduction.billDate,
+        deductionDate: deduction.deductionDate,
+        productName: deduction.productName,
+        category: deduction.category,
+        quantity: deduction.quantity,
+        unitPrice: deduction.unitPrice,
+        amount: deduction.amount,
+        note: deduction.note,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `deductions/${deduction.id}`);
+    }
+  }
+
+  return deduction;
 }
 
 export async function deleteDeductionsBatchFromCloud(
@@ -849,16 +951,16 @@ export async function deleteDeductionsBatchFromCloud(
   }
 }
 
-export async function recordReturnDeductionToCloud(params: {
+export async function recordItemReturnToCloud(params: {
   ownerId: string;
   bill: BillRecord;
   billItem: BillItemRecord;
   returnQty: number;
-  deductionDate: string;
+  returnDate: string;
   note: string;
   existingProduct?: ProductRecord;
 }): Promise<{
-  deduction: DeductionRecord;
+  returnRecord: ReturnRecord;
   updatedBill: BillRecord;
   updatedBillItem: BillItemRecord;
   updatedProduct?: ProductRecord;
@@ -868,7 +970,7 @@ export async function recordReturnDeductionToCloud(params: {
     bill,
     billItem,
     returnQty,
-    deductionDate,
+    returnDate,
     note,
     existingProduct,
   } = params;
@@ -880,17 +982,17 @@ export async function recordReturnDeductionToCloud(params: {
     Math.max(1, billItem.quantity - billItem.returnedQuantity)
   );
   const refundAmount = safeQty * billItem.unitPrice;
-  const deductionId = sanitizeId(`ded_${now}_${Math.random().toString(36).slice(2, 6)}`);
+  const returnId = sanitizeId(`ret_${now}_${Math.random().toString(36).slice(2, 6)}`);
 
-  const deduction: DeductionRecord = {
-    id: deductionId,
+  const returnRecord: ReturnRecord = {
+    id: returnId,
     ownerId: cleanOwnerId,
     billId: bill.id,
     billCode: bill.billCode,
     billDate: bill.billDate,
-    deductionDate: /^\d{4}-\d{2}-\d{2}$/.test(deductionDate)
-      ? deductionDate
-      : new Date().toISOString().slice(0, 10),
+    returnDate: /^\d{4}-\d{2}-\d{2}$/.test(returnDate)
+      ? returnDate
+      : getCurrentBusinessDate(),
     productName: truncateStr(billItem.productName, 150, 'Món hoàn trả'),
     category: truncateStr(billItem.category, 80, 'Khác'),
     quantity: safeQty,
@@ -911,6 +1013,7 @@ export async function recordReturnDeductionToCloud(params: {
     updatedAtMs: now,
   };
 
+  // Hoàn trả chỉ cập nhật thông tin trên Bill và Sản phẩm, KHÔNG tự động cộng vào Khoản trừ
   const updatedBill: BillRecord = {
     ...bill,
     deductedAmount: (bill.deductedAmount || 0) + refundAmount,
@@ -928,7 +1031,7 @@ export async function recordReturnDeductionToCloud(params: {
   }
 
   await markWorkspaceInitializedInCloud(cleanOwnerId);
-  await syncToRtdbSafe(`workspaces/${cleanOwnerId}/deductions/${deduction.id}`, deduction);
+  await syncToRtdbSafe(`workspaces/${cleanOwnerId}/returns/${returnRecord.id}`, returnRecord);
   await syncToRtdbSafe(
     `workspaces/${cleanOwnerId}/bill_items/${updatedBillItem.id}`,
     updatedBillItem
@@ -943,18 +1046,18 @@ export async function recordReturnDeductionToCloud(params: {
 
   if (isFirestoreCloudActive()) {
     try {
-      await setDoc(doc(db, 'deductions', deduction.id), {
-        ownerId: deduction.ownerId,
-        billId: deduction.billId,
-        billCode: deduction.billCode,
-        billDate: deduction.billDate,
-        deductionDate: deduction.deductionDate,
-        productName: deduction.productName,
-        category: deduction.category,
-        quantity: deduction.quantity,
-        unitPrice: deduction.unitPrice,
-        amount: deduction.amount,
-        note: deduction.note,
+      await setDoc(doc(db, 'returns', returnRecord.id), {
+        ownerId: returnRecord.ownerId,
+        billId: returnRecord.billId,
+        billCode: returnRecord.billCode,
+        billDate: returnRecord.billDate,
+        returnDate: returnRecord.returnDate,
+        productName: returnRecord.productName,
+        category: returnRecord.category,
+        quantity: returnRecord.quantity,
+        unitPrice: returnRecord.unitPrice,
+        amount: returnRecord.amount,
+        note: returnRecord.note,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -981,16 +1084,38 @@ export async function recordReturnDeductionToCloud(params: {
         });
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `deductions/${deduction.id}`);
+      handleFirestoreError(error, OperationType.WRITE, `returns/${returnRecord.id}`);
     }
   }
 
   return {
-    deduction,
+    returnRecord,
     updatedBill,
     updatedBillItem,
     updatedProduct,
   };
+}
+
+export async function deleteReturnsBatchFromCloud(
+  ownerId: string,
+  returnIds: string[]
+): Promise<void> {
+  const cleanOwnerId = sanitizeId(ownerId);
+  await markWorkspaceInitializedInCloud(cleanOwnerId);
+
+  for (const rId of returnIds) {
+    await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/returns/${rId}`);
+  }
+
+  if (!isFirestoreCloudActive()) return;
+
+  try {
+    for (const rId of returnIds) {
+      await deleteDoc(doc(db, 'returns', rId));
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, 'returns');
+  }
 }
 
 export function buildInitialSeedDataset(ownerId: string): {
@@ -998,6 +1123,8 @@ export function buildInitialSeedDataset(ownerId: string): {
   bills: BillRecord[];
   billItems: BillItemRecord[];
   deductions: DeductionRecord[];
+  returns: ReturnRecord[];
+  debtors: string[];
 } {
   const cleanOwner = sanitizeId(ownerId);
   const today = getCurrentBusinessDate();
@@ -1028,6 +1155,7 @@ export function buildInitialSeedDataset(ownerId: string): {
   const bills: BillRecord[] = [];
   const billItems: BillItemRecord[] = [];
   const deductions: DeductionRecord[] = [];
+  const returns: ReturnRecord[] = [];
 
   const rawSeedBills: {
     id: string;
@@ -1238,8 +1366,8 @@ export function buildInitialSeedDataset(ownerId: string): {
       });
     });
 
-    const isSampleDeducted = rb.id === 'bill_seed_today_1';
-    const deductedAmt = isSampleDeducted ? 6 * 22000 : 0;
+    const isSampleReturned = rb.id === 'bill_seed_today_1';
+    const deductedAmt = isSampleReturned ? 6 * 22000 : 0;
 
     bills.push({
       id: rb.id,
@@ -1269,21 +1397,58 @@ export function buildInitialSeedDataset(ownerId: string): {
     tigerProd.totalRevenue -= 6 * 22000;
   }
 
-  deductions.push({
-    id: 'ded_seed_today_1',
+  // Khoản trừ trong ngày (nhập thủ công: mua rau, bánh mì, nguyên liệu, bồi hoàn...)
+  deductions.push(
+    {
+      id: 'ded_seed_expense_1',
+      ownerId: cleanOwner,
+      billId: 'expense_seed_1',
+      billCode: 'CHI-TRONG-NGAY',
+      billDate: today,
+      deductionDate: today,
+      productName: 'Mua bánh mì, rau sống & gia vị bếp',
+      category: 'Nguyên liệu bếp',
+      quantity: 1,
+      unitPrice: 185000,
+      amount: 185000,
+      note: 'Chi tiền mặt mua bánh mì chấm, rau thơm, ớt chanh đầu ca sáng',
+      createdAtMs: now - 2400000,
+      updatedAtMs: now - 2400000,
+    },
+    {
+      id: 'ded_seed_expense_2',
+      ownerId: cleanOwner,
+      billId: 'expense_seed_2',
+      billCode: 'CHI-TRONG-NGAY',
+      billDate: today,
+      deductionDate: today,
+      productName: 'Trả tiền đá viên & than hoa nướng',
+      category: 'Vật tư - Nguyên liệu',
+      quantity: 1,
+      unitPrice: 150000,
+      amount: 150000,
+      note: 'Thanh toán tiền giao 10 bao đá bi và than củi',
+      createdAtMs: now - 1800000,
+      updatedAtMs: now - 1800000,
+    }
+  );
+
+  // Hoàn trả (khách trả bia thừa / món thừa - tách riêng với khoản trừ)
+  returns.push({
+    id: 'ret_seed_today_1',
     ownerId: cleanOwner,
     billId: 'bill_seed_today_1',
     billCode: 'HD-HOMNAY-01',
     billDate: today,
-    deductionDate: today,
+    returnDate: today,
     productName: 'Bia Tiger Lùn',
     category: 'Bia',
     quantity: 6,
     unitPrice: 22000,
     amount: 132000,
     note: 'Khách bàn VIP 1 trả lại 6 lon Bia Tiger Lùn chưa khui cuối buổi',
-    createdAtMs: now - 1800000,
-    updatedAtMs: now - 1800000,
+    createdAtMs: now - 1500000,
+    updatedAtMs: now - 1500000,
   });
 
   return {
@@ -1291,5 +1456,10 @@ export function buildInitialSeedDataset(ownerId: string): {
     bills,
     billItems,
     deductions,
+    returns,
+    debtors: [
+      'Anh Tuấn (Đội Công Trình Số 5)',
+      'Chị Lan (Văn phòng BĐS Hùng Vương)',
+    ],
   };
 }

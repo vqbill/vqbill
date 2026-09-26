@@ -205,6 +205,26 @@
           "maxLength": 10,
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
         },
+        "rawDate": {
+          "type": "string",
+          "description": "Original calendar date printed on bill."
+        },
+        "checkInTime": {
+          "type": "string",
+          "description": "Check-in time."
+        },
+        "checkOutTime": {
+          "type": "string",
+          "description": "Check-out time."
+        },
+        "subtotalAmount": {
+          "type": "number",
+          "description": "Subtotal before discount."
+        },
+        "discountAmount": {
+          "type": "number",
+          "description": "Discount amount."
+        },
         "paymentType": {
           "type": "string",
           "description": "Payment method: cash, transfer, or debt.",
@@ -304,6 +324,12 @@
           "description": "Name of the dish or beverage.",
           "minLength": 1,
           "maxLength": 150
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional item note.",
+          "minLength": 0,
+          "maxLength": 500
         },
         "category": {
           "type": "string",
@@ -447,6 +473,89 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "Return": {
+      "title": "Return",
+      "description": "Record of returned leftover items/beer linked to a bill (separate from daily expense deductions).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "billId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "billCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "billDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "returnDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "productName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "unitPrice": {
+          "type": "number"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "billId",
+        "billCode",
+        "billDate",
+        "returnDate",
+        "productName",
+        "category",
+        "quantity",
+        "unitPrice",
+        "amount",
+        "note",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -472,7 +581,11 @@
     },
     "/deductions/{deductionId}": {
       "schema": { "$ref": "#/entities/Deduction" },
-      "description": "Stores item returns and financial deductions."
+      "description": "Stores daily expense deductions."
+    },
+    "/returns/{returnId}": {
+      "schema": { "$ref": "#/entities/Return" },
+      "description": "Stores returned beer/dish items from bills."
     }
   }
 }
