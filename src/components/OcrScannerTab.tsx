@@ -12,6 +12,10 @@ import {
   AlertCircle,
   CheckCircle2,
   Sparkles,
+  Code2,
+  Clock,
+  MessageSquareText,
+  Percent,
 } from 'lucide-react';
 import {
   ExtractedBillItem,
@@ -24,10 +28,14 @@ import {
 } from '../types';
 import {
   formatVND,
+  getCurrentBusinessDate,
   inferCategory,
   parseRawTextToBillJSON,
+  resolveBusinessBillDate,
   SAMPLE_BILL_TEMPLATES,
+  splitProductNameAndInlineNote,
 } from '../utils/parser';
+import { extractBillWithGemini } from '../services/geminiService';
 import { GeminiKeyBar } from './GeminiKeyBar';
 
 interface OcrScannerTabProps {
@@ -43,6 +51,10 @@ interface OcrScannerTabProps {
   onToggleAutoAddProducts: (val: boolean) => void;
   onSaveExtractedBill: (params: {
     billDate: string;
+    rawDate?: string;
+    checkInTime?: string;
+    checkOutTime?: string;
+    discountAmount?: number;
     paymentType: PaymentType;
     debtorName: string;
     note: string;
@@ -69,14 +81,15 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   menuProductsCount,
   requestConfirm,
 }) => {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayBusinessStr = getCurrentBusinessDate();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [inputMode, setInputMode] = useState<'image' | 'text'>('image');
+  const [inputMode, setInputMode] = useState<'image' | 'text'>('text');
   const [rawText, setRawText] = useState<string>(SAMPLE_BILL_TEMPLATES[0].rawText);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageMimeType, setImageMimeType] = useState<string>('image/jpeg');
   const [quickAiItemPrompt, setQuickAiItemPrompt] = useState<string>('');
+  const [showJsonPreview, setShowJsonPreview] = useState<boolean>(false);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -85,30 +98,70 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [copiedJson, setCopiedJson] = useState(false);
 
   // Editable Bill State
-  const [billDate, setBillDate] = useState<string>(todayStr);
-  const [paymentType, setPaymentType] = useState<PaymentType>('cash');
-  const [debtorName, setDebtorName] = useState<string>('');
-  const [note, setNote] = useState<string>('');
-  const [items, setItems] = useState<ExtractedBillItem[]>(() => {
-    const initial = parseRawTextToBillJSON(SAMPLE_BILL_TEMPLATES[0].rawText, todayStr);
-    return initial.items;
-  });
+  const initialParsed = useRef<ExtractedBillJSON | null>(null);
+  if (!initialParsed.current) {
+    initialParsed.current = parseRawTextToBillJSON(
+      SAMPLE_BILL_TEMPLATES[0].rawText,
+      todayBusinessStr,
+      products,
+      categories
+    );
+  }
 
-  const totalAmount = items.reduce(
+  const [billDate, setBillDate] = useState<string>(
+    initialParsed.current.billInfo.billDate || todayBusinessStr
+  );
+  const [rawCalendarDate, setRawCalendarDate] = useState<string | undefined>(
+    initialParsed.current.billInfo.rawDate
+  );
+  const [checkInTime, setCheckInTime] = useState<string>(
+    initialParsed.current.billInfo.checkInTime || ''
+  );
+  const [checkOutTime, setCheckOutTime] = useState<string>(
+    initialParsed.current.billInfo.checkOutTime || ''
+  );
+  const [discountAmount, setDiscountAmount] = useState<number>(
+    initialParsed.current.billInfo.discountAmount || 0
+  );
+  const [paymentType, setPaymentType] = useState<PaymentType>(
+    initialParsed.current.billInfo.paymentType || 'cash'
+  );
+  const [debtorName, setDebtorName] = useState<string>(
+    initialParsed.current.billInfo.debtorName || ''
+  );
+  const [note, setNote] = useState<string>('');
+  const [items, setItems] = useState<ExtractedBillItem[]>(
+    initialParsed.current.items
+  );
+
+  const subtotalAmount = items.reduce(
     (sum, it) => sum + Math.round((it.quantity || 0) * (it.unitPrice || 0)),
     0
   );
+  const safeDiscount = Math.min(
+    subtotalAmount,
+    Math.max(0, Math.round(Number(discountAmount) || 0))
+  );
+  const totalAmount = Math.max(0, subtotalAmount - safeDiscount);
 
-  // Strict JSON output structure required by prompt
+  // Strict JSON output structure including all requested fields
   const strictJsonOutput: ExtractedBillJSON = {
     billInfo: {
       billDate,
+      ...(rawCalendarDate && rawCalendarDate !== billDate
+        ? { rawDate: rawCalendarDate }
+        : {}),
+      checkInTime: checkInTime || '',
+      checkOutTime: checkOutTime || '',
       paymentType,
       debtorName: paymentType === 'debt' ? debtorName : '',
+      subtotalAmount,
+      discountAmount: safeDiscount,
       totalAmount,
     },
     items: items.map((it) => ({
       productName: it.productName,
+      note: it.note || '',
       category: it.category,
       quantity: Number(it.quantity) || 1,
       unitPrice: Number(it.unitPrice) || 0,
@@ -117,21 +170,46 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   };
 
   const applyExtractedResult = (result: ExtractedBillJSON) => {
-    setBillDate(result.billInfo.billDate || todayStr);
+    setBillDate(result.billInfo.billDate || todayBusinessStr);
+    setRawCalendarDate(result.billInfo.rawDate);
+    setCheckInTime(result.billInfo.checkInTime || '');
+    setCheckOutTime(result.billInfo.checkOutTime || '');
+    setDiscountAmount(Math.max(0, Math.round(result.billInfo.discountAmount || 0)));
     setPaymentType(result.billInfo.paymentType || 'cash');
     setDebtorName(
       result.billInfo.paymentType === 'debt' ? result.billInfo.debtorName || '' : ''
     );
     setItems(
-      result.items.map((it) => ({
-        productName: it.productName,
-        category: it.category || inferCategory(it.productName, categories),
-        quantity: Math.max(1, Math.round(it.quantity || 1)),
-        unitPrice: Math.max(0, Math.round(it.unitPrice || 0)),
-        subtotal:
-          Math.max(1, Math.round(it.quantity || 1)) *
-          Math.max(0, Math.round(it.unitPrice || 0)),
-      }))
+      result.items.map((it) => {
+        const split = splitProductNameAndInlineNote(
+          it.productName,
+          products,
+          categories
+        );
+        const mergedNote = [split.note, it.note]
+          .filter(Boolean)
+          .filter(
+            (v, i, arr) =>
+              arr.findIndex((x) => x!.toLowerCase() === v!.toLowerCase()) === i
+          )
+          .join(', ');
+        const qty = Math.max(1, Math.round(it.quantity || 1));
+        const uPrice = Math.max(
+          0,
+          Math.round(it.unitPrice || split.catalogUnitPrice || 0)
+        );
+        return {
+          productName: split.productName || it.productName,
+          note: mergedNote || '',
+          category:
+            it.category ||
+            split.category ||
+            inferCategory(split.productName || it.productName, categories),
+          quantity: qty,
+          unitPrice: uPrice,
+          subtotal: qty * uPrice,
+        };
+      })
     );
   };
 
@@ -165,36 +243,48 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setSuccessMsg(null);
 
     try {
-      const response = await fetch('/api/ocr-bill', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: payload.imageBase64,
-          mimeType: payload.mimeType,
-          rawText: payload.text,
-          defaultDate: billDate || todayStr,
-          apiKey: geminiApiKey || undefined,
-          categories,
-        }),
+      const data = await extractBillWithGemini({
+        imageBase64: payload.imageBase64,
+        mimeType: payload.mimeType,
+        rawText: payload.text,
+        defaultDate: billDate || todayBusinessStr,
+        apiKey: geminiApiKey || undefined,
+        categories,
+        existingProducts: products,
       });
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || 'Lỗi kết nối Gemini AI OCR.');
-      }
-
-      const data: ExtractedBillJSON = await response.json();
       if (data && Array.isArray(data.items) && data.items.length > 0) {
         if (payload.appendMode) {
-          const newItems = data.items.map((it) => ({
-            productName: it.productName,
-            category: it.category || inferCategory(it.productName, categories),
-            quantity: Math.max(1, Math.round(it.quantity || 1)),
-            unitPrice: Math.max(0, Math.round(it.unitPrice || 0)),
-            subtotal:
-              Math.max(1, Math.round(it.quantity || 1)) *
-              Math.max(0, Math.round(it.unitPrice || 0)),
-          }));
+          const newItems = data.items.map((it) => {
+            const split = splitProductNameAndInlineNote(
+              it.productName,
+              products,
+              categories
+            );
+            const mergedNote = [split.note, it.note]
+              .filter(Boolean)
+              .filter(
+                (v, i, arr) =>
+                  arr.findIndex((x) => x!.toLowerCase() === v!.toLowerCase()) === i
+              )
+              .join(', ');
+            const qty = Math.max(1, Math.round(it.quantity || 1));
+            const uPrice = Math.max(
+              0,
+              Math.round(it.unitPrice || split.catalogUnitPrice || 0)
+            );
+            return {
+              productName: split.productName || it.productName,
+              note: mergedNote || '',
+              category:
+                it.category ||
+                split.category ||
+                inferCategory(split.productName || it.productName, categories),
+              quantity: qty,
+              unitPrice: uPrice,
+              subtotal: qty * uPrice,
+            };
+          });
           setItems((prev) => [...prev, ...newItems]);
           setSuccessMsg(
             `Gemini đã nhận diện và thêm ${newItems.length} món mới vào hóa đơn hiện tại!`
@@ -203,13 +293,18 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         } else {
           applyExtractedResult(data);
           setSuccessMsg(
-            `Gemini AI đã trích xuất thành công ${data.items.length} món ăn/đồ uống (${formatVND(
+            `Gemini AI đã trích xuất thành công ${data.items.length} món (Tổng cộng: ${formatVND(
               data.billInfo.totalAmount
-            )}).`
+            )}, Ca ngày: ${data.billInfo.billDate}).`
           );
         }
       } else if (payload.text && !payload.appendMode) {
-        const fallback = parseRawTextToBillJSON(payload.text, billDate || todayStr);
+        const fallback = parseRawTextToBillJSON(
+          payload.text,
+          billDate || todayBusinessStr,
+          products,
+          categories
+        );
         applyExtractedResult(fallback);
         setSuccessMsg(
           `Đã phân tích văn bản hóa đơn: ${fallback.items.length} món (${formatVND(
@@ -223,13 +318,35 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       }
     } catch (err: any) {
       if (payload.text && !payload.appendMode) {
-        const fallback = parseRawTextToBillJSON(payload.text, billDate || todayStr);
+        const fallback = parseRawTextToBillJSON(
+          payload.text,
+          billDate || todayBusinessStr,
+          products,
+          categories
+        );
         applyExtractedResult(fallback);
         setSuccessMsg(
-          `Đã phân tích chuẩn hóa ${fallback.items.length} món từ văn bản (${formatVND(
+          `Đã tách chuẩn ${fallback.items.length} món từ văn bản (Tổng cộng: ${formatVND(
             fallback.billInfo.totalAmount
-          )}).`
+          )}, Ca ngày: ${fallback.billInfo.billDate}).`
         );
+      } else if (payload.text && payload.appendMode) {
+        const fallback = parseRawTextToBillJSON(
+          payload.text,
+          billDate || todayBusinessStr,
+          products,
+          categories
+        );
+        if (fallback.items.length > 0) {
+          setItems((prev) => [...prev, ...fallback.items]);
+          setSuccessMsg(`Đã tách nhanh và thêm ${fallback.items.length} món vào hóa đơn!`);
+          setQuickAiItemPrompt('');
+        } else {
+          setErrorMsg(
+            err?.message ||
+              'Không thể trích xuất tự động bằng Gemini. Vui lòng kiểm tra Gemini Key.'
+          );
+        }
       } else {
         setErrorMsg(
           err?.message ||
@@ -247,9 +364,16 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setInputMode('text');
     setRawText(found.rawText);
     setErrorMsg(null);
-    const localParsed = parseRawTextToBillJSON(found.rawText, todayStr);
+    const localParsed = parseRawTextToBillJSON(
+      found.rawText,
+      todayBusinessStr,
+      products,
+      categories
+    );
     applyExtractedResult(localParsed);
-    setSuccessMsg(`Đã nạp mẫu "${found.label}" và trích xuất JSON chuẩn 100%.`);
+    setSuccessMsg(
+      `Đã nạp mẫu "${found.label}" — Tách tự động tên món, ghi chú món, giờ ra/vào, chiết khấu và tính ca 09:00 sáng → 08:00 sáng hôm sau.`
+    );
   };
 
   const handleItemChange = (
@@ -264,7 +388,6 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         if (field === 'productName') {
           const nameVal = String(value);
           updated.productName = nameVal;
-          // If matches a product in catalog, pre-fill category and default price if price was 0
           const matchedProd = products.find(
             (p) => p.productName.toLowerCase().trim() === nameVal.toLowerCase().trim()
           );
@@ -277,19 +400,75 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
           } else {
             updated.category = inferCategory(updated.productName, categories);
           }
+        } else if (field === 'note') {
+          updated.note = String(value);
         } else if (field === 'category') {
           updated.category = String(value);
         } else if (field === 'quantity') {
           updated.quantity = Math.max(1, Math.round(Number(value) || 1));
           updated.subtotal = updated.quantity * updated.unitPrice;
         } else if (field === 'unitPrice') {
-          // Chỉnh giá trực tiếp trong bill, không làm thay đổi giá mặc định của sản phẩm trong Menu
           updated.unitPrice = Math.max(0, Math.round(Number(value) || 0));
           updated.subtotal = updated.quantity * updated.unitPrice;
         }
         return updated;
       })
     );
+  };
+
+  // When user finishes typing a product name like "gà biển kho nghệ làm cay", automatically split out "làm cay" into item.note if it matches a catalog product
+  const handleProductNameBlur = (index: number) => {
+    setItems((prev) =>
+      prev.map((item, idx) => {
+        if (idx !== index) return item;
+        const split = splitProductNameAndInlineNote(
+          item.productName,
+          products,
+          categories
+        );
+        if (split.productName && split.note && split.productName !== item.productName) {
+          const newNote = [item.note, split.note]
+            .filter(Boolean)
+            .filter(
+              (v, i, arr) =>
+                arr.findIndex((x) => x!.toLowerCase() === v!.toLowerCase()) === i
+            )
+            .join(', ');
+          const uPrice =
+            item.unitPrice > 0
+              ? item.unitPrice
+              : split.catalogUnitPrice || item.unitPrice;
+          return {
+            ...item,
+            productName: split.productName,
+            note: newNote,
+            category: split.category || item.category,
+            unitPrice: uPrice,
+            subtotal: item.quantity * uPrice,
+          };
+        }
+        return item;
+      })
+    );
+  };
+
+  const handleApplyShiftDateFromTime = () => {
+    const base = rawCalendarDate || billDate;
+    const { businessDate, shiftedFromNextMorning } = resolveBusinessBillDate(
+      base,
+      checkInTime,
+      checkOutTime,
+      false
+    );
+    if (shiftedFromNextMorning && businessDate !== billDate) {
+      setRawCalendarDate(base);
+      setBillDate(businessDate);
+      setSuccessMsg(
+        `Áp dụng khung giờ bán 09:00 sáng → 08:00 sáng hôm sau: Bill lúc ${
+          checkInTime || checkOutTime
+        } ngày ${base} được tính vào ca bán ngày ${businessDate}.`
+      );
+    }
   };
 
   const handleAddEmptyItem = () => {
@@ -307,6 +486,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
           ...prev,
           {
             productName: defaultName,
+            note: '',
             category: defaultCat,
             quantity: 1,
             unitPrice: defaultPrice,
@@ -322,8 +502,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     if (!trimmed) return;
     requestConfirm({
       title: 'Xác nhận Dùng Gemini Nhận Diện & Thêm Món Vào Bill',
-      message: `Bạn có muốn sử dụng Gemini AI để phân tích "${trimmed}" và tự động thêm món vào hóa đơn hiện tại không?`,
-      confirmLabel: 'Gemini Thêm Món',
+      message: `Bạn có muốn phân tích "${trimmed}" và tự động thêm món (kèm ghi chú nếu có) vào hóa đơn hiện tại không?`,
+      confirmLabel: 'Thêm Món',
       variant: 'primary',
       onConfirm: async () => {
         await runAiExtraction({ text: trimmed, appendMode: true });
@@ -380,11 +560,13 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
     requestConfirm({
       title: 'Xác nhận Lưu Hóa Đơn Vào Hệ Thống',
-      message: `Bạn có chắc chắn muốn lưu hóa đơn ngày ${billDate} (${
+      message: `Bạn có chắc chắn muốn lưu hóa đơn ca ngày ${billDate} (${
         validItems.length
-      } món, Tổng tiền: ${formatVND(totalAmount)}, Hình thức: ${
+      } món, Chiết khấu: ${formatVND(safeDiscount)}, Tổng cộng: ${formatVND(
+        totalAmount
+      )}, Hình thức: ${
         PAYMENT_LABELS[paymentType]
-      }) vào Firebase và cộng số lượng bán theo thời gian thực không? (Lưu ý: Giá tùy chỉnh trong bill sẽ không làm thay đổi giá mặc định của sản phẩm trong Menu).`,
+      }) vào Firebase và cộng số lượng bán theo thời gian thực không?`,
       confirmLabel: 'Xác nhận Lưu Bill',
       variant: 'primary',
       onConfirm: async () => {
@@ -393,13 +575,17 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         try {
           await onSaveExtractedBill({
             billDate,
+            rawDate: rawCalendarDate,
+            checkInTime: checkInTime.trim() || undefined,
+            checkOutTime: checkOutTime.trim() || undefined,
+            discountAmount: safeDiscount,
             paymentType,
             debtorName: paymentType === 'debt' ? debtorName.trim() : '',
             note,
             items: validItems,
           });
           setSuccessMsg(
-            `Đã lưu hóa đơn ngày ${billDate} (${formatVND(
+            `Đã lưu hóa đơn ca ngày ${billDate} (Tổng cộng: ${formatVND(
               totalAmount
             )}) vào Firebase và cộng số lượng bán theo thời gian thực!`
           );
@@ -413,7 +599,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Gemini API Key Configuration & Check Bar */}
       <GeminiKeyBar
         geminiApiKey={geminiApiKey}
@@ -422,40 +608,40 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         onCheckGeminiKey={onCheckGeminiKey}
         onClearGeminiKey={onClearGeminiKey}
         requestConfirm={requestConfirm}
-        contextLabel="Nhập Gemini API Key và bấm Check Gemini Key để kích hoạt AI quét ảnh hóa đơn, nhận diện văn bản bill và thêm món tự động."
+        contextLabel="Nhập Gemini API Key và bấm Kiểm tra để kích hoạt AI quét ảnh hóa đơn, nhận diện văn bản bill nhiều định dạng và tách ghi chú tự động."
       />
 
       {/* Header & Quick Templates */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+      <div className="p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-              AI OCR & Trích Xuất Hóa Đơn Chuẩn JSON
+            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+              Chụp / Nhập Bill OCR & Trích Xuất Hóa Đơn Đa Định Dạng
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Chụp ảnh hóa đơn hoặc dán văn bản để Gemini AI tự động tách món, phân loại danh mục ({categories.join(', ')}) và cộng dồn doanh thu thời gian thực.
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+              Tự động lấy <strong>Ngày tháng, Giờ ra vào, Tên món, Ghi chú món, Số lượng, Đơn giá, Thành tiền, Chiết khấu, Tổng cộng</strong>. Ca bán tính từ <strong>09:00 sáng hôm nay đến 08:00 sáng hôm sau</strong>.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer select-none">
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={autoAddProducts}
                 onChange={(e) => onToggleAutoAddProducts(e.target.checked)}
                 className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
               />
-              <span>Tự nhận diện & thêm sản phẩm mới vào Menu theo Bill</span>
+              <span>Tự thêm món mới vào Menu theo Bill</span>
             </label>
 
             {canWrite && menuProductsCount > 0 && (
               <button
                 type="button"
                 onClick={onDeleteAllMenuProducts}
-                className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className="h-9 px-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Xóa tất cả sản phẩm trong Menu ({menuProductsCount})</span>
+                <span>Xóa Menu ({menuProductsCount})</span>
               </button>
             )}
           </div>
@@ -464,7 +650,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         {/* Sample Templates Bar */}
         <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
-            Mẫu hóa đơn thực tế (Bấm để nạp & kiểm thử nhanh):
+            Mẫu hóa đơn thực tế (Bấm để nạp & kiểm thử tách ghi chú món / Combo / Ca 9h sáng → 8h sáng hôm sau):
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
             {SAMPLE_BILL_TEMPLATES.map((tpl) => (
@@ -472,7 +658,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 key={tpl.id}
                 type="button"
                 onClick={() => handleSelectSampleTemplate(tpl.id)}
-                className="text-left p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-emerald-500 dark:hover:border-emerald-500 bg-slate-50/70 dark:bg-slate-800/40 transition-colors cursor-pointer"
+                className="text-left p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-500 dark:hover:border-emerald-500 bg-slate-50/70 dark:bg-slate-800/40 transition-colors cursor-pointer"
               >
                 <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">
                   {tpl.label}
@@ -488,46 +674,47 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
       {/* Status Alerts */}
       {errorMsg && (
-        <div className="p-3.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 flex items-center gap-2.5 text-xs text-rose-700 dark:text-rose-300">
-          <AlertCircle className="w-4 h-4 shrink-0" />
+        <div className="p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 flex items-start sm:items-center gap-2.5 text-xs text-rose-700 dark:text-rose-300">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
           <span>{errorMsg}</span>
         </div>
       )}
       {successMsg && (
-        <div className="p-3.5 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 flex items-center gap-2.5 text-xs text-emerald-700 dark:text-emerald-300">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
+        <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 flex items-start sm:items-center gap-2.5 text-xs text-emerald-700 dark:text-emerald-300">
+          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
           <span>{successMsg}</span>
         </div>
       )}
 
-      {/* Input Area: Image Upload/Camera OR Copy/Paste Text */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-5 p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col justify-between space-y-4">
+      {/* Main Grid: Input Area + Bill Editor */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+        {/* Left Column: Image/Camera or Raw Text Input */}
+        <div className="xl:col-span-5 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs flex flex-col justify-between space-y-4">
           <div className="space-y-4">
-            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
-              <button
-                type="button"
-                onClick={() => setInputMode('image')}
-                className={`flex-1 py-2 px-3 text-xs font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap ${
-                  inputMode === 'image'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                <Camera className="w-3.5 h-3.5" />
-                <span>Chụp / Tải Ảnh Hóa Đơn</span>
-              </button>
+            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
               <button
                 type="button"
                 onClick={() => setInputMode('text')}
-                className={`flex-1 py-2 px-3 text-xs font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap ${
+                className={`flex-1 h-9 px-3 text-xs font-medium rounded-lg flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
                   inputMode === 'text'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
                     : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
                 <span>Copy / Dán Văn Bản</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputMode('image')}
+                className={`flex-1 h-9 px-3 text-xs font-medium rounded-lg flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                  inputMode === 'image'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Chụp / Tải Ảnh Bill</span>
               </button>
             </div>
 
@@ -543,7 +730,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 />
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-xl p-6 text-center cursor-pointer transition-colors bg-slate-50/50 dark:bg-slate-950/40"
+                  className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-2xl p-5 sm:p-6 text-center cursor-pointer transition-colors bg-slate-50/50 dark:bg-slate-950/40"
                 >
                   {imagePreview ? (
                     <div className="space-y-3">
@@ -551,22 +738,22 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                         src={imagePreview}
                         alt="Hóa đơn vừa tải lên"
                         referrerPolicy="no-referrer"
-                        className="max-h-52 mx-auto rounded-lg object-contain border border-slate-200 dark:border-slate-700"
+                        className="max-h-52 mx-auto rounded-xl object-contain border border-slate-200 dark:border-slate-700"
                       />
-                      <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                        Bấm để chụp lại hoặc chọn ảnh hóa đơn khác
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
+                        Chạm để chụp lại hoặc chọn ảnh hóa đơn khác
                       </p>
                     </div>
                   ) : (
-                    <div className="space-y-2 py-6">
-                      <div className="w-11 h-11 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
+                    <div className="space-y-2 py-5">
+                      <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
                         <Upload className="w-5 h-5" />
                       </div>
-                      <p className="text-sm font-semibold text-slate-900 dark:text-white">
-                        Chụp ảnh Bill hoặc tải ảnh từ thiết bị
+                      <p className="text-sm font-bold text-slate-900 dark:text-white">
+                        Chụp ảnh Bill hoặc chọn ảnh từ máy
                       </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Gemini OCR tự động đọc ảnh chụp điện thoại, bill in nhiệt, bill viết tay (JPG, PNG, WEBP)
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto">
+                        Hỗ trợ camera điện thoại, ảnh chụp bill in nhiệt, bill viết tay (JPG, PNG, WEBP)
                       </p>
                     </div>
                   )}
@@ -582,7 +769,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                         mimeType: imageMimeType,
                       })
                     }
-                    className="w-full py-2.5 px-4 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
+                    className="w-full h-10 px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
                   >
                     <RefreshCw className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
                     <span>
@@ -596,36 +783,41 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
             ) : (
               <div className="space-y-3">
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Dán nội dung hóa đơn (Copy từ Zalo, POS, ghi chú):
+                  Dán nội dung hóa đơn (Hỗ trợ nhiều kiểu form, tự tách ghi chú món & combo):
                 </label>
                 <textarea
-                  rows={9}
+                  rows={10}
                   value={rawText}
                   onChange={(e) => setRawText(e.target.value)}
-                  placeholder="Ví dụ:&#10;Ngày: 20/08/2026&#10;Thanh toán: Tiền mặt&#10;Bia Tiger Lùn x15 22k&#10;Ếch sapo x2 135k..."
-                  className="w-full p-3 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  placeholder={`Ví dụ:\nNgày: 20/08/2026\nGiờ vào: 21:00 - Giờ ra: 01:30\ngà biển kho nghệ làm cay giá 129000\ncombo 2 ======================\n>>> Cơm chiên hải sản <<<\n======================\ngiá 459000`}
+                  className="w-full p-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => {
-                      const parsed = parseRawTextToBillJSON(rawText, billDate || todayStr);
+                      const parsed = parseRawTextToBillJSON(
+                        rawText,
+                        billDate || todayBusinessStr,
+                        products,
+                        categories
+                      );
                       applyExtractedResult(parsed);
                       setSuccessMsg(
-                        `Trích xuất tức thì ${parsed.items.length} món (${formatVND(
+                        `Đã tách chuẩn ${parsed.items.length} món (Tổng cộng: ${formatVND(
                           parsed.billInfo.totalAmount
-                        )}).`
+                        )}, Ca ngày: ${parsed.billInfo.billDate}).`
                       );
                     }}
-                    className="py-2.5 px-3 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 transition-colors cursor-pointer"
+                    className="h-10 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors cursor-pointer"
                   >
-                    Tách nhanh quy tắc chuẩn
+                    Tách nhanh chuẩn (Mọi định dạng)
                   </button>
                   <button
                     type="button"
                     disabled={isProcessing}
                     onClick={() => runAiExtraction({ text: rawText })}
-                    className="py-2.5 px-3 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
+                    className="h-10 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
                   >
                     <RefreshCw
                       className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`}
@@ -639,33 +831,40 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
             )}
           </div>
 
-          {/* JSON Output Preview Box */}
-          <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Cấu trúc JSON đầu ra (Chuẩn 100%)
-              </span>
+          {/* Collapsible / Clean JSON Output Preview Box */}
+          <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowJsonPreview((v) => !v)}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+              >
+                <Code2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>{showJsonPreview ? 'Ẩn cấu trúc JSON' : 'Xem cấu trúc JSON chuẩn'}</span>
+              </button>
               <button
                 type="button"
                 onClick={handleCopyJson}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
               >
                 {copiedJson ? (
                   <Check className="w-3.5 h-3.5 text-emerald-500" />
                 ) : (
                   <Copy className="w-3.5 h-3.5" />
                 )}
-                <span>{copiedJson ? 'Đã copy JSON' : 'Copy JSON'}</span>
+                <span>{copiedJson ? 'Đã copy' : 'Copy JSON'}</span>
               </button>
             </div>
-            <pre className="p-3 rounded-lg bg-slate-950 text-emerald-400 text-[11px] font-mono overflow-x-auto max-h-56 leading-relaxed border border-slate-800">
-              {JSON.stringify(strictJsonOutput, null, 2)}
-            </pre>
+            {showJsonPreview && (
+              <pre className="mt-2.5 p-3 rounded-xl bg-slate-950 text-emerald-400 text-[11px] font-mono overflow-x-auto max-h-52 leading-relaxed border border-slate-800">
+                {JSON.stringify(strictJsonOutput, null, 2)}
+              </pre>
+            )}
           </div>
         </div>
 
         {/* Right Area: Interactive Bill Review & Save */}
-        <div className="lg:col-span-7 p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col justify-between space-y-5">
+        <div className="xl:col-span-7 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs flex flex-col justify-between space-y-5">
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200 dark:border-slate-800">
               <div>
@@ -673,12 +872,12 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   Kiểm tra & Chỉnh sửa Hóa Đơn trước khi lưu
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Có thể chỉnh trực tiếp <strong>Đơn giá của sản phẩm trong Bill</strong> mà không làm thay đổi giá mặc định của sản phẩm trong Menu.
+                  Ca bán hàng tính từ <strong>09:00 sáng ngày D đến 08:00 sáng ngày D+1</strong>.
                 </p>
               </div>
-              <div className="text-right">
+              <div className="sm:text-right flex sm:block items-center justify-between pt-1 sm:pt-0">
                 <span className="text-xs text-slate-500 dark:text-slate-400 block">
-                  Tổng tiền Bill
+                  Tổng cộng thanh toán
                 </span>
                 <span className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
                   {formatVND(totalAmount)}
@@ -686,38 +885,102 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               </div>
             </div>
 
-            {/* Bill Info Controls */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Shift Date Notice Banner if shifted from early morning */}
+            {rawCalendarDate && rawCalendarDate !== billDate && (
+              <div className="p-2.5 rounded-xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/70 dark:bg-amber-950/30 flex items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span>
+                    Bill ghi ngày <strong>{rawCalendarDate}</strong> trong khung giờ trước 08:00 sáng nên được tự động tính vào ca bán ngày <strong>{billDate}</strong> (09:00 sáng → 08:00 sáng hôm sau).
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Bill Info Controls: Date, CheckIn, CheckOut, Discount, Payment, Debtor */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Ngày hóa đơn (billDate)
+                  Ngày tính Bill (Ca 9h → 8h sáng hôm sau)
                 </label>
                 <input
                   type="date"
                   value={billDate}
-                  onChange={(e) => setBillDate(e.target.value)}
-                  className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  onChange={(e) => {
+                    setBillDate(e.target.value);
+                    setRawCalendarDate(e.target.value);
+                  }}
+                  className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Giờ vào
+                  </label>
+                  <input
+                    type="text"
+                    value={checkInTime}
+                    onChange={(e) => setCheckInTime(e.target.value)}
+                    onBlur={handleApplyShiftDateFromTime}
+                    placeholder="VD: 19:30"
+                    className="w-full h-10 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Giờ ra
+                  </label>
+                  <input
+                    type="text"
+                    value={checkOutTime}
+                    onChange={(e) => setCheckOutTime(e.target.value)}
+                    onBlur={handleApplyShiftDateFromTime}
+                    placeholder="VD: 01:30"
+                    className="w-full h-10 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Hình thức (paymentType)
+                  Chiết khấu / Giảm giá (₫)
+                </label>
+                <div className="relative">
+                  <Percent className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="number"
+                    min={0}
+                    step={1000}
+                    value={discountAmount}
+                    onChange={(e) =>
+                      setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
+                    }
+                    placeholder="0"
+                    className="w-full h-10 pl-8 pr-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Hình thức thanh toán
                 </label>
                 <select
                   value={paymentType}
                   onChange={(e) => setPaymentType(e.target.value as PaymentType)}
-                  className="w-full px-3 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  className="w-full h-10 px-3 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                 >
-                  <option value="cash">Tiền mặt (cash - Mặc định)</option>
-                  <option value="transfer">Chuyển khoản (transfer)</option>
-                  <option value="debt">Công nợ / Ghi nợ (debt)</option>
+                  <option value="cash">Tiền mặt (Mặc định)</option>
+                  <option value="transfer">Chuyển khoản (CK)</option>
+                  <option value="debt">Công nợ / Ghi nợ</option>
                 </select>
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Người nợ (debtorName)
+                  Người nợ (Nếu ghi nợ)
                 </label>
                 <input
                   type="text"
@@ -729,41 +992,41 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                       ? 'Nhập tên khách nợ...'
                       : 'Không áp dụng (Tiền mặt/CK)'
                   }
-                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white disabled:opacity-50"
+                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white disabled:opacity-50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Ghi chú chung của Bill
+                </label>
+                <input
+                  type="text"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="VD: Bàn VIP 2, khách quen..."
+                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                 />
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Ghi chú hóa đơn (Bàn, ca, khách hàng...)
-              </label>
-              <input
-                type="text"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Ví dụ: Bàn VIP 2 - Khách thanh toán lúc 21h30..."
-                className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-              />
-            </div>
-
             {/* Quick Gemini AI Add Item to Bill Bar */}
-            <div className="p-3 rounded-lg border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <input
                 type="text"
                 value={quickAiItemPrompt}
                 onChange={(e) => setQuickAiItemPrompt(e.target.value)}
-                placeholder="Nhập nhanh món để Gemini AI nhận diện & thêm vào bill (VD: 10 Tiger Lùn 22k, 2 ếch sapo 135k)..."
-                className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                placeholder="Nhập nhanh món (VD: gà biển kho nghệ làm cay giá 129000, 10 Tiger Lùn 22k)..."
+                className="flex-1 h-9 px-3 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
               />
               <button
                 type="button"
                 disabled={isProcessing || !quickAiItemPrompt.trim()}
                 onClick={handleGeminiAddItemsToBill}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                className="h-9 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Gemini Nhận diện & Thêm món</span>
+                <span>Tách & Thêm Món</span>
               </button>
             </div>
 
@@ -776,46 +1039,166 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               ))}
             </datalist>
 
-            {/* Items Table */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  Danh sách món trong Bill ({items.length} món)
+            {/* Items Section */}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Danh sách món & Ghi chú từng món ({items.length} món)
                 </span>
                 <div className="flex items-center gap-2">
                   {items.length > 0 && (
                     <button
                       type="button"
                       onClick={handleClearAllDraftItems}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-md transition-colors cursor-pointer"
+                      className="h-8 px-2.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg inline-flex items-center gap-1 transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
-                      <span>Xóa tất cả món</span>
+                      <span>Xóa hết</span>
                     </button>
                   )}
                   <button
                     type="button"
                     onClick={handleAddEmptyItem}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-md transition-colors cursor-pointer"
+                    className="h-8 px-3 text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 rounded-lg inline-flex items-center gap-1 transition-colors cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Thêm dòng món</span>
+                    <span>Thêm món</span>
                   </button>
                 </div>
               </div>
 
-              <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-                <table className="w-full text-left border-collapse min-w-[560px]">
+              {/* Mobile Cards (< md) */}
+              <div className="md:hidden space-y-2.5">
+                {items.map((item, idx) => {
+                  const catalogMatch = products.find(
+                    (p) =>
+                      p.productName.toLowerCase().trim() ===
+                      item.productName.toLowerCase().trim()
+                  );
+                  const categoryOptions = Array.from(
+                    new Set([...categories, item.category].filter(Boolean))
+                  );
+
+                  return (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-2.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <input
+                          type="text"
+                          list="vqbill-menu-products-list"
+                          value={item.productName}
+                          onChange={(e) =>
+                            handleItemChange(idx, 'productName', e.target.value)
+                          }
+                          onBlur={() => handleProductNameBlur(idx)}
+                          placeholder="Tên món ăn / đồ uống..."
+                          className="flex-1 h-9 px-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveItem(idx)}
+                          className="w-9 h-9 rounded-lg border border-rose-200 dark:border-rose-900/50 text-rose-600 flex items-center justify-center shrink-0 cursor-pointer"
+                          title="Xóa món"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="relative">
+                        <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={item.note || ''}
+                          onChange={(e) =>
+                            handleItemChange(idx, 'note', e.target.value)
+                          }
+                          placeholder="Ghi chú món (VD: làm cay, hoặc chi tiết món trong Combo)..."
+                          className="w-full h-8 pl-8 pr-2.5 rounded-lg border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 text-slate-800 dark:text-amber-200 text-[11px]"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-[10px] text-slate-500 mb-0.5">
+                            Danh mục
+                          </label>
+                          <select
+                            value={item.category}
+                            onChange={(e) =>
+                              handleItemChange(idx, 'category', e.target.value)
+                            }
+                            className="w-full h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                          >
+                            {categoryOptions.map((cat) => (
+                              <option key={cat} value={cat}>
+                                {cat}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] text-slate-500 mb-0.5">
+                            Số lượng
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={item.quantity}
+                            onChange={(e) =>
+                              handleItemChange(idx, 'quantity', e.target.value)
+                            }
+                            className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] text-slate-500 mb-0.5">
+                            Đơn giá (₫)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            step={1000}
+                            value={item.unitPrice}
+                            onChange={(e) =>
+                              handleItemChange(idx, 'unitPrice', e.target.value)
+                            }
+                            className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-200/70 dark:border-slate-800 text-xs font-mono">
+                        <span className="text-[11px] text-slate-500">
+                          {catalogMatch
+                            ? `Giá Menu: ${formatVND(catalogMatch.unitPrice)}`
+                            : 'Món mới / Tùy chỉnh'}
+                        </span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                          = {formatVND(item.quantity * item.unitPrice)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop Table (>= md) */}
+              <div className="hidden md:block border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
+                <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      <th className="py-2 px-3">Tên món ăn / Nước uống</th>
-                      <th className="py-2 px-2 w-36">Danh mục (Category)</th>
-                      <th className="py-2 px-2 w-20 text-right">SL</th>
-                      <th className="py-2 px-2 w-36 text-right">
-                        Đơn giá trong Bill (₫)
+                      <th className="py-2.5 px-3">Tên món & Ghi chú món (Combo / Yêu cầu)</th>
+                      <th className="py-2.5 px-2 w-32">Danh mục</th>
+                      <th className="py-2.5 px-2 w-20 text-right">SL</th>
+                      <th className="py-2.5 px-2 w-36 text-right">
+                        Đơn giá (₫)
                       </th>
-                      <th className="py-2 px-3 w-32 text-right">Thành tiền</th>
-                      <th className="py-2 px-2 w-10"></th>
+                      <th className="py-2.5 px-3 w-28 text-right">Thành tiền</th>
+                      <th className="py-2.5 px-2 w-10"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
@@ -839,7 +1222,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                           key={idx}
                           className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30"
                         >
-                          <td className="p-2 align-top">
+                          <td className="p-2 align-top space-y-1.5">
                             <input
                               type="text"
                               list="vqbill-menu-products-list"
@@ -847,8 +1230,22 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               onChange={(e) =>
                                 handleItemChange(idx, 'productName', e.target.value)
                               }
-                              className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              onBlur={() => handleProductNameBlur(idx)}
+                              placeholder="Tên món ăn / nước uống..."
+                              className="w-full h-9 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold"
                             />
+                            <div className="relative">
+                              <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                              <input
+                                type="text"
+                                value={item.note || ''}
+                                onChange={(e) =>
+                                  handleItemChange(idx, 'note', e.target.value)
+                                }
+                                placeholder="Ghi chú món (VD: làm cay, hoặc các món trong Combo)..."
+                                className="w-full h-7 pl-8 pr-2.5 rounded-lg border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 text-slate-700 dark:text-amber-200 text-[11px]"
+                              />
+                            </div>
                           </td>
                           <td className="p-2 align-top">
                             <select
@@ -856,7 +1253,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               onChange={(e) =>
                                 handleItemChange(idx, 'category', e.target.value)
                               }
-                              className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              className="w-full h-9 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
                             >
                               {categoryOptions.map((cat) => (
                                 <option key={cat} value={cat}>
@@ -873,7 +1270,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               onChange={(e) =>
                                 handleItemChange(idx, 'quantity', e.target.value)
                               }
-                              className="w-full px-2 py-1.5 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
                             />
                           </td>
                           <td className="p-2 align-top">
@@ -885,31 +1282,31 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               onChange={(e) =>
                                 handleItemChange(idx, 'unitPrice', e.target.value)
                               }
-                              className="w-full px-2 py-1.5 text-right font-mono rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
                             />
                             {catalogMatch && (
                               <div className="text-[10px] text-right mt-0.5 font-mono text-slate-400">
                                 {isCustomBillPrice ? (
                                   <span className="text-amber-600 dark:text-amber-400">
-                                    Giá gốc Menu: {formatVND(catalogMatch.unitPrice)} (Không đổi)
+                                    Giá gốc: {formatVND(catalogMatch.unitPrice)}
                                   </span>
                                 ) : (
-                                  <span>Giá chuẩn Menu: {formatVND(catalogMatch.unitPrice)}</span>
+                                  <span>Giá chuẩn: {formatVND(catalogMatch.unitPrice)}</span>
                                 )}
                               </div>
                             )}
                           </td>
-                          <td className="p-2 align-top text-right font-mono font-semibold text-slate-900 dark:text-white pt-3">
+                          <td className="p-2 align-top text-right font-mono font-semibold text-slate-900 dark:text-white pt-3.5">
                             {formatVND(item.quantity * item.unitPrice)}
                           </td>
-                          <td className="p-2 align-top text-center pt-2.5">
+                          <td className="p-2 align-top text-center pt-3">
                             <button
                               type="button"
                               onClick={() => handleRemoveItem(idx)}
-                              className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
                               title="Xóa món"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </td>
                         </tr>
@@ -921,36 +1318,63 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
             </div>
           </div>
 
-          {/* Save Button Footer */}
-          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="text-xs text-slate-500 dark:text-slate-400">
-              Hình thức:{' '}
-              <strong className="text-slate-800 dark:text-slate-200">
-                {PAYMENT_LABELS[paymentType]}
-              </strong>
-              {paymentType === 'debt' && debtorName && (
-                <>
-                  {' '}
-                  · Người nợ:{' '}
-                  <strong className="text-amber-600 dark:text-amber-400">
-                    {debtorName}
-                  </strong>
-                </>
-              )}
+          {/* Summary & Save Button Footer */}
+          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+            <div className="grid grid-cols-3 gap-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 text-xs font-mono">
+              <div>
+                <span className="text-slate-500 block font-sans text-[11px]">Tạm tính</span>
+                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                  {formatVND(subtotalAmount)}
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500 block font-sans text-[11px]">Chiết khấu</span>
+                <span className="font-semibold text-rose-600 dark:text-rose-400">
+                  {safeDiscount > 0 ? `-${formatVND(safeDiscount)}` : '0 ₫'}
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-slate-500 block font-sans text-[11px]">Tổng cộng</span>
+                <span className="font-bold text-sm text-emerald-600 dark:text-emerald-400">
+                  {formatVND(totalAmount)}
+                </span>
+              </div>
             </div>
-            <button
-              type="button"
-              disabled={isSaving || !canWrite}
-              onClick={handleSaveBill}
-              className="py-2.5 px-5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer whitespace-nowrap"
-            >
-              <Save className="w-4 h-4" />
-              <span>
-                {isSaving
-                  ? 'Đang lưu vào Firebase...'
-                  : 'Lưu vào Bill Ngày & Cộng Số Lượng Thời Gian Thực'}
-              </span>
-            </button>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                Ca ngày:{' '}
+                <strong className="font-mono text-slate-800 dark:text-slate-200">
+                  {billDate}
+                </strong>
+                {(checkInTime || checkOutTime) && (
+                  <>
+                    {' '}
+                    · Giờ:{' '}
+                    <strong className="font-mono text-slate-800 dark:text-slate-200">
+                      {checkInTime || '--:--'} → {checkOutTime || '--:--'}
+                    </strong>
+                  </>
+                )}{' '}
+                · Hình thức:{' '}
+                <strong className="text-slate-800 dark:text-slate-200">
+                  {PAYMENT_LABELS[paymentType]}
+                </strong>
+              </div>
+              <button
+                type="button"
+                disabled={isSaving || !canWrite}
+                onClick={handleSaveBill}
+                className="h-11 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+              >
+                <Save className="w-4 h-4 shrink-0" />
+                <span>
+                  {isSaving
+                    ? 'Đang lưu vào Firebase...'
+                    : 'Lưu Bill & Cộng Số Lượng Thời Gian Thực'}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

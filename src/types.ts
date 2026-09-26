@@ -142,6 +142,7 @@ export type CategoryType = (typeof STANDARD_CATEGORIES)[number] | string;
 
 export interface ExtractedBillItem {
   productName: string;
+  note?: string;
   category: string;
   quantity: number;
   unitPrice: number;
@@ -151,8 +152,13 @@ export interface ExtractedBillItem {
 export interface ExtractedBillJSON {
   billInfo: {
     billDate: string;
+    rawDate?: string;
+    checkInTime?: string;
+    checkOutTime?: string;
     paymentType: PaymentType;
     debtorName: string;
+    subtotalAmount?: number;
+    discountAmount?: number;
     totalAmount: number;
   };
   items: ExtractedBillItem[];
@@ -162,10 +168,15 @@ export interface BillRecord {
   id: string;
   ownerId: string;
   billCode: string;
-  billDate: string; // YYYY-MM-DD
+  billDate: string; // YYYY-MM-DD (Ca bán 09:00 sáng ngày D -> 08:00 sáng ngày D+1)
+  rawDate?: string;
+  checkInTime?: string;
+  checkOutTime?: string;
   paymentType: PaymentType;
   debtorName: string;
   debtStatus: DebtStatus;
+  subtotalAmount?: number;
+  discountAmount?: number;
   totalAmount: number;
   deductedAmount: number;
   itemsSummary: string;
@@ -181,6 +192,7 @@ export interface BillItemRecord {
   billId: string;
   billDate: string;
   productName: string;
+  note?: string;
   category: string;
   quantity: number;
   returnedQuantity: number;

@@ -2,9 +2,18 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { GoogleGenAI, Type, GenerateContentResponse } from '@google/genai';
+import {
+  getCurrentBusinessDate,
+  inferCategory,
+  inferUnit,
+  normalizeMoneyNumber,
+  resolveBusinessBillDate,
+  splitProductNameAndInlineNote,
+} from './src/utils/parser';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const GEMINI_MODEL = 'gemini-3-flash-preview';
 
 app.use(express.json({ limit: '25mb' }));
 
@@ -44,92 +53,97 @@ function getGeminiClient(explicitKey?: string) {
   });
 }
 
-function buildSystemInstructionBillOcr(customCategories?: string[]) {
+function buildSystemInstructionBillOcr(
+  customCategories?: string[],
+  existingProducts?: any[]
+) {
   const catList =
     Array.isArray(customCategories) && customCategories.length > 0
       ? customCategories.join(', ')
       : 'Bia, Nước ngọt, Khai vị, Ếch, Gà, Hải sản, Lẩu / Món chính, Khác';
 
-  return `Bạn là một hệ thống AI chuyên gia trích xuất và xử lý dữ liệu hóa đơn (OCR & Text Parser) cho ứng dụng quản lý bán hàng.
+  const catalogSample =
+    Array.isArray(existingProducts) && existingProducts.length > 0
+      ? existingProducts
+          .slice(0, 80)
+          .map((p: any) => `${p.productName} (${p.category} - ${p.unitPrice}đ)`)
+          .join('; ')
+      : 'Gà biển kho nghệ (Gà - 129000đ); Combo 2 (Lẩu / Món chính - 459000đ); Bia Tiger Lùn (Bia - 22000đ); Ếch sapo (Ếch - 135000đ)';
 
-Nhiệm vụ của bạn là tiếp nhận dữ liệu đầu vào (có thể là HÌNH ẢNH HÓA ĐƠN hoặc ĐOẠN VĂN BẢN COPY/DÁN) và trích xuất thành định dạng JSON chuẩn xác 100%, không kèm lời giải thích hay định dạng Markdown ngoài JSON.
+  return `Bạn là một hệ thống AI chuyên gia trích xuất và xử lý dữ liệu hóa đơn (OCR & Multi-format Text Parser) cho ứng dụng quản lý bán hàng nhà hàng/quán nhậu.
+
+Nhiệm vụ của bạn là tiếp nhận dữ liệu đầu vào (HÌNH ẢNH HÓA ĐƠN hoặc ĐOẠN VĂN BẢN COPY/DÁN với nhiều định dạng khác nhau) và chỉ trích xuất chính xác các trường:
+- Ngày tháng (billDate - định dạng YYYY-MM-DD)
+- Giờ vào (checkInTime - HH:mm) và Giờ ra (checkOutTime - HH:mm)
+- Hình thức thanh toán (paymentType: "cash" | "transfer" | "debt") và Tên người nợ (debtorName)
+- Danh sách món: Tên món chuẩn (productName), Ghi chú món (note), Danh mục (category), Số lượng (quantity), Đơn giá (unitPrice), Thành tiền (subtotal)
+- Chiết khấu (discountAmount) và Tổng cộng (totalAmount)
 
 ---
 ### QUY TẮC XỬ LÝ DỮ LIỆU:
 
-1. PHÂN LOẠI DANH MỤC (category):
-   Dựa vào tên món ăn/nước uống, hãy tự động xếp vào một trong các danh mục hiện có sau: [${catList}].
-   - "Bia": Tất cả các loại bia (Bia Sài Gòn, Tiger, Tiger Lùn, Heineken, Larue, Budweiser,...)
-   - "Nước ngọt": Nước giải khát, nước lọc, Redbull, Coca, Pepsi, soda, trà đá, khăn lạnh...
-   - "Khai vị": Đậu hũ, khoai tây chiên, gỏi, chả giò, đậu lạc, nem chua...
-   - "Ếch": Các món chế biến từ ếch (Ếch sapo, ếch chiên bơ, ếch rơm, ếch xào sa tế...)
-   - "Gà": Các món chế biến từ gà (Gà chiên mắm, gà hấp lá chanh, lẩu gà, cánh gà...)
-   - "Hải sản": Tôm, mực, cá, cua, ốc, nghêu...
-   - "Lẩu / Món chính": Các loại lẩu, cơm xào, mì xào, bò, heo...
-   - "Khác": Thuốc lá, dịch vụ, hoặc các mục không thuộc nhóm trên.
+1. KHUNG GIỜ BÁN CỦA QUÁN (09:00 SÁNG -> 08:00 SÁNG HÔM SAU):
+   - Quán bán từ 09:00 sáng hôm trước đến 08:00 sáng hôm sau.
+   - Ví dụ: Bill ngày 20/08 được tính từ 09:00 sáng ngày 20/08 đến 08:00 sáng ngày 21/08. Nếu ngày in trên bill là 21/08 nhưng giờ vào/ra nằm trong khung 00:00 -> 08:00 sáng, hãy trả về billDate là ngày hôm trước (2026-08-20) và rawDate là ngày in trên bill (2026-08-21).
 
-2. HÌNH THỨC THANH TOÁN (paymentType):
-   - Trả về "transfer": Nếu có từ khóa "Chuyển khoản", "CK", "Mã QR", "Banking", "VietQR".
-   - Trả về "debt": Nếu có từ khóa "Công nợ", "Ghi nợ", "Nợ", "Ký nợ" hoặc có tên khách hàng được đánh dấu nợ.
-   - Trả về "cash": Mặc định cho tất cả các trường hợp còn lại hoặc không ghi rõ.
+2. TÁCH TÊN MÓN CHUẨN (productName) & GHI CHÚ MÓN (note):
+   - Danh mục sản phẩm đã có trong Menu: [${catalogSample}].
+   - Nếu món có tên rõ ràng trong danh mục, nhưng có thêm chữ yêu cầu chế biến hoặc thêm dòng text phụ bên dưới thì phần thêm đó là GHI CHÚ (note) của món đó:
+     + Ví dụ 1: Món trong danh mục là "Gà biển kho nghệ" giá 129000, nhưng văn bản copy lên là "gà biển kho nghệ làm cay giá 129000" -> productName: "Gà biển kho nghệ", note: "làm cay", unitPrice: 129000.
+     + Ví dụ 2: Có món "Combo 2" giá 459000, nhưng văn bản copy lên là:
+       combo 2 ======================
+       >>> Cơm chiên hải sản <<<
+       ======================
+       >>> Càng cua trộn bò <<<
+       ======================
+       >>> Chip hấp thái <<<
+       ======================
+       >>> Cá giò kho tiêu <<<
+       ======================
+       >>> 1 dĩa trái cây <<<
+       ======================
+       giá 459000
+       -> Đây là 1 món duy nhất: productName: "Combo 2", note: "Cơm chiên hải sản, Càng cua trộn bò, Chip hấp thái, Cá giò kho tiêu, 1 dĩa trái cây", quantity: 1, unitPrice: 459000, subtotal: 459000. Tuyệt đối KHÔNG tách các dòng >>> ... <<< thành các món riêng.
 
-3. TÊN NGƯỜI NỢ (debtorName):
-   - Trích xuất tên người nợ nếu paymentType là "debt". Nếu không có hoặc là thanh toán tiền mặt/chuyển khoản, trả về chuỗi rỗng "".
+3. PHÂN LOẠI DANH MỤC (category):
+   - Tự động xếp vào một trong các danh mục hiện có: [${catList}].
 
-4. CHUẨN HÓA SỐ LIỆU (Numbers):
-   - Loại bỏ tất cả dấu chấm, dấu phẩy, chữ "đ", "k" trong số tiền để trả về số nguyên (number) thuần túy.
-   - Ví dụ: "150.000đ" -> 150000, "15k" -> 15000.
-   - Nếu đơn giá hoặc thành tiền thiếu, hãy dùng công thức: subtotal = quantity * unitPrice để tính lại.`;
+4. HÌNH THỨC THANH TOÁN (paymentType) & NGƯỜI NỢ (debtorName):
+   - "transfer": Chuyển khoản, CK, Mã QR, Banking, VietQR.
+   - "debt": Công nợ, Ghi nợ, Nợ, Ký nợ (trích xuất debtorName).
+   - "cash": Mặc định cho tất cả trường hợp còn lại.
+
+5. CHUẨN HÓA SỐ LIỆU (Numbers):
+   - Trả về số nguyên thuần túy (VNĐ). Ví dụ: "129.000đ" -> 129000, "22k" -> 22000.
+   - subtotal = quantity * unitPrice.
+   - totalAmount = subtotalAmount - discountAmount.`;
 }
 
-export function inferCategoryFromName(name: string): string {
-  const lower = name.toLowerCase();
-  if (/(bia|tiger|heineken|sài gòn|sai gon|larue|budweiser|333|ken|saporo|sapporo|huda|ruby)/i.test(lower)) {
-    return 'Bia';
-  }
-  if (/(nước ngọt|nuoc ngot|nước suối|nuoc suoi|nước lọc|aquafina|dasani|redbull|red bull|bò húc|coca|pepsi|7up|sting|soda|trà đá|tra da|khăn lạnh|khan lanh|mirinda|sprite|fanta|revive|오롱|olong)/i.test(lower)) {
-    return 'Nước ngọt';
-  }
-  if (/(ếch|ech)/i.test(lower)) {
-    return 'Ếch';
-  }
-  if (/(gà|ga\b|cánh gà|chân gà|đùi gà|lẩu gà)/i.test(lower)) {
-    return 'Gà';
-  }
-  if (/(tôm|mực|cá\b|cua|ốc|nghêu|sò|hàu|bạch tuộc|ghẹ|hải sản)/i.test(lower)) {
-    return 'Hải sản';
-  }
-  if (/(đậu hũ|đậu khuôn|khoai tây|gỏi|chả giò|đậu lạc|đậu phộng|lạc rang|nem chua|khai vị|dưa leo|cà chua|bắp xào|xúc xích|phô mai que)/i.test(lower)) {
-    return 'Khai vị';
-  }
-  if (/(lẩu|cơm|mì\b|miến|bún|phở|bò|heo|lợn|dê|vịt|sườn|ba chỉ|dồi|nầm)/i.test(lower)) {
-    return 'Lẩu / Món chính';
-  }
-  return 'Khác';
-}
-
-function normalizePriceNumber(val: unknown): number {
-  if (typeof val === 'number' && !Number.isNaN(val)) {
-    return Math.round(val);
-  }
-  if (typeof val === 'string') {
-    const cleaned = val.trim().toLowerCase();
-    const isK = cleaned.endsWith('k') || cleaned.includes('k ');
-    const digitsOnly = cleaned.replace(/[^\d]/g, '');
-    if (!digitsOnly) return 0;
-    const num = parseInt(digitsOnly, 10);
-    if (isK && num < 10000) return num * 1000;
-    return num;
-  }
-  return 0;
-}
-
-function sanitizeExtractedBill(raw: any, fallbackDate: string) {
+function sanitizeExtractedBill(
+  raw: any,
+  fallbackDate: string,
+  existingProducts?: any[],
+  customCategories?: string[]
+) {
   const billInfo = raw?.billInfo || {};
-  const rawDate =
-    typeof billInfo.billDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(billInfo.billDate.trim())
+  const rawCalendarDate =
+    typeof billInfo.rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(billInfo.rawDate.trim())
+      ? billInfo.rawDate.trim()
+      : typeof billInfo.billDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(billInfo.billDate.trim())
       ? billInfo.billDate.trim()
       : fallbackDate;
+
+  const checkInTime =
+    typeof billInfo.checkInTime === 'string' ? billInfo.checkInTime.trim() : '';
+  const checkOutTime =
+    typeof billInfo.checkOutTime === 'string' ? billInfo.checkOutTime.trim() : '';
+
+  const { businessDate } = resolveBusinessBillDate(
+    rawCalendarDate,
+    checkInTime,
+    checkOutTime,
+    false
+  );
 
   let paymentType: 'cash' | 'transfer' | 'debt' = 'cash';
   if (
@@ -148,21 +162,38 @@ function sanitizeExtractedBill(raw: any, fallbackDate: string) {
   const rawItems = Array.isArray(raw?.items) ? raw.items : [];
   const items = rawItems
     .map((item: any) => {
-      const productName =
+      const rawProductName =
         typeof item?.productName === 'string' ? item.productName.trim() : '';
-      if (!productName) return null;
-      const quantity = Math.max(1, normalizePriceNumber(item?.quantity) || 1);
-      let unitPrice = normalizePriceNumber(item?.unitPrice);
-      let subtotal = normalizePriceNumber(item?.subtotal);
+      if (!rawProductName) return null;
 
-      if (unitPrice > 0 && unitPrice < 1000) {
-        unitPrice = unitPrice * 1000;
-      }
-      if (subtotal > 0 && subtotal < 1000) {
-        subtotal = subtotal * 1000;
-      }
+      const split = splitProductNameAndInlineNote(
+        rawProductName,
+        existingProducts as any,
+        customCategories
+      );
+      const explicitNote =
+        typeof item?.note === 'string'
+          ? item.note.replace(/^[=\-*_~><\s]+|[=\-*_~><\s]+$/g, '').trim()
+          : '';
+      const combinedNote = [split.note, explicitNote]
+        .filter(Boolean)
+        .filter(
+          (v, idx, arr) =>
+            arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === idx
+        )
+        .join(', ');
 
-      if (subtotal === 0 && unitPrice > 0) {
+      const quantity = Math.max(1, normalizeMoneyNumber(item?.quantity) || 1);
+      let unitPrice = normalizeMoneyNumber(item?.unitPrice);
+      let subtotal = normalizeMoneyNumber(item?.subtotal);
+
+      if (unitPrice > 0 && unitPrice < 1000) unitPrice *= 1000;
+      if (subtotal > 0 && subtotal < 1000) subtotal *= 1000;
+
+      if (unitPrice === 0 && subtotal === 0 && split.catalogUnitPrice) {
+        unitPrice = split.catalogUnitPrice;
+        subtotal = quantity * unitPrice;
+      } else if (subtotal === 0 && unitPrice > 0) {
         subtotal = quantity * unitPrice;
       } else if (unitPrice === 0 && subtotal > 0) {
         unitPrice = Math.round(subtotal / quantity);
@@ -173,10 +204,11 @@ function sanitizeExtractedBill(raw: any, fallbackDate: string) {
       const category =
         typeof item?.category === 'string' && item.category.trim()
           ? item.category.trim()
-          : inferCategoryFromName(productName);
+          : split.category || inferCategory(split.productName, customCategories);
 
       return {
-        productName,
+        productName: split.productName || rawProductName,
+        note: combinedNote || '',
         category,
         quantity,
         unitPrice,
@@ -185,21 +217,33 @@ function sanitizeExtractedBill(raw: any, fallbackDate: string) {
     })
     .filter(Boolean);
 
-  const computedTotal = items.reduce(
+  const subtotalAmount = items.reduce(
     (sum: number, it: any) => sum + (it?.subtotal || 0),
     0
   );
-  let totalAmount = normalizePriceNumber(billInfo.totalAmount);
+  let discountAmount = normalizeMoneyNumber(billInfo.discountAmount);
+  if (discountAmount > 0 && discountAmount < 1000) discountAmount *= 1000;
+  discountAmount = Math.min(subtotalAmount, Math.max(0, discountAmount));
+
+  let totalAmount = normalizeMoneyNumber(billInfo.totalAmount);
   if (totalAmount > 0 && totalAmount < 1000) totalAmount *= 1000;
-  if (computedTotal > 0) {
-    totalAmount = computedTotal;
+  if (subtotalAmount > 0) {
+    if (discountAmount === 0 && totalAmount > 0 && totalAmount < subtotalAmount) {
+      discountAmount = subtotalAmount - totalAmount;
+    }
+    totalAmount = Math.max(0, subtotalAmount - discountAmount);
   }
 
   return {
     billInfo: {
-      billDate: rawDate,
+      billDate: businessDate,
+      rawDate: rawCalendarDate !== businessDate ? rawCalendarDate : undefined,
+      checkInTime: checkInTime || undefined,
+      checkOutTime: checkOutTime || undefined,
       paymentType,
       debtorName,
+      subtotalAmount,
+      discountAmount,
       totalAmount,
     },
     items,
@@ -250,19 +294,19 @@ app.post('/api/check-gemini', async (req, res) => {
 
     const ai = getGeminiClient(activeKey);
     const response: GenerateContentResponse = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: GEMINI_MODEL,
       contents: 'Trả lời đúng 1 từ: OK',
     });
 
     const latencyMs = Date.now() - startedAt;
     res.json({
       ok: true,
-      model: 'gemini-3.8-flash',
+      model: GEMINI_MODEL,
       latencyMs,
       maskedKey: maskKey(activeKey),
       source: runtimeGeminiApiKey ? 'custom' : 'env',
       reply: (response.text || 'OK').trim(),
-      message: `Gemini Key hợp lệ! Kết nối thành công tới model gemini-3.8-flash (${latencyMs}ms).`,
+      message: `Gemini Key hợp lệ! Kết nối thành công tới model ${GEMINI_MODEL} (${latencyMs}ms).`,
     });
   } catch (error: any) {
     console.error('Error in /api/check-gemini:', error);
@@ -285,12 +329,13 @@ app.post('/api/ocr-bill', async (req, res) => {
       defaultDate,
       apiKey,
       categories,
+      existingProducts,
     } = req.body || {};
     const headerKey = req.headers['x-gemini-api-key'];
     const fallbackDate =
       typeof defaultDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(defaultDate)
         ? defaultDate
-        : new Date().toISOString().slice(0, 10);
+        : getCurrentBusinessDate();
 
     if (!imageBase64 && (!rawText || !String(rawText).trim())) {
       res
@@ -320,15 +365,18 @@ app.post('/api/ocr-bill', async (req, res) => {
 
     const promptText = rawText
       ? `Ngày mặc định (nếu trên hóa đơn không ghi rõ năm/tháng/ngày): ${fallbackDate}.\nNội dung hóa đơn:\n${rawText}`
-      : `Ngày mặc định (nếu trên hóa đơn không ghi rõ năm/tháng/ngày): ${fallbackDate}.\nHãy đọc hình ảnh hóa đơn này và trích xuất chính xác toàn bộ món ăn/thức uống, số lượng, đơn giá, thành tiền, hình thức thanh toán và người nợ (nếu có).`;
+      : `Ngày mặc định (nếu trên hóa đơn không ghi rõ năm/tháng/ngày): ${fallbackDate}.\nHãy đọc hình ảnh hóa đơn này và trích xuất chính xác ngày tháng, giờ ra vào, tên món, ghi chú, số lượng, đơn giá, thành tiền, chiết khấu và tổng cộng.`;
 
     parts.push({ text: promptText });
 
     const response: GenerateContentResponse = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: GEMINI_MODEL,
       contents: { parts },
       config: {
-        systemInstruction: buildSystemInstructionBillOcr(categories),
+        systemInstruction: buildSystemInstructionBillOcr(
+          categories,
+          existingProducts
+        ),
         temperature: 0.1,
         responseMimeType: 'application/json',
         responseSchema: {
@@ -339,7 +387,20 @@ app.post('/api/ocr-bill', async (req, res) => {
               properties: {
                 billDate: {
                   type: Type.STRING,
-                  description: 'Ngày hóa đơn định dạng YYYY-MM-DD',
+                  description:
+                    'Ngày hóa đơn định dạng YYYY-MM-DD (tính theo ca bán 09:00 sáng -> 08:00 sáng hôm sau)',
+                },
+                rawDate: {
+                  type: Type.STRING,
+                  description: 'Ngày in trên hóa đơn định dạng YYYY-MM-DD',
+                },
+                checkInTime: {
+                  type: Type.STRING,
+                  description: 'Giờ vào định dạng HH:mm (nếu có)',
+                },
+                checkOutTime: {
+                  type: Type.STRING,
+                  description: 'Giờ ra / thanh toán định dạng HH:mm (nếu có)',
                 },
                 paymentType: {
                   type: Type.STRING,
@@ -350,9 +411,17 @@ app.post('/api/ocr-bill', async (req, res) => {
                   description:
                     'Tên người nợ nếu paymentType là debt, ngược lại là chuỗi rỗng',
                 },
+                subtotalAmount: {
+                  type: Type.INTEGER,
+                  description: 'Tổng tạm tính trước chiết khấu (số nguyên)',
+                },
+                discountAmount: {
+                  type: Type.INTEGER,
+                  description: 'Chiết khấu / giảm giá (số nguyên, 0 nếu không có)',
+                },
                 totalAmount: {
                   type: Type.INTEGER,
-                  description: 'Tổng tiền hóa đơn (số nguyên thuần túy)',
+                  description: 'Tổng cộng hóa đơn (số nguyên thuần túy)',
                 },
               },
               required: ['billDate', 'paymentType', 'debtorName', 'totalAmount'],
@@ -364,7 +433,12 @@ app.post('/api/ocr-bill', async (req, res) => {
                 properties: {
                   productName: {
                     type: Type.STRING,
-                    description: 'Tên món ăn / nước uống',
+                    description: 'Tên món ăn / nước uống chuẩn (đã tách riêng ghi chú)',
+                  },
+                  note: {
+                    type: Type.STRING,
+                    description:
+                      'Ghi chú món ăn (VD: làm cay, hoặc danh sách các món con trong combo)',
                   },
                   category: {
                     type: Type.STRING,
@@ -400,7 +474,12 @@ app.post('/api/ocr-bill', async (req, res) => {
 
     const textOutput = response.text || '{}';
     const parsed = JSON.parse(textOutput);
-    const normalized = sanitizeExtractedBill(parsed, fallbackDate);
+    const normalized = sanitizeExtractedBill(
+      parsed,
+      fallbackDate,
+      existingProducts,
+      categories
+    );
     res.json(normalized);
   } catch (error: any) {
     console.error('Error in /api/ocr-bill:', error);
@@ -452,10 +531,10 @@ app.post('/api/parse-products', async (req, res) => {
     });
 
     const response: GenerateContentResponse = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: GEMINI_MODEL,
       contents: { parts },
       config: {
-        systemInstruction: `Bạn là chuyên gia số hóa thực đơn nhà hàng/quán nhậu. Hãy trích xuất các món ăn/thức uống theo logic: Tên sản phẩm (productName), Danh mục (category - ưu tiên thuộc [${catList}], hoặc giữ đúng danh mục người dùng ghi), Giá bán (unitPrice - số nguyên VNĐ, ví dụ 20k -> 20000).`,
+        systemInstruction: `Bạn là chuyên gia số hóa thực đơn nhà hàng/quán nhậu. Hãy trích xuất các món ăn/thức uống theo logic: Tên sản phẩm (productName), Danh mục (category - giữ nguyên danh mục người dùng ghi trong văn bản hoặc xếp vào [${catList}]), Giá bán (unitPrice - số nguyên VNĐ, ví dụ 20k -> 20000).`,
         temperature: 0.1,
         responseMimeType: 'application/json',
         responseSchema: {
@@ -483,14 +562,16 @@ app.post('/api/parse-products', async (req, res) => {
     const parsed = JSON.parse(response.text || '{"products":[]}');
     const products = (parsed.products || [])
       .map((p: any) => {
-        let price = normalizePriceNumber(p.unitPrice);
+        let price = normalizeMoneyNumber(p.unitPrice);
         if (price > 0 && price < 1000) price *= 1000;
         const name = String(p.productName || '').trim();
+        const cat =
+          String(p.category || '').trim() || inferCategory(name, categories);
         return {
           productName: name,
-          category: String(p.category || '').trim() || inferCategoryFromName(name),
+          category: cat,
           unitPrice: price,
-          unit: String(p.unit || '').trim() || 'Phần',
+          unit: String(p.unit || '').trim() || inferUnit(name, cat),
         };
       })
       .filter((p: any) => p.productName);

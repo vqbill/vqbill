@@ -26,6 +26,8 @@ import {
   truncateStr,
   inferCategory,
   inferUnit,
+  getCurrentBusinessDate,
+  resolveBusinessBillDate,
   DEFAULT_CATALOG_PRODUCTS,
 } from '../utils/parser';
 
@@ -476,9 +478,14 @@ export async function renameOrReassignCategoryInCloud(params: {
 export async function saveNewBillToCloud(params: {
   ownerId: string;
   billDate: string;
+  rawDate?: string;
+  checkInTime?: string;
+  checkOutTime?: string;
+  discountAmount?: number;
   paymentType: PaymentType;
   debtorName: string;
   note: string;
+  subtotalAmount?: number;
   items: ExtractedBillItem[];
   existingProducts: ProductRecord[];
   autoAddProducts: boolean;
@@ -490,6 +497,10 @@ export async function saveNewBillToCloud(params: {
   const {
     ownerId,
     billDate,
+    rawDate,
+    checkInTime,
+    checkOutTime,
+    discountAmount = 0,
     paymentType,
     debtorName,
     note,
@@ -501,16 +512,30 @@ export async function saveNewBillToCloud(params: {
   const cleanOwnerId = sanitizeId(ownerId);
   const now = Date.now();
   const billId = sanitizeId(`bill_${now}_${Math.random().toString(36).slice(2, 7)}`);
-  const shortCode = `HD-${billDate.replace(/-/g, '').slice(2)}-${String(now).slice(-4)}`;
+
+  const baseDate = /^\d{4}-\d{2}-\d{2}$/.test(billDate)
+    ? billDate
+    : getCurrentBusinessDate();
+
+  // If rawDate wasn't shifted yet, ensure 09:00 AM -> 08:00 AM shift rule is applied when rawDate == billDate
+  const resolved =
+    rawDate && rawDate !== baseDate
+      ? { businessDate: baseDate }
+      : resolveBusinessBillDate(baseDate, checkInTime, checkOutTime, false);
+  const effectiveBillDate = resolved.businessDate || baseDate;
+
+  const shortCode = `HD-${effectiveBillDate.replace(/-/g, '').slice(2)}-${String(now).slice(-4)}`;
 
   const validItems = items.map((it) => {
     const qty = Math.max(1, Math.round(it.quantity || 1));
     const uPrice = Math.max(0, Math.round(it.unitPrice || 0));
     const sub = qty * uPrice;
     const pName = truncateStr(it.productName, 150, 'Món ăn');
+    const itemNote = truncateStr(it.note || '', 400, '');
     const cat = truncateStr(it.category || inferCategory(pName), 80, 'Khác');
     return {
       productName: pName,
+      note: itemNote,
       category: cat,
       quantity: qty,
       unitPrice: uPrice,
@@ -518,9 +543,20 @@ export async function saveNewBillToCloud(params: {
     };
   });
 
-  const totalAmount = validItems.reduce((sum, it) => sum + it.subtotal, 0);
+  const subtotalAmount = validItems.reduce((sum, it) => sum + it.subtotal, 0);
+  const cleanDiscount = Math.min(
+    subtotalAmount,
+    Math.max(0, Math.round(Number(discountAmount) || 0))
+  );
+  const totalAmount = Math.max(0, subtotalAmount - cleanDiscount);
+
   const summaryStr = truncateStr(
-    validItems.map((it) => `${it.productName} (x${it.quantity})`).join(', '),
+    validItems
+      .map(
+        (it) =>
+          `${it.productName}${it.note ? ` (${it.note})` : ''} x${it.quantity}`
+      )
+      .join(', '),
     1000,
     ''
   );
@@ -533,12 +569,15 @@ export async function saveNewBillToCloud(params: {
     id: billId,
     ownerId: cleanOwnerId,
     billCode: truncateStr(shortCode, 64, 'HD-001'),
-    billDate: /^\d{4}-\d{2}-\d{2}$/.test(billDate)
-      ? billDate
-      : new Date().toISOString().slice(0, 10),
+    billDate: effectiveBillDate,
+    rawDate: rawDate || (baseDate !== effectiveBillDate ? baseDate : undefined),
+    checkInTime: checkInTime ? truncateStr(checkInTime, 20, '') : undefined,
+    checkOutTime: checkOutTime ? truncateStr(checkOutTime, 20, '') : undefined,
     paymentType,
     debtorName: cleanDebtor,
     debtStatus,
+    subtotalAmount,
+    discountAmount: cleanDiscount,
     totalAmount,
     deductedAmount: 0,
     itemsSummary: summaryStr,
@@ -554,6 +593,7 @@ export async function saveNewBillToCloud(params: {
     billId,
     billDate: billRecord.billDate,
     productName: it.productName,
+    note: it.note || '',
     category: it.category,
     quantity: it.quantity,
     returnedQuantity: 0,
@@ -617,9 +657,13 @@ export async function saveNewBillToCloud(params: {
         ownerId: billRecord.ownerId,
         billCode: billRecord.billCode,
         billDate: billRecord.billDate,
+        checkInTime: billRecord.checkInTime || '',
+        checkOutTime: billRecord.checkOutTime || '',
         paymentType: billRecord.paymentType,
         debtorName: billRecord.debtorName,
         debtStatus: billRecord.debtStatus,
+        subtotalAmount: billRecord.subtotalAmount || billRecord.totalAmount,
+        discountAmount: billRecord.discountAmount || 0,
         totalAmount: billRecord.totalAmount,
         deductedAmount: billRecord.deductedAmount,
         itemsSummary: billRecord.itemsSummary,
@@ -636,6 +680,7 @@ export async function saveNewBillToCloud(params: {
           billId: bi.billId,
           billDate: bi.billDate,
           productName: bi.productName,
+          note: bi.note || '',
           category: bi.category,
           quantity: bi.quantity,
           returnedQuantity: bi.returnedQuantity,
@@ -689,9 +734,13 @@ export async function updateBillAndItemsInCloud(params: {
     await updateDoc(doc(db, 'bills', bill.id), {
       billCode: truncateStr(bill.billCode, 64, 'HD-001'),
       billDate: bill.billDate,
+      checkInTime: truncateStr(bill.checkInTime || '', 20, ''),
+      checkOutTime: truncateStr(bill.checkOutTime || '', 20, ''),
       paymentType: bill.paymentType,
       debtorName: truncateStr(bill.debtorName, 120, ''),
       debtStatus: bill.debtStatus,
+      subtotalAmount: Math.max(0, Math.round(bill.subtotalAmount ?? bill.totalAmount)),
+      discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
       totalAmount: Math.max(0, Math.round(bill.totalAmount)),
       deductedAmount: Math.max(0, Math.round(bill.deductedAmount)),
       itemsSummary: truncateStr(bill.itemsSummary, 1000, ''),
@@ -712,6 +761,7 @@ export async function updateBillAndItemsInCloud(params: {
         await updateDoc(doc(db, 'bill_items', ni.id), {
           billDate: ni.billDate,
           productName: truncateStr(ni.productName, 150, 'Món ăn'),
+          note: truncateStr(ni.note || '', 400, ''),
           category: truncateStr(ni.category, 80, 'Khác'),
           quantity: Math.max(1, Math.round(ni.quantity)),
           returnedQuantity: Math.max(0, Math.round(ni.returnedQuantity)),
@@ -725,6 +775,7 @@ export async function updateBillAndItemsInCloud(params: {
           billId: bill.id,
           billDate: ni.billDate,
           productName: truncateStr(ni.productName, 150, 'Món ăn'),
+          note: truncateStr(ni.note || '', 400, ''),
           category: truncateStr(ni.category, 80, 'Khác'),
           quantity: Math.max(1, Math.round(ni.quantity)),
           returnedQuantity: Math.max(0, Math.round(ni.returnedQuantity)),
@@ -949,7 +1000,7 @@ export function buildInitialSeedDataset(ownerId: string): {
   deductions: DeductionRecord[];
 } {
   const cleanOwner = sanitizeId(ownerId);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getCurrentBusinessDate();
   const now = Date.now();
 
   const yesterdayDate = new Date(now - 86400000).toISOString().slice(0, 10);
@@ -982,26 +1033,34 @@ export function buildInitialSeedDataset(ownerId: string): {
     id: string;
     code: string;
     date: string;
+    checkInTime?: string;
+    checkOutTime?: string;
     paymentType: PaymentType;
     debtorName: string;
     debtStatus: 'none' | 'unpaid' | 'paid';
     note: string;
-    items: { name: string; qty: number; price: number }[];
+    items: { name: string; note?: string; qty: number; price: number }[];
   }[] = [
     {
       id: 'bill_seed_aug20',
       code: 'HD-260820-0815',
       date: specialAugDate,
+      checkInTime: '22:15',
+      checkOutTime: '01:30',
       paymentType: 'cash',
       debtorName: '',
       debtStatus: 'none',
-      note: 'Bàn 08 - Khách đặt tiệc sinh nhật (Bill ngày 20/08/2026 có 15 lon bia)',
+      note: 'Bàn 08 - Ca bán 20/08 (09:00 sáng 20/08 → 08:00 sáng 21/08)',
       items: [
+        { name: 'Gà biển kho nghệ', note: 'làm cay', qty: 1, price: 129000 },
+        {
+          name: 'Combo 2',
+          note: 'Cơm chiên hải sản, Càng cua trộn bò, Chip hấp thái, Cá giò kho tiêu, 1 dĩa trái cây',
+          qty: 1,
+          price: 459000,
+        },
         { name: 'Bia Tiger Lùn', qty: 15, price: 22000 },
         { name: 'Khăn lạnh', qty: 6, price: 3000 },
-        { name: 'Đậu lạc rang muối', qty: 2, price: 30000 },
-        { name: 'Ếch sapo', qty: 2, price: 135000 },
-        { name: 'Cánh gà chiên mắm', qty: 2, price: 145000 },
       ],
     },
     {
@@ -1146,7 +1205,9 @@ export function buildInitialSeedDataset(ownerId: string): {
     rb.items.forEach((it, iIdx) => {
       const sub = it.qty * it.price;
       billTotal += sub;
-      summaryParts.push(`${it.name} (x${it.qty})`);
+      summaryParts.push(
+        `${it.name}${it.note ? ` (${it.note})` : ''} x${it.qty}`
+      );
 
       const prodKey = it.name.toLowerCase();
       const prod = productsMap.get(prodKey);
@@ -1166,6 +1227,7 @@ export function buildInitialSeedDataset(ownerId: string): {
         billId: rb.id,
         billDate: rb.date,
         productName: it.name,
+        note: it.note || '',
         category: cat,
         quantity: it.qty,
         returnedQuantity: returnedQty,
@@ -1184,9 +1246,13 @@ export function buildInitialSeedDataset(ownerId: string): {
       ownerId: cleanOwner,
       billCode: rb.code,
       billDate: rb.date,
+      checkInTime: rb.checkInTime,
+      checkOutTime: rb.checkOutTime,
       paymentType: rb.paymentType,
       debtorName: rb.debtorName,
       debtStatus: rb.debtStatus,
+      subtotalAmount: billTotal,
+      discountAmount: 0,
       totalAmount: billTotal,
       deductedAmount: deductedAmt,
       itemsSummary: summaryParts.join(', '),

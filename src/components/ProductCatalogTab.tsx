@@ -25,7 +25,9 @@ import {
   inferCategory,
   inferUnit,
   parseBulkProductsByLogic,
+  BulkParsedProduct,
 } from '../utils/parser';
+import { parseMenuProductsWithGemini } from '../services/geminiService';
 import { GeminiKeyBar } from './GeminiKeyBar';
 
 interface ProductCatalogTabProps {
@@ -49,6 +51,10 @@ interface ProductCatalogTabProps {
     unitPrice: number;
     unit: string;
   }) => Promise<void>;
+  onBulkUpsertProducts?: (items: BulkParsedProduct[]) => Promise<{
+    addedProductsCount: number;
+    addedCategories: string[];
+  }>;
   onDeleteProduct: (productId: string) => Promise<void>;
   onDeleteProductsBatch: (productIds: string[]) => Promise<void>;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
@@ -69,6 +75,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
   onRenameCategory,
   onDeleteCategory,
   onAddOrUpdateProduct,
+  onBulkUpsertProducts,
   onDeleteProduct,
   onDeleteProductsBatch,
   requestConfirm,
@@ -76,25 +83,21 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
-  // Category CRUD State
   const [newCategoryName, setNewCategoryName] = useState('');
   const [editingCategoryOldName, setEditingCategoryOldName] = useState<string | null>(
     null
   );
   const [editingCategoryNewName, setEditingCategoryNewName] = useState<string>('');
 
-  // Single Product Add State
   const [productName, setProductName] = useState('');
   const [category, setCategory] = useState<string>(categories[0] || 'Bia');
   const [unitPrice, setUnitPrice] = useState<number>(22000);
   const [unit, setUnit] = useState<string>('Lon');
 
-  // Editing Product State
   const [editingProduct, setEditingProduct] = useState<ProductRecord | null>(null);
 
-  // Bulk Upload Text State (Logic: Tên sản phẩm, Danh mục, Giá bán)
   const [bulkText, setBulkText] = useState(
-    `Bia Tiger Lùn, Bia, 22000\nNước ngọt Redbull, Nước ngọt, 18000\nẾch sapo, Ếch, 135000\nGà chiên mắm, Gà, 165000`
+    `Gà biển kho nghệ, Gà, 129000\nCombo 2, Lẩu / Món chính, 459000\nBia Tiger Lùn, Bia, 22000\nẾch sapo, Ếch, 135000`
   );
   const [isParsingBulk, setIsParsingBulk] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(
@@ -102,11 +105,44 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
   );
   const menuImageInputRef = React.useRef<HTMLInputElement | null>(null);
 
-  // Live preview of bulk text parsed by logic: Tên sản phẩm, Danh mục, Giá bán
+  // Merge categories with any category present on products so Category Management never misses a category
+  const effectiveCategories = useMemo(() => {
+    const result: string[] = [];
+    const seen = new Set<string>();
+    for (const c of categories) {
+      const clean = (c || '').trim();
+      if (clean && !seen.has(clean.toLowerCase())) {
+        seen.add(clean.toLowerCase());
+        result.push(clean);
+      }
+    }
+    for (const p of products) {
+      const clean = (p.category || '').trim();
+      if (clean && !seen.has(clean.toLowerCase())) {
+        seen.add(clean.toLowerCase());
+        result.push(clean);
+      }
+    }
+    return result;
+  }, [categories, products]);
+
   const bulkPreviewItems = useMemo(() => {
     if (!bulkText.trim()) return [];
-    return parseBulkProductsByLogic(bulkText, categories);
-  }, [bulkText, categories]);
+    return parseBulkProductsByLogic(bulkText, effectiveCategories);
+  }, [bulkText, effectiveCategories]);
+
+  const bulkNewCategories = useMemo(() => {
+    const existingSet = new Set(effectiveCategories.map((c) => c.toLowerCase().trim()));
+    const added: string[] = [];
+    for (const it of bulkPreviewItems) {
+      const cat = (it.category || '').trim();
+      if (cat && !existingSet.has(cat.toLowerCase())) {
+        existingSet.add(cat.toLowerCase());
+        added.push(cat);
+      }
+    }
+    return added;
+  }, [bulkPreviewItems, effectiveCategories]);
 
   const handleCreateCategory = (e: React.FormEvent) => {
     e.preventDefault();
@@ -224,22 +260,12 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
           setIsParsingBulk(true);
           setFeedback(null);
           try {
-            const res = await fetch('/api/parse-products', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                imageBase64: base64Data,
-                mimeType: file.type || 'image/jpeg',
-                apiKey: geminiApiKey || undefined,
-                categories,
-              }),
+            const items = await parseMenuProductsWithGemini({
+              imageBase64: base64Data,
+              mimeType: file.type || 'image/jpeg',
+              apiKey: geminiApiKey || undefined,
+              categories: effectiveCategories,
             });
-            if (!res.ok) {
-              const errData = await res.json().catch(() => ({}));
-              throw new Error(errData.error || 'Không thể đọc ảnh menu bằng Gemini.');
-            }
-            const data = await res.json();
-            const items = Array.isArray(data?.products) ? data.products : [];
             if (items.length === 0) {
               setFeedback({
                 type: 'err',
@@ -247,25 +273,32 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
               });
               return;
             }
-            for (const it of items) {
-              const cat = it.category || inferCategory(it.productName, categories);
-              if (
-                cat &&
-                !categories.some((c) => c.toLowerCase() === cat.toLowerCase())
-              ) {
+            if (onBulkUpsertProducts) {
+              const res = await onBulkUpsertProducts(items);
+              setFeedback({
+                type: 'ok',
+                text: `Gemini AI đã quét ảnh và lưu ${res.addedProductsCount} sản phẩm${
+                  res.addedCategories.length > 0
+                    ? ` (cùng ${res.addedCategories.length} danh mục mới: ${res.addedCategories.join(', ')})`
+                    : ''
+                } vào Menu & Quản lý danh mục thành công!`,
+              });
+            } else {
+              for (const it of items) {
+                const cat = it.category || inferCategory(it.productName, effectiveCategories);
                 await onAddCategory(cat);
+                await onAddOrUpdateProduct({
+                  productName: it.productName,
+                  category: cat,
+                  unitPrice: Number(it.unitPrice) || 0,
+                  unit: it.unit || inferUnit(it.productName, cat),
+                });
               }
-              await onAddOrUpdateProduct({
-                productName: it.productName,
-                category: cat,
-                unitPrice: Number(it.unitPrice) || 0,
-                unit: it.unit || inferUnit(it.productName, cat),
+              setFeedback({
+                type: 'ok',
+                text: `Gemini AI đã quét ảnh và lưu ${items.length} sản phẩm vào Menu Firebase thành công!`,
               });
             }
-            setFeedback({
-              type: 'ok',
-              text: `Gemini AI đã quét ảnh và lưu ${items.length} sản phẩm vào Menu Firebase thành công!`,
-            });
           } catch (err: any) {
             setFeedback({
               type: 'err',
@@ -355,10 +388,9 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
     });
   };
 
-  // Upload hàng loạt theo đúng logic: Tên sản phẩm, Danh mục, Giá bán
   const handleBulkImportByLogic = () => {
     if (!canWrite || !bulkText.trim()) return;
-    const parsedList = parseBulkProductsByLogic(bulkText, categories);
+    const parsedList = parseBulkProductsByLogic(bulkText, effectiveCategories);
     if (parsedList.length === 0) {
       setFeedback({
         type: 'err',
@@ -369,34 +401,43 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
 
     requestConfirm({
       title: 'Xác nhận Upload Hàng Loạt (Tên sản phẩm, Danh mục, Giá bán)',
-      message: `Hệ thống đã phân tích được ${parsedList.length} sản phẩm theo logic (Tên sản phẩm, Danh mục, Giá bán). Bạn có chắc chắn muốn lưu toàn bộ ${parsedList.length} sản phẩm này vào Menu Firebase không?`,
+      message: `Hệ thống đã phân tích được ${parsedList.length} sản phẩm${
+        bulkNewCategories.length > 0
+          ? ` và ${bulkNewCategories.length} danh mục mới (${bulkNewCategories.join(', ')})`
+          : ''
+      } theo logic (Tên sản phẩm, Danh mục, Giá bán). Bạn có chắc chắn muốn lưu toàn bộ vào Menu và Quản lý Danh mục không?`,
       confirmLabel: `Upload ${parsedList.length} sản phẩm`,
       variant: 'primary',
       onConfirm: async () => {
         setIsParsingBulk(true);
         setFeedback(null);
         try {
-          const seenNewCats = new Set<string>();
-          for (const item of parsedList) {
-            const cat = item.category.trim() || 'Khác';
-            if (
-              !categories.some((c) => c.toLowerCase() === cat.toLowerCase()) &&
-              !seenNewCats.has(cat.toLowerCase())
-            ) {
-              seenNewCats.add(cat.toLowerCase());
+          if (onBulkUpsertProducts) {
+            const res = await onBulkUpsertProducts(parsedList);
+            setFeedback({
+              type: 'ok',
+              text: `Đã upload thành công ${res.addedProductsCount} sản phẩm${
+                res.addedCategories.length > 0
+                  ? ` và tự động thêm ${res.addedCategories.length} danh mục mới (${res.addedCategories.join(', ')}) vào Quản lý Danh mục`
+                  : ''
+              }!`,
+            });
+          } else {
+            for (const item of parsedList) {
+              const cat = item.category.trim() || 'Khác';
               await onAddCategory(cat);
+              await onAddOrUpdateProduct({
+                productName: item.productName,
+                category: cat,
+                unitPrice: item.unitPrice,
+                unit: item.unit,
+              });
             }
-            await onAddOrUpdateProduct({
-              productName: item.productName,
-              category: cat,
-              unitPrice: item.unitPrice,
-              unit: item.unit,
+            setFeedback({
+              type: 'ok',
+              text: `Đã upload hàng loạt thành công ${parsedList.length} sản phẩm và cập nhật Quản lý Danh mục!`,
             });
           }
-          setFeedback({
-            type: 'ok',
-            text: `Đã upload hàng loạt thành công ${parsedList.length} sản phẩm theo chuẩn (Tên sản phẩm, Danh mục, Giá bán) lên Firebase!`,
-          });
           setBulkText('');
         } catch (err: any) {
           setFeedback({
@@ -410,14 +451,13 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
     });
   };
 
-  // Upload hàng loạt bằng Gemini AI
   const handleBulkImportWithGemini = () => {
     if (!canWrite || !bulkText.trim()) return;
 
     requestConfirm({
       title: 'Xác nhận Dùng Gemini AI Phân Tích & Thêm Món Hàng Loạt',
       message:
-        'Bạn có chắc chắn muốn sử dụng Gemini AI để trích xuất (Tên sản phẩm, Danh mục, Giá bán) từ đoạn văn bản và lưu vào Menu trên Firebase không?',
+        'Bạn có chắc chắn muốn sử dụng Gemini AI để trích xuất (Tên sản phẩm, Danh mục, Giá bán) từ đoạn văn bản và lưu vào Menu & Quản lý Danh mục không?',
       confirmLabel: 'Xác nhận Gemini Upload',
       variant: 'primary',
       onConfirm: async () => {
@@ -425,45 +465,40 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
         setFeedback(null);
 
         try {
-          const res = await fetch('/api/parse-products', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              rawText: bulkText,
-              apiKey: geminiApiKey || undefined,
-              categories,
-            }),
+          const extracted = await parseMenuProductsWithGemini({
+            rawText: bulkText,
+            apiKey: geminiApiKey || undefined,
+            categories: effectiveCategories,
           });
-
-          if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            throw new Error(errData.error || 'Lỗi gọi Gemini AI.');
-          }
-
-          const data = await res.json();
-          const extracted = data.products || [];
           if (extracted.length === 0) {
             throw new Error('Gemini không tìm thấy sản phẩm nào từ văn bản.');
           }
-          for (const p of extracted) {
-            const cat = p.category || inferCategory(p.productName, categories);
-            if (
-              cat &&
-              !categories.some((c) => c.toLowerCase() === cat.toLowerCase())
-            ) {
+          if (onBulkUpsertProducts) {
+            const res = await onBulkUpsertProducts(extracted);
+            setFeedback({
+              type: 'ok',
+              text: `Gemini AI đã nhận diện và thêm ${res.addedProductsCount} sản phẩm${
+                res.addedCategories.length > 0
+                  ? ` cùng ${res.addedCategories.length} danh mục mới (${res.addedCategories.join(', ')})`
+                  : ''
+              } vào Menu & Quản lý Danh mục!`,
+            });
+          } else {
+            for (const p of extracted) {
+              const cat = p.category || inferCategory(p.productName, effectiveCategories);
               await onAddCategory(cat);
+              await onAddOrUpdateProduct({
+                productName: p.productName,
+                category: cat,
+                unitPrice: Number(p.unitPrice) || 0,
+                unit: p.unit || inferUnit(p.productName, cat),
+              });
             }
-            await onAddOrUpdateProduct({
-              productName: p.productName,
-              category: cat,
-              unitPrice: Number(p.unitPrice) || 0,
-              unit: p.unit || inferUnit(p.productName, cat),
+            setFeedback({
+              type: 'ok',
+              text: `Gemini AI đã nhận diện và thêm thành công ${extracted.length} sản phẩm vào Menu!`,
             });
           }
-          setFeedback({
-            type: 'ok',
-            text: `Gemini AI đã nhận diện và thêm thành công ${extracted.length} sản phẩm vào Menu!`,
-          });
           setBulkText('');
         } catch (err: any) {
           setFeedback({
@@ -538,8 +573,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
   };
 
   return (
-    <div className="space-y-6">
-      {/* Gemini API Key Bar */}
+    <div className="space-y-5">
       <GeminiKeyBar
         geminiApiKey={geminiApiKey}
         geminiStatus={geminiStatus}
@@ -550,36 +584,35 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
         contextLabel="Cấu hình & Check Gemini Key để dùng Gemini quét ảnh Menu hoặc nhận diện thêm món tự động."
       />
 
-      {/* Header & Auto-detect Toggle + Delete All Menu Button */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-            Quản Lý Thực Đơn, Danh Mục & Upload Sản Phẩm Hàng Loạt
+          <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+            Quản Lý Thực Đơn, Danh Mục & Upload Sản Phẩm
           </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Thêm/sửa/xóa danh mục sản phẩm, upload hàng loạt theo chuẩn <strong>Tên sản phẩm, Danh mục, Giá bán</strong> và quản lý giá mặc định của từng món.
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+            Thêm/sửa/xóa danh mục sản phẩm, upload hàng loạt theo chuẩn <strong>Tên sản phẩm, Danh mục, Giá bán</strong> và quản lý giá mặc định.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <label className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400 px-3 py-2 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/50 dark:bg-emerald-950/30 cursor-pointer">
+          <label className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400 px-3 py-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/50 dark:bg-emerald-950/30 cursor-pointer">
             <input
               type="checkbox"
               checked={autoAddProducts}
               onChange={(e) => onToggleAutoAddProducts(e.target.checked)}
               className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
             />
-            <span>Tự nhận diện & thêm sản phẩm mới từ Bill</span>
+            <span>Tự thêm sản phẩm mới từ Bill</span>
           </label>
 
           {canWrite && products.length > 0 && (
             <button
               type="button"
               onClick={handleDeleteEntireMenu}
-              className="px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+              className="h-9 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span>Xóa tất cả sản phẩm trong Menu ({products.length})</span>
+              <span>Xóa toàn bộ Menu ({products.length})</span>
             </button>
           )}
         </div>
@@ -587,79 +620,81 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
 
       {feedback && (
         <div
-          className={`p-3.5 rounded-lg border flex items-center gap-2.5 text-xs ${
+          className={`p-3.5 rounded-xl border flex items-start sm:items-center gap-2.5 text-xs ${
             feedback.type === 'ok'
               ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
               : 'border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
           }`}
         >
           {feedback.type === 'ok' ? (
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
           ) : (
-            <AlertCircle className="w-4 h-4 shrink-0" />
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
           )}
           <span>{feedback.text}</span>
         </div>
       )}
 
-      {/* SECTION: Category Manager (Thêm / Sửa / Xóa Danh mục sản phẩm) */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+      {/* SECTION: Category Manager */}
+      <div className="p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Tag className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <div className="flex items-start gap-2.5">
+            <Tag className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                Quản Lý Danh Mục Sản Phẩm (Thêm / Sửa / Xóa Danh Mục)
+                Quản Lý Danh Mục Sản Phẩm ({effectiveCategories.length} nhóm)
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Hiện có {categories.length} danh mục. Khi sửa tên danh mục, toàn bộ sản phẩm thuộc danh mục đó sẽ tự động cập nhật theo.
+                Khi upload hàng loạt hoặc thêm sản phẩm có danh mục mới, danh mục sẽ tự động được thêm vào đây.
               </p>
             </div>
           </div>
 
           {canWrite && (
-            <form onSubmit={handleCreateCategory} className="flex items-center gap-2">
+            <form onSubmit={handleCreateCategory} className="flex items-center gap-2 w-full sm:w-auto">
               <input
                 type="text"
                 value={newCategoryName}
                 onChange={(e) => setNewCategoryName(e.target.value)}
-                placeholder="Nhập tên danh mục mới (VD: Đồ nướng)..."
-                className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white w-56"
+                placeholder="Tên danh mục mới (VD: Đồ nướng)..."
+                className="flex-1 sm:w-56 h-9 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
               />
               <button
                 type="submit"
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className="h-9 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <FolderPlus className="w-3.5 h-3.5" />
-                <span>Thêm danh mục</span>
+                <span>Thêm nhóm</span>
               </button>
             </form>
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-          {categories.map((cat) => {
-            const count = products.filter((p) => p.category === cat).length;
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+          {effectiveCategories.map((cat) => {
+            const count = products.filter(
+              (p) => p.category.toLowerCase().trim() === cat.toLowerCase().trim()
+            ).length;
             const isEditingThis = editingCategoryOldName === cat;
 
             return (
               <div
                 key={cat}
-                className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-center justify-between gap-2"
+                className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-center justify-between gap-2"
               >
                 {isEditingThis ? (
-                  <div className="flex items-center gap-1.5 w-full">
+                  <div className="flex items-center gap-1 w-full">
                     <input
                       type="text"
                       value={editingCategoryNewName}
                       onChange={(e) => setEditingCategoryNewName(e.target.value)}
-                      className="flex-1 px-2 py-1 text-xs rounded border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      className="flex-1 min-w-0 h-8 px-2 text-xs rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                       autoFocus
                     />
                     <button
                       type="button"
                       onClick={() => handleSaveCategoryRename(cat)}
-                      className="px-2 py-1 rounded bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
+                      className="h-8 px-2 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
                     >
                       Lưu
                     </button>
@@ -678,7 +713,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                         {cat}
                       </div>
                       <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                        {count} sản phẩm
+                        {count} món
                       </div>
                     </div>
 
@@ -690,7 +725,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                             setEditingCategoryOldName(cat);
                             setEditingCategoryNewName(cat);
                           }}
-                          className="p-1.5 rounded border border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer"
+                          className="w-7 h-7 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 flex items-center justify-center cursor-pointer"
                           title="Sửa tên danh mục"
                         >
                           <Edit3 className="w-3 h-3" />
@@ -698,7 +733,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                         <button
                           type="button"
                           onClick={() => handleDeleteCategoryClick(cat)}
-                          className="p-1.5 rounded border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 cursor-pointer"
+                          className="w-7 h-7 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center cursor-pointer"
                           title="Xóa danh mục"
                         >
                           <Trash2 className="w-3 h-3" />
@@ -715,10 +750,10 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
 
       {/* Edit Product Drawer if active */}
       {editingProduct && canWrite && (
-        <div className="p-5 border-2 border-emerald-500/60 rounded-xl bg-emerald-50/20 dark:bg-emerald-950/20 space-y-4">
+        <div className="p-4 sm:p-5 border-2 border-emerald-500/60 rounded-2xl bg-emerald-50/20 dark:bg-emerald-950/20 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-              Chỉnh sửa sản phẩm mặc định trong Menu: {editingProduct.productName}
+              Chỉnh sửa sản phẩm mặc định: {editingProduct.productName}
             </h3>
             <button
               type="button"
@@ -744,7 +779,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                 onChange={(e) =>
                   setEditingProduct({ ...editingProduct, productName: e.target.value })
                 }
-                className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
               />
             </div>
 
@@ -757,7 +792,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                 onChange={(e) =>
                   setEditingProduct({ ...editingProduct, category: e.target.value })
                 }
-                className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
               >
                 {Array.from(new Set([...categories, editingProduct.category])).map(
                   (c) => (
@@ -784,14 +819,14 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                     unitPrice: Number(e.target.value),
                   })
                 }
-                className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
               />
             </div>
 
             <div className="flex items-center gap-2">
               <button
                 type="submit"
-                className="flex-1 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                className="flex-1 h-10 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Save className="w-3.5 h-3.5" />
                 <span>Lưu sửa</span>
@@ -799,7 +834,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
               <button
                 type="button"
                 onClick={() => setEditingProduct(null)}
-                className="py-2 px-3 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-medium cursor-pointer"
+                className="h-10 px-3 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-medium cursor-pointer"
               >
                 Hủy
               </button>
@@ -810,13 +845,12 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
 
       {/* Add Single Product & Bulk Upload Grid */}
       {canWrite && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Add Single Product */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           <form
             onSubmit={handleAddSingle}
-            className="lg:col-span-5 p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col justify-between space-y-4"
+            className="lg:col-span-5 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs flex flex-col justify-between space-y-4"
           >
-            <div className="space-y-4">
+            <div className="space-y-3.5">
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                 Thêm 1 sản phẩm mới vào Menu
               </h3>
@@ -837,8 +871,8 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                       setCategory(guessedCat);
                       setUnit(inferUnit(val, guessedCat));
                     }}
-                    placeholder="Ví dụ: Bia Tiger Lùn, Ếch sapo, Gà chiên mắm..."
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                    placeholder="Ví dụ: Bia Tiger Lùn, Ếch sapo..."
+                    className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                   />
                 </div>
 
@@ -849,7 +883,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                    className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                   >
                     {categories.map((c) => (
                       <option key={c} value={c}>
@@ -859,7 +893,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2.5">
                   <div>
                     <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                       3. Giá bán mặc định (₫)
@@ -870,7 +904,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                       step={1000}
                       value={unitPrice}
                       onChange={(e) => setUnitPrice(Number(e.target.value))}
-                      className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                      className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                     />
                   </div>
                   <div>
@@ -881,7 +915,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                       type="text"
                       value={unit}
                       onChange={(e) => setUnit(e.target.value)}
-                      className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                      className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                     />
                   </div>
                 </div>
@@ -890,23 +924,22 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
 
             <button
               type="submit"
-              className="w-full py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Thêm vào Danh mục Sản phẩm</span>
             </button>
           </form>
 
-          {/* Bulk Upload via Logic: Tên sản phẩm, Danh mục, Giá bán */}
-          <div className="lg:col-span-7 p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col justify-between space-y-3">
+          <div className="lg:col-span-7 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs flex flex-col justify-between space-y-3">
             <div className="space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                    Upload Hàng Loạt theo logic: Tên sản phẩm, Danh mục, Giá bán
+                    Upload Hàng Loạt: Tên sản phẩm, Danh mục, Giá bán
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Nhập mỗi dòng 1 món theo đúng thứ tự: <code className="font-mono text-emerald-600 dark:text-emerald-400">Tên sản phẩm, Danh mục, Giá bán</code> (ngăn cách bằng dấu phẩy <code className="font-mono">,</code> hoặc <code className="font-mono">|</code>).
+                    Mỗi dòng 1 món: <code className="font-mono text-emerald-600 dark:text-emerald-400">Tên sản phẩm, Danh mục, Giá bán</code>
                   </p>
                 </div>
                 <input
@@ -920,7 +953,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                   type="button"
                   disabled={isParsingBulk}
                   onClick={() => menuImageInputRef.current?.click()}
-                  className="px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                  className="h-9 px-3 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                 >
                   <Upload className="w-3.5 h-3.5" />
                   <span>Gemini Quét Ảnh Menu</span>
@@ -931,19 +964,22 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                 rows={4}
                 value={bulkText}
                 onChange={(e) => setBulkText(e.target.value)}
-                placeholder={`Tên sản phẩm, Danh mục, Giá bán\nBia Tiger Lùn, Bia, 22000\nNước ngọt Redbull, Nước ngọt, 18000\nẾch sapo, Ếch, 135000\nGà chiên mắm, Gà, 165000`}
-                className="w-full p-2.5 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                placeholder={`Tên sản phẩm, Danh mục, Giá bán\nBia Tiger Lùn, Bia, 22000\nNước ngọt Redbull, Nước ngọt, 18000`}
+                className="w-full p-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
 
-              {/* Live Preview of Bulk Upload Logic */}
               {bulkPreviewItems.length > 0 && (
-                <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-                  <div className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800/80 text-[11px] font-semibold text-slate-600 dark:text-slate-300 flex items-center justify-between">
+                <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                  <div className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800/80 text-[11px] font-semibold text-slate-600 dark:text-slate-300 flex flex-wrap items-center justify-between gap-2">
                     <span>
-                      Xem trước kết quả tách tự động ({bulkPreviewItems.length} sản phẩm):
+                      Xem trước ({bulkPreviewItems.length} món
+                      {bulkNewCategories.length > 0
+                        ? ` · +${bulkNewCategories.length} danh mục mới: ${bulkNewCategories.join(', ')}`
+                        : ''}
+                      ):
                     </span>
                     <span className="font-mono text-emerald-600 dark:text-emerald-400">
-                      Tên sản phẩm · Danh mục · Giá bán
+                      Tên SP · Danh mục · Giá
                     </span>
                   </div>
                   <div className="max-h-28 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 text-xs">
@@ -956,7 +992,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                           {item.productName}
                         </span>
                         <div className="flex items-center gap-3 shrink-0 font-mono text-[11px]">
-                          <span className="text-slate-600 dark:text-slate-400">
+                          <span className="text-slate-500">
                             {item.category}
                           </span>
                           <span className="font-bold text-emerald-600 dark:text-emerald-400 w-20 text-right">
@@ -970,16 +1006,16 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
               <button
                 type="button"
                 disabled={isParsingBulk || !bulkText.trim()}
                 onClick={handleBulkImportByLogic}
-                className="py-2.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                className="h-10 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
               >
-                <Upload className="w-3.5 h-3.5" />
+                <Upload className="w-3.5 h-3.5 shrink-0" />
                 <span>
-                  Upload Chuẩn (Tên SP, Danh mục, Giá bán) ({bulkPreviewItems.length})
+                  Upload Chuẩn ({bulkPreviewItems.length} món)
                 </span>
               </button>
 
@@ -987,17 +1023,17 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                 type="button"
                 disabled={isParsingBulk || !bulkText.trim()}
                 onClick={handleBulkImportWithGemini}
-                className="py-2.5 px-3 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-semibold text-xs flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
+                className="h-10 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-semibold text-xs flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
               >
                 {isParsingBulk ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
                 ) : (
-                  <Sparkles className="w-3.5 h-3.5" />
+                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
                 )}
                 <span>
                   {isParsingBulk
                     ? 'Đang xử lý...'
-                    : 'Dùng Gemini AI Nhận diện & Thêm món'}
+                    : 'Gemini AI Nhận diện & Thêm món'}
                 </span>
               </button>
             </div>
@@ -1005,15 +1041,14 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
         </div>
       )}
 
-      {/* Catalog List Table with Category Tabs & Delete All in Active Tab */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+      {/* Catalog List with Category Tabs & Responsive Cards/Table */}
+      <div className="p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4">
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-          {/* Category Tabs */}
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={() => setCategoryFilter('all')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
                 categoryFilter === 'all'
                   ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-semibold'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
@@ -1021,14 +1056,16 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
             >
               Tất cả ({products.length})
             </button>
-            {categories.map((cat) => {
-              const countInCat = products.filter((p) => p.category === cat).length;
+            {effectiveCategories.map((cat) => {
+              const countInCat = products.filter(
+                (p) => p.category.toLowerCase().trim() === cat.toLowerCase().trim()
+              ).length;
               return (
                 <button
                   key={cat}
                   type="button"
                   onClick={() => setCategoryFilter(cat)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
                     categoryFilter === cat
                       ? 'bg-emerald-600 text-white font-semibold'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -1040,16 +1077,15 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
             })}
           </div>
 
-          {/* Search & Delete All in Current Tab */}
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
+            <div className="relative flex-1 sm:flex-initial">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Tìm tên sản phẩm..."
-                className="pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                className="w-full sm:w-52 h-9 pl-8 pr-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
               />
             </div>
 
@@ -1057,13 +1093,13 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
               <button
                 type="button"
                 onClick={handleDeleteCategoryTabProducts}
-                className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+                className="h-9 px-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>
                   {categoryFilter === 'all'
-                    ? `Xóa tất cả sản phẩm trong Menu (${filteredProducts.length})`
-                    : `Xóa tất cả sản phẩm tab "${categoryFilter}" (${filteredProducts.length})`}
+                    ? `Xóa tất cả (${filteredProducts.length})`
+                    : `Xóa nhóm "${categoryFilter}" (${filteredProducts.length})`}
                 </span>
               </button>
             )}
@@ -1071,72 +1107,137 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
         </div>
 
         {filteredProducts.length === 0 ? (
-          <div className="py-12 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-500 dark:text-slate-400">
+          <div className="py-12 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500 dark:text-slate-400">
             Không có sản phẩm nào trong mục này. Bạn có thể thêm món mới hoặc upload danh sách thực đơn ở trên.
           </div>
         ) : (
-          <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[680px] text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  <th className="py-2.5 px-3">Tên sản phẩm</th>
-                  <th className="py-2.5 px-3">Danh mục (Category)</th>
-                  <th className="py-2.5 px-3">Đơn vị</th>
-                  <th className="py-2.5 px-3 text-right">Giá bán mặc định</th>
-                  <th className="py-2.5 px-3 text-right">Lũy kế đã bán</th>
-                  <th className="py-2.5 px-3 text-right">Đã hoàn trả</th>
-                  <th className="py-2.5 px-3 text-right">Doanh thu lũy kế</th>
-                  {canWrite && <th className="py-2.5 px-3 text-right">Thao tác</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {filteredProducts.map((prod) => (
-                  <tr key={prod.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                    <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
-                      {prod.productName}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                      {prod.category}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-500">{prod.unit}</td>
-                    <td className="py-2.5 px-3 text-right font-mono">
-                      {formatVND(prod.unitPrice)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                      {formatNumber(prod.totalSold)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-rose-600 dark:text-rose-400">
-                      {prod.totalReturned > 0 ? `-${formatNumber(prod.totalReturned)}` : '0'}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
-                      {formatVND(prod.totalRevenue)}
-                    </td>
-                    {canWrite && (
-                      <td className="py-2.5 px-3 text-right whitespace-nowrap space-x-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setEditingProduct({ ...prod })}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
-                        >
-                          <Edit3 className="w-3 h-3 text-emerald-600" />
-                          <span>Sửa</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteOneClick(prod)}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[11px] font-medium text-rose-600 dark:text-rose-400 cursor-pointer"
-                          title="Xóa sản phẩm"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Xóa</span>
-                        </button>
-                      </td>
-                    )}
+          <>
+            {/* Mobile Product Cards (< md) */}
+            <div className="md:hidden grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {filteredProducts.map((prod) => (
+                <div
+                  key={prod.id}
+                  className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col justify-between gap-2.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {prod.productName}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        {prod.category} · {prod.unit}
+                      </div>
+                    </div>
+                    <div className="text-right font-mono shrink-0">
+                      <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatVND(prod.unitPrice)}
+                      </div>
+                      <div className="text-[10px] text-slate-400">Giá mặc định</div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 flex items-center justify-between gap-2 text-[11px] font-mono">
+                    <span className="text-slate-600 dark:text-slate-300">
+                      Đã bán: <strong>{formatNumber(prod.totalSold)}</strong>
+                      {prod.totalReturned > 0 && (
+                        <span className="text-rose-500 ml-1">
+                          (-{prod.totalReturned})
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-semibold text-slate-900 dark:text-white">
+                      DT: {formatVND(prod.totalRevenue)}
+                    </span>
+                  </div>
+
+                  {canWrite && (
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setEditingProduct({ ...prod })}
+                        className="flex-1 h-8 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <Edit3 className="w-3 h-3 text-emerald-600" />
+                        <span>Sửa</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteOneClick(prod)}
+                        className="flex-1 h-8 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50/60 dark:bg-rose-950/30 text-xs font-medium text-rose-600 dark:text-rose-400 inline-flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Xóa</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table (>= md) */}
+            <div className="hidden md:block border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <th className="py-2.5 px-3">Tên sản phẩm</th>
+                    <th className="py-2.5 px-3">Danh mục</th>
+                    <th className="py-2.5 px-3">Đơn vị</th>
+                    <th className="py-2.5 px-3 text-right">Giá bán mặc định</th>
+                    <th className="py-2.5 px-3 text-right">Lũy kế đã bán</th>
+                    <th className="py-2.5 px-3 text-right">Đã hoàn trả</th>
+                    <th className="py-2.5 px-3 text-right">Doanh thu lũy kế</th>
+                    {canWrite && <th className="py-2.5 px-3 text-right">Thao tác</th>}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {filteredProducts.map((prod) => (
+                    <tr key={prod.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
+                        {prod.productName}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                        {prod.category}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-500">{prod.unit}</td>
+                      <td className="py-2.5 px-3 text-right font-mono">
+                        {formatVND(prod.unitPrice)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                        {formatNumber(prod.totalSold)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono text-rose-600 dark:text-rose-400">
+                        {prod.totalReturned > 0 ? `-${formatNumber(prod.totalReturned)}` : '0'}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
+                        {formatVND(prod.totalRevenue)}
+                      </td>
+                      {canWrite && (
+                        <td className="py-2.5 px-3 text-right whitespace-nowrap space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setEditingProduct({ ...prod })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
+                          >
+                            <Edit3 className="w-3 h-3 text-emerald-600" />
+                            <span>Sửa</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteOneClick(prod)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[11px] font-medium text-rose-600 dark:text-rose-400 cursor-pointer"
+                            title="Xóa sản phẩm"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Xóa</span>
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>

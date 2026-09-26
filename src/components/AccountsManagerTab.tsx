@@ -62,7 +62,6 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   onSwitchAccount,
   requestConfirm,
 }) => {
-  // Role Permissions Matrix Draft State
   const [draftRolePerms, setDraftRolePerms] = useState<RolePermissionsMap>(
     rolePermissions
   );
@@ -72,7 +71,6 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     setDraftRolePerms(rolePermissions);
   }, [rolePermissions]);
 
-  // New Account Form State
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newDisplayName, setNewDisplayName] = useState('');
@@ -84,7 +82,6 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
       DEFAULT_ROLE_PERMISSIONS[UserRole.CASHIER].allowedTabs
   );
 
-  // Sync newAllowedTabs when newRole changes if not custom
   useEffect(() => {
     if (!newUseCustomTabs) {
       setNewAllowedTabs(
@@ -94,7 +91,6 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     }
   }, [newRole, newUseCustomTabs, rolePermissions]);
 
-  // Edit Account State
   const [editingAcc, setEditingAcc] = useState<StaffAccount | null>(null);
   const [visiblePasswords, setVisiblePasswords] = useState<Record<string, boolean>>({});
   const [showNewPassword, setShowNewPassword] = useState<boolean>(false);
@@ -104,9 +100,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     setVisiblePasswords((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // Toggle a tab in the Role Matrix
   const handleToggleRoleTab = (role: UserRole, tabId: ManagementTabId) => {
-    // Admin must always keep 'accounts' tab
     if (role === UserRole.ADMIN && tabId === 'accounts') return;
 
     setDraftRolePerms((prev) => {
@@ -123,7 +117,6 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         nextTabs.push('accounts');
       }
 
-      // Keep canonical order
       const ordered = MANAGEMENT_TABS.map((m) => m.id).filter((id) =>
         nextTabs.includes(id)
       );
@@ -183,7 +176,6 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     });
   };
 
-  // Toggle a tab in the New Account Form
   const handleToggleNewAccountTab = (tabId: ManagementTabId) => {
     if (newRole === UserRole.ADMIN && tabId === 'accounts') return;
     setNewUseCustomTabs(true);
@@ -198,7 +190,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const u = newUsername.trim().toLowerCase();
-    const p = newPassword.trim();
+    const p = u === 'admin' ? 'admin123' : newPassword.trim();
     const d = newDisplayName.trim();
     if (!u || !p || !d) return;
 
@@ -240,11 +232,11 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     });
   };
 
-  // Open Edit Drawer with effective tabs populated
   const handleOpenEditAccount = (acc: StaffAccount) => {
     const eff = getEffectiveRolePermissions(acc, rolePermissions);
     setEditingAcc({
       ...acc,
+      password: acc.username.toLowerCase() === 'admin' ? 'admin123' : acc.password,
       allowedTabs: eff.allowedTabs,
       useCustomTabs: Boolean(acc.useCustomTabs),
     });
@@ -294,7 +286,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     e.preventDefault();
     if (!editingAcc) return;
     const u = editingAcc.username.trim().toLowerCase();
-    const p = editingAcc.password.trim();
+    const p = u === 'admin' ? 'admin123' : editingAcc.password.trim();
     const d = editingAcc.displayName.trim();
     if (!u || !p || !d) return;
 
@@ -335,7 +327,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   const handleDeleteClick = (acc: StaffAccount) => {
     requestConfirm({
       title: 'Xác nhận Xóa Tài Khoản',
-      message: `Bạn có chắc chắn muốn xóa tài khoản "@${acc.username}" (${acc.displayName}) khỏi hệ thống Firebase không? Hành động này không thể hoàn tác.`,
+      message: `Bạn có chắc chắn muốn xóa tài khoản "@${acc.username}" (${acc.displayName}) khỏi hệ thống Firebase không?`,
       confirmLabel: 'Xóa tài khoản',
       variant: 'danger',
       onConfirm: async () => {
@@ -362,19 +354,19 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
             <Shield className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-              Quản Lý Tài Khoản & Phân Phối Danh Mục Quản Lý (Admin)
+            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+              Quản Lý Tài Khoản & Phân Quyền Danh Mục
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Phân phối các Danh mục quản lý cho từng Role (Loại tài khoản) hoặc tùy chỉnh riêng cho từng tài khoản nhân sự. Mỗi tài khoản khi đăng nhập chỉ có thể truy cập đúng những Danh mục quản lý mà Admin đã cấp quyền.
+              Phân phối các Danh mục quản lý cho từng Role hoặc tùy chỉnh riêng cho từng tài khoản nhân viên.
             </p>
           </div>
         </div>
@@ -382,24 +374,24 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         <button
           type="button"
           onClick={handleDeleteAllStaffClick}
-          className="px-3.5 py-2 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-xs font-semibold text-rose-600 dark:text-rose-400 flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer self-start sm:self-auto"
+          className="px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer self-start sm:self-auto"
         >
           <Trash2 className="w-3.5 h-3.5" />
-          <span>Xóa tất cả tài khoản phụ</span>
+          <span>Xóa tài khoản phụ</span>
         </button>
       </div>
 
       {/* SECTION 1: ROLE-BASED MANAGEMENT TABS PERMISSION MATRIX */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-start gap-2.5">
             <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                1. Bảng Phân Phối Danh Mục Quản Lý Theo Loại Tài Khoản (Role)
+                1. Phân Phối Danh Mục Quản Lý Theo Loại Tài Khoản (Role)
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Tick chọn các danh mục quản lý được phép truy cập cho từng Role: Chủ quán (Admin), Quản lý, Thu ngân, Kế toán
+                Chọn các danh mục được phép truy cập cho từng Role: Admin, Quản lý, Thu ngân, Kế toán
               </p>
             </div>
           </div>
@@ -412,42 +404,134 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 onChange={(e) => setSyncRoleToAccounts(e.target.checked)}
                 className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
               />
-              <span>Áp dụng đồng bộ ngay cho các tài khoản thuộc Role tương ứng</span>
+              <span>Đồng bộ ngay cho tài khoản cùng Role</span>
             </label>
 
             <button
               type="button"
               onClick={handleResetRoleMatrixClick}
-              className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5 cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>Khôi phục mặc định</span>
+              <span>Mặc định</span>
             </button>
 
             <button
               type="button"
               onClick={handleSaveRoleMatrixClick}
-              className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>Lưu Phân Quyền Theo Role</span>
+              <span>Lưu Phân Quyền Role</span>
             </button>
           </div>
         </div>
 
-        <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[880px] text-xs">
+        {/* Mobile Role Cards (< lg) */}
+        <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {ROLE_ORDER.map((roleKey) => {
+            const cfg =
+              draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
+            const isAdminRole = roleKey === UserRole.ADMIN;
+            return (
+              <div
+                key={roleKey}
+                className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/20 space-y-3"
+              >
+                <div className="flex items-center justify-between border-b border-slate-200/70 dark:border-slate-800 pb-2">
+                  <div>
+                    <div className="text-xs font-bold text-slate-900 dark:text-white">
+                      {ROLE_LABELS[roleKey]}
+                    </div>
+                    <div className="text-[11px] font-mono text-slate-500">
+                      {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} danh mục
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <label className="inline-flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isAdminRole ? true : cfg.canWrite}
+                        disabled={isAdminRole}
+                        onChange={(e) =>
+                          handleToggleRoleCapability(
+                            roleKey,
+                            'canWrite',
+                            e.target.checked
+                          )
+                        }
+                        className="w-3.5 h-3.5 rounded text-emerald-600"
+                      />
+                      <span>Ghi/Sửa</span>
+                    </label>
+                    <label className="inline-flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isAdminRole ? true : cfg.canDelete}
+                        disabled={isAdminRole}
+                        onChange={(e) =>
+                          handleToggleRoleCapability(
+                            roleKey,
+                            'canDelete',
+                            e.target.checked
+                          )
+                        }
+                        className="w-3.5 h-3.5 rounded text-rose-600"
+                      />
+                      <span>Xóa</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  {MANAGEMENT_TABS.map((tab) => {
+                    const checked = cfg.allowedTabs.includes(tab.id);
+                    const isLockedAdminTab =
+                      isAdminRole && tab.id === 'accounts';
+                    return (
+                      <label
+                        key={tab.id}
+                        className={`flex items-center gap-2 p-2 rounded-lg border text-xs transition-colors ${
+                          checked
+                            ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-950/30 text-slate-900 dark:text-white font-medium'
+                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400'
+                        } ${
+                          isLockedAdminTab
+                            ? 'opacity-80 cursor-not-allowed'
+                            : 'cursor-pointer'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={isLockedAdminTab}
+                          onChange={() => handleToggleRoleTab(roleKey, tab.id)}
+                          className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600 shrink-0"
+                        />
+                        <span className="truncate text-[11px]">{tab.shortLabel}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Desktop Matrix Table (>= lg) */}
+        <div className="hidden lg:block border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                <th className="py-2.5 px-3 w-48">Loại tài khoản (Role)</th>
+                <th className="py-2.5 px-3 w-44">Loại tài khoản (Role)</th>
                 {MANAGEMENT_TABS.map((tab) => (
-                  <th key={tab.id} className="py-2.5 px-2.5 text-center">
+                  <th key={tab.id} className="py-2.5 px-2 text-center">
                     <div className="text-slate-800 dark:text-slate-200 font-semibold">
                       {tab.shortLabel}
                     </div>
                   </th>
                 ))}
-                <th className="py-2.5 px-3 text-center">Quyền Thao Tác Dữ Liệu</th>
+                <th className="py-2.5 px-3 text-center">Quyền Dữ Liệu</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -465,8 +549,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         {ROLE_LABELS[roleKey]}
                       </div>
                       <div className="text-[11px] text-slate-500 font-mono">
-                        Role ID: {roleKey} ({cfg.allowedTabs.length}/
-                        {MANAGEMENT_TABS.length} mục)
+                        {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} mục
                       </div>
                     </td>
 
@@ -477,10 +560,10 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                       return (
                         <td
                           key={tab.id}
-                          className="py-3 px-2.5 text-center align-middle"
+                          className="py-3 px-2 text-center align-middle"
                         >
                           <label
-                            className={`inline-flex flex-col items-center justify-center gap-1 px-2 py-1.5 rounded-lg border transition-colors ${
+                            className={`inline-flex flex-col items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl border transition-colors ${
                               checked
                                 ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
                                 : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900 text-slate-400'
@@ -498,8 +581,8 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                               onChange={() => handleToggleRoleTab(roleKey, tab.id)}
                               className="w-4 h-4 rounded border-slate-300 text-emerald-600"
                             />
-                            <span className="text-[10px] font-medium">
-                              {checked ? 'Được phép' : 'Ẩn / Khóa'}
+                            <span className="text-[10px] font-semibold">
+                              {checked ? 'Mở' : 'Khóa'}
                             </span>
                           </label>
                         </td>
@@ -526,7 +609,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                             }
                             className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
                           />
-                          <span>Cho phép Thêm / Sửa</span>
+                          <span>Thêm / Sửa</span>
                         </label>
                         <label
                           className={`inline-flex items-center gap-1.5 ${
@@ -546,7 +629,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                             }
                             className="w-3.5 h-3.5 rounded border-slate-300 text-rose-600"
                           />
-                          <span>Cho phép Xóa</span>
+                          <span>Xóa</span>
                         </label>
                       </div>
                     </td>
@@ -561,15 +644,12 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
       {/* SECTION 2: ADD NEW ACCOUNT WITH ROLE & MANAGEMENT TABS ASSIGNMENT */}
       <form
         onSubmit={handleAddSubmit}
-        className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4"
+        className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4"
       >
-        <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
           <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-            2. Thêm Tài Khoản Nhân Sự Mới & Phân Phối Danh Mục Quản Lý
+            2. Thêm Tài Khoản Nhân Sự Mới & Phân Danh Mục
           </h3>
-          <span className="text-xs text-slate-500">
-            Yêu cầu xác nhận trước khi lưu vào Firebase
-          </span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -583,19 +663,19 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
               placeholder="Ví dụ: thungan_ca1"
-              className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
             />
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                Mật khẩu (Password) *
+                Mật khẩu *
               </label>
               <button
                 type="button"
                 onClick={() => setShowNewPassword((prev) => !prev)}
-                className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
               >
                 {showNewPassword ? (
                   <>
@@ -618,7 +698,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 readOnly={newUsername.trim().toLowerCase() === 'admin'}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Nhập mật khẩu..."
-                className="w-full pl-3 pr-9 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                className="w-full pl-3 pr-9 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
               <button
                 type="button"
@@ -645,20 +725,20 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               value={newDisplayName}
               onChange={(e) => setNewDisplayName(e.target.value)}
               placeholder="Ví dụ: Nguyễn Văn A"
-              className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
             />
           </div>
 
           <div>
             <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              Thông tin (SĐT, Ca, Ghi chú)
+              Thông tin (SĐT, Ca trực)
             </label>
             <input
               type="text"
               value={newInfo}
               onChange={(e) => setNewInfo(e.target.value)}
               placeholder="SĐT: 0909... - Ca tối"
-              className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
             />
           </div>
 
@@ -677,7 +757,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                     DEFAULT_ROLE_PERMISSIONS[selectedRole].allowedTabs
                 );
               }}
-              className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
             >
               <option value={UserRole.ADMIN}>Chủ quán (Admin)</option>
               <option value={UserRole.MANAGER}>Quản lý</option>
@@ -688,18 +768,12 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         </div>
 
         {/* Selectable Management Tabs for the New Account */}
-        <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2.5">
+        <div className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
-              <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+              <CheckSquare className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               <span>
-                Danh mục quản lý được phép truy cập cho tài khoản này (
-                {newAllowedTabs.length}/{MANAGEMENT_TABS.length} danh mục):
-              </span>
-              <span className="text-[11px] font-normal text-slate-500">
-                {newUseCustomTabs
-                  ? '(Đang tùy chỉnh riêng cho tài khoản)'
-                  : `(Đang áp dụng mặc định theo Role: ${ROLE_LABELS[newRole]})`}
+                Danh mục được phép truy cập ({newAllowedTabs.length}/{MANAGEMENT_TABS.length}):
               </span>
             </div>
 
@@ -715,7 +789,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 }}
                 className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
               >
-                Đặt lại theo mặc định Role ({ROLE_LABELS[newRole]})
+                Đặt lại mặc định theo Role ({ROLE_LABELS[newRole]})
               </button>
             )}
           </div>
@@ -728,7 +802,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               return (
                 <label
                   key={tab.id}
-                  className={`flex items-center gap-2 p-2 rounded-lg border text-xs transition-colors ${
+                  className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs transition-colors ${
                     checked
                       ? 'border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-medium'
                       : 'border-slate-200 dark:border-slate-800 bg-slate-100/60 dark:bg-slate-900/40 text-slate-400'
@@ -751,7 +825,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         <div className="flex justify-end">
           <button
             type="submit"
-            className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="w-full sm:w-auto justify-center px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
           >
             <Plus className="w-4 h-4" />
             <span>Thêm tài khoản mới</span>
@@ -759,14 +833,14 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         </div>
       </form>
 
-      {/* Edit Account Modal / Drawer if an account is being edited */}
+      {/* Edit Account Modal / Drawer */}
       {editingAcc && (
-        <div className="p-5 border-2 border-emerald-500/60 rounded-xl bg-emerald-50/20 dark:bg-emerald-950/20 space-y-4">
+        <div className="p-4 sm:p-5 border-2 border-emerald-500/60 rounded-2xl bg-emerald-50/20 dark:bg-emerald-950/20 space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                Tùy chỉnh Tài khoản & Phân phối Danh mục Quản lý: @{editingAcc.username}
+                Sửa Tài khoản & Danh mục: @{editingAcc.username}
               </h3>
             </div>
             <button
@@ -792,7 +866,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   onChange={(e) =>
                     setEditingAcc({ ...editingAcc, username: e.target.value })
                   }
-                  className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white disabled:opacity-60"
+                  className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white disabled:opacity-60"
                 />
               </div>
 
@@ -801,12 +875,12 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                     {editingAcc.username.toLowerCase() === 'admin'
                       ? 'Mật khẩu Admin (Cố định)'
-                      : 'Mật khẩu mới (Password)'}
+                      : 'Mật khẩu (Password)'}
                   </label>
                   <button
                     type="button"
                     onClick={() => setShowEditPassword((prev) => !prev)}
-                    className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
                   >
                     {showEditPassword ? (
                       <>
@@ -840,7 +914,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                             : e.target.value,
                       })
                     }
-                    className="w-full pl-3 pr-9 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white disabled:opacity-60"
+                    className="w-full pl-3 pr-9 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white disabled:opacity-60"
                   />
                   <button
                     type="button"
@@ -859,7 +933,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Tên hiển thị (Display Name)
+                  Tên hiển thị
                 </label>
                 <input
                   type="text"
@@ -868,13 +942,13 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   onChange={(e) =>
                     setEditingAcc({ ...editingAcc, displayName: e.target.value })
                   }
-                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 />
               </div>
 
               <div className="sm:col-span-2">
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Thông tin tài khoản (Số điện thoại, Ca trực, Ghi chú)
+                  Thông tin tài khoản (SĐT, Ca trực, Ghi chú)
                 </label>
                 <input
                   type="text"
@@ -882,14 +956,13 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   onChange={(e) =>
                     setEditingAcc({ ...editingAcc, info: e.target.value })
                   }
-                  placeholder="Nhập số điện thoại, ca làm việc, địa chỉ hoặc ghi chú..."
-                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Vai trò phân quyền (Role)
+                  Vai trò (Role)
                 </label>
                 <select
                   value={editingAcc.role}
@@ -906,7 +979,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         : roleTabs,
                     });
                   }}
-                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 >
                   <option value={UserRole.ADMIN}>Chủ quán (Admin)</option>
                   <option value={UserRole.MANAGER}>Quản lý</option>
@@ -917,14 +990,11 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
             </div>
 
             {/* Per-Account Management Tabs Assignment */}
-            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-xs font-bold text-slate-900 dark:text-white">
-                    Phân phối Danh mục Quản lý được phép truy cập cho @{editingAcc.username}
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    Tài khoản này sẽ chỉ nhìn thấy và truy cập được các danh mục quản lý được tick chọn bên dưới
+                    Danh mục được phép truy cập cho @{editingAcc.username}
                   </div>
                 </div>
 
@@ -941,7 +1011,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         useCustomTabs: false,
                       });
                     }}
-                    className={`px-2.5 py-1 rounded border text-[11px] font-medium cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
                       !editingAcc.useCustomTabs
                         ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
                         : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
@@ -959,7 +1029,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         useCustomTabs: true,
                       })
                     }
-                    className="px-2.5 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-300 cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-300 cursor-pointer"
                   >
                     Chọn tất cả
                   </button>
@@ -984,7 +1054,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   return (
                     <label
                       key={tab.id}
-                      className={`flex items-start gap-2 p-2.5 rounded-lg border text-xs transition-colors ${
+                      className={`flex items-start gap-2 p-2.5 rounded-xl border text-xs transition-colors ${
                         checked
                           ? 'border-emerald-400 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30 text-slate-900 dark:text-white'
                           : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 text-slate-400'
@@ -1001,9 +1071,6 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                       />
                       <div className="min-w-0">
                         <div className="font-semibold truncate">{tab.label}</div>
-                        <div className="text-[10px] text-slate-500 line-clamp-1">
-                          {tab.description}
-                        </div>
                       </div>
                     </label>
                   );
@@ -1011,7 +1078,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
               <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
                 <input
                   type="checkbox"
@@ -1021,23 +1088,23 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   }
                   className="w-4 h-4 rounded border-slate-300 text-emerald-600"
                 />
-                <span>Cho phép tài khoản này đăng nhập hoạt động</span>
+                <span>Cho phép tài khoản này hoạt động</span>
               </label>
 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setEditingAcc(null)}
-                  className="px-3.5 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-medium cursor-pointer"
+                  className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer"
                 >
-                  Đóng
+                  Hủy
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>Lưu thay đổi tài khoản & phân quyền</span>
+                  <span>Lưu thay đổi</span>
                 </button>
               </div>
             </div>
@@ -1045,152 +1112,232 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         </div>
       )}
 
-      {/* SECTION 3: ACCOUNTS LIST TABLE */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+      {/* SECTION 3: ACCOUNTS LIST */}
+      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
         <div>
-          <h3 className="text-base font-bold text-slate-900 dark:text-white">
-            3. Danh Sách Tài Khoản & Danh Mục Quản Lý Đang Phân Phối ({staffAccounts.length})
+          <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+            3. Danh Sách Tài Khoản & Quyền Danh Mục Hiện Tại ({staffAccounts.length})
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Bấm "Phân danh mục / Sửa" để tùy chỉnh mật khẩu, tên hiển thị, Role hoặc chỉ định các Danh mục quản lý riêng cho từng tài khoản
+            Mật khẩu tài khoản <strong>admin</strong> được cố định là <code className="font-mono font-bold text-emerald-600">admin123</code>.
           </p>
         </div>
 
-        <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[920px] text-xs">
+        {/* Mobile Account Cards (< md) */}
+        <div className="md:hidden space-y-3">
+          {staffAccounts.map((acc) => {
+            const isCurrent = acc.id === currentAccount.id;
+            const isPrimaryAdmin = acc.username.toLowerCase() === 'admin';
+            const showPw = isPrimaryAdmin ? true : !!visiblePasswords[acc.id];
+            const eff = getEffectiveRolePermissions(acc, rolePermissions);
+            const allowedMetas = MANAGEMENT_TABS.filter((t) =>
+              eff.allowedTabs.includes(t.id)
+            );
+
+            return (
+              <div
+                key={acc.id}
+                className={`p-3.5 rounded-xl border space-y-2.5 text-xs ${
+                  isCurrent
+                    ? 'border-emerald-500/60 bg-emerald-50/30 dark:bg-emerald-950/20'
+                    : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/20'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <span>{acc.displayName}</span>
+                      {isCurrent && (
+                        <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          (Đang dùng)
+                        </span>
+                      )}
+                    </div>
+                    <div className="font-mono text-slate-500">
+                      @{acc.username} · {ROLE_LABELS[acc.role]}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 font-mono bg-white dark:bg-slate-900 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {isPrimaryAdmin
+                        ? 'admin123'
+                        : showPw
+                        ? acc.password
+                        : '••••••••'}
+                    </span>
+                    {!isPrimaryAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => toggleShowPassword(acc.id)}
+                        className="p-0.5 text-slate-400 hover:text-slate-700 cursor-pointer"
+                      >
+                        {showPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-slate-500">
+                  <strong className="text-slate-700 dark:text-slate-300">
+                    Danh mục ({allowedMetas.length}/{MANAGEMENT_TABS.length}):
+                  </strong>{' '}
+                  {allowedMetas.map((m) => m.shortLabel).join(' · ')}
+                </div>
+
+                <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-200/60 dark:border-slate-800">
+                  {!isCurrent && (
+                    <button
+                      type="button"
+                      onClick={() => onSwitchAccount(acc)}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>Đổi sang</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditAccount(acc)}
+                    className="px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/30 text-xs font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Phân mục & Sửa</span>
+                  </button>
+                  {!isPrimaryAdmin && !isCurrent && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteClick(acc)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Desktop Table (>= md) */}
+        <div className="hidden md:block border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                <th className="py-2.5 px-3">Username / Tên hiển thị</th>
-                <th className="py-2.5 px-3">Mật khẩu (Password)</th>
-                <th className="py-2.5 px-3">Vai trò (Role)</th>
-                <th className="py-2.5 px-3">Danh mục quản lý được Admin phân phối</th>
-                <th className="py-2.5 px-3">Trạng thái</th>
+                <th className="py-2.5 px-3">Tài khoản</th>
+                <th className="py-2.5 px-3">Mật khẩu</th>
+                <th className="py-2.5 px-3">Role & Quyền</th>
+                <th className="py-2.5 px-3">Các Danh Mục Được Truy Cập</th>
                 <th className="py-2.5 px-3 text-right">Thao tác</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
               {staffAccounts.map((acc) => {
-                const isShown = Boolean(visiblePasswords[acc.id]);
-                const isCurrent = acc.username === currentAccount.username;
+                const isCurrent = acc.id === currentAccount.id;
+                const isPrimaryAdmin = acc.username.toLowerCase() === 'admin';
+                const showPw = isPrimaryAdmin ? true : !!visiblePasswords[acc.id];
                 const eff = getEffectiveRolePermissions(acc, rolePermissions);
-                const allowedMeta = MANAGEMENT_TABS.filter((t) =>
+                const allowedMetas = MANAGEMENT_TABS.filter((t) =>
                   eff.allowedTabs.includes(t.id)
                 );
-                const blockedCount =
-                  MANAGEMENT_TABS.length - allowedMeta.length;
 
                 return (
                   <tr
                     key={acc.id}
-                    className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
+                    className={
+                      isCurrent
+                        ? 'bg-emerald-50/40 dark:bg-emerald-950/20'
+                        : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                    }
                   >
                     <td className="py-3 px-3">
-                      <div className="font-mono font-bold text-slate-900 dark:text-white">
-                        @{acc.username}
+                      <div className="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <span>{acc.displayName}</span>
+                        {isCurrent && (
+                          <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
+                            (Đang dùng)
+                          </span>
+                        )}
                       </div>
-                      <div className="font-semibold text-slate-700 dark:text-slate-300 mt-0.5">
-                        {acc.displayName}
-                      </div>
-                      {acc.info && (
-                        <div className="text-[11px] text-slate-400 truncate max-w-[200px]">
-                          {acc.info}
-                        </div>
-                      )}
+                      <div className="font-mono text-slate-500">@{acc.username}</div>
                     </td>
 
                     <td className="py-3 px-3 font-mono">
-                      <div className="inline-flex items-center gap-2">
+                      <div className="inline-flex items-center gap-1.5">
                         <span className="text-slate-800 dark:text-slate-200">
-                          {isShown ? acc.password : '••••••••'}
+                          {isPrimaryAdmin
+                            ? 'admin123'
+                            : showPw
+                            ? acc.password
+                            : '••••••••'}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => toggleShowPassword(acc.id)}
-                          className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
-                          title={isShown ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                        >
-                          {isShown ? (
-                            <EyeOff className="w-3.5 h-3.5" />
-                          ) : (
-                            <Eye className="w-3.5 h-3.5" />
-                          )}
-                        </button>
+                        {isPrimaryAdmin ? (
+                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-sans font-medium inline-flex items-center gap-0.5">
+                            <Lock className="w-3 h-3" />
+                            Cố định
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => toggleShowPassword(acc.id)}
+                            className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                          >
+                            {showPw ? (
+                              <EyeOff className="w-3.5 h-3.5" />
+                            ) : (
+                              <Eye className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        )}
                       </div>
                     </td>
 
                     <td className="py-3 px-3">
-                      <div className="font-semibold text-slate-800 dark:text-slate-200">
+                      <div className="font-semibold text-slate-900 dark:text-white">
                         {ROLE_LABELS[acc.role]}
                       </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">
-                        {eff.isCustomAccountTabs
-                          ? 'Phân quyền riêng theo TK'
-                          : 'Theo chuẩn Role'}
+                      <div className="text-[11px] text-slate-500">
+                        {eff.canWrite ? 'Được Ghi/Sửa' : 'Chỉ xem'} ·{' '}
+                        {eff.canDelete ? 'Được Xóa' : 'Không xóa'}
                       </div>
                     </td>
 
                     <td className="py-3 px-3 max-w-md">
-                      <div className="flex flex-wrap gap-1">
-                        {allowedMeta.map((m) => (
-                          <span
-                            key={m.id}
-                            className="px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/70 dark:bg-emerald-950/40 text-[11px] font-medium text-emerald-700 dark:text-emerald-300"
-                          >
-                            {m.shortLabel}
-                          </span>
-                        ))}
+                      <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mb-0.5">
+                        {allowedMetas.length}/{MANAGEMENT_TABS.length} danh mục
+                        {eff.isCustomAccountTabs ? ' (Tùy chỉnh riêng)' : ' (Theo Role)'}
                       </div>
-                      {blockedCount > 0 && (
-                        <div className="mt-1 text-[11px] text-slate-400 flex items-center gap-1">
-                          <Lock className="w-3 h-3" />
-                          <span>
-                            Đã giới hạn ({allowedMeta.length}/
-                            {MANAGEMENT_TABS.length} danh mục được phép truy cập)
-                          </span>
-                        </div>
-                      )}
-                    </td>
-
-                    <td className="py-3 px-3">
-                      {acc.active ? (
-                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                          Hoạt động
-                        </span>
-                      ) : (
-                        <span className="text-rose-600 dark:text-rose-400 font-medium">
-                          Đã khóa
-                        </span>
-                      )}
+                      <div className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                        {allowedMetas.map((m) => m.shortLabel).join(' · ')}
+                      </div>
                     </td>
 
                     <td className="py-3 px-3 text-right whitespace-nowrap space-x-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEditAccount(acc)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
-                      >
-                        <Edit3 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Phân danh mục / Sửa</span>
-                      </button>
-
                       {!isCurrent && (
                         <button
                           type="button"
                           onClick={() => onSwitchAccount(acc)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer"
-                          title="Chuyển phiên làm việc sang tài khoản này để kiểm tra phân quyền"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-emerald-500 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer"
                         >
                           <UserCheck className="w-3.5 h-3.5" />
-                          <span>Chuyển</span>
+                          <span>Đổi sang</span>
                         </button>
                       )}
 
-                      {acc.username !== 'admin' && !isCurrent && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditAccount(acc)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/30 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Phân mục & Sửa</span>
+                      </button>
+
+                      {!isPrimaryAdmin && !isCurrent && (
                         <button
                           type="button"
                           onClick={() => handleDeleteClick(acc)}
-                          className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer align-middle"
-                          title="Xóa tài khoản"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5 inline" />
                         </button>

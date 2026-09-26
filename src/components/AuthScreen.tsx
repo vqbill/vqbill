@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
+  Receipt,
 } from 'lucide-react';
 import { StaffAccount, UserRole, DEFAULT_ROLE_PERMISSIONS } from '../types';
 import {
@@ -49,7 +50,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     if (trimmedUser === FIXED_ADMIN_USERNAME) {
       if (password !== FIXED_ADMIN_PASSWORD) {
         setLocalError(
-          'Mật khẩu tài khoản Admin không chính xác. Vui lòng kiểm tra lại bằng nút Hiện mật khẩu.'
+          'Mật khẩu tài khoản Admin không chính xác. Vui lòng bấm nút "Hiện" để kiểm tra lại mật khẩu vừa nhập.'
         );
         return;
       }
@@ -102,7 +103,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
     if (!matched) {
       setLocalError(
-        'Tên đăng nhập hoặc mật khẩu không chính xác. Bạn có thể bấm biểu tượng con mắt để kiểm tra mật khẩu vừa nhập.'
+        'Tên đăng nhập hoặc mật khẩu không chính xác. Bạn có thể bấm nút "Hiện" ở ô mật khẩu để kiểm tra lại.'
       );
       return;
     }
@@ -123,127 +124,95 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between">
-      {/* Top Bar */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-        <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white">
-          VQBill
-        </span>
-        <div className="hidden md:flex items-center gap-6 text-sm text-slate-500 dark:text-slate-400">
-          <span>Trích xuất Bill AI OCR</span>
-          <span>·</span>
-          <span>Quản lý Doanh thu & Danh mục</span>
-          <span>·</span>
-          <span>Công nợ & Khoản trừ</span>
+    <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0B0F19] text-slate-900 dark:text-slate-100 flex flex-col justify-between">
+      {/* Top Bar Contract */}
+      <header className="h-16 px-4 sm:px-8 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+            <Receipt className="w-5 h-5" />
+          </div>
+          <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white">
+            VQBill
+          </span>
         </div>
+
+        <div className="hidden md:flex items-center gap-4 text-xs font-medium text-slate-500 dark:text-slate-400">
+          <span>Quét Bill AI OCR</span>
+          <span>·</span>
+          <span>Đối soát Doanh thu & Danh mục</span>
+          <span>·</span>
+          <span>Quản lý Công nợ & Phân quyền</span>
+        </div>
+
         <button
           type="button"
           onClick={onToggleDarkMode}
-          className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
+          className="h-10 px-3.5 text-xs font-medium border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 inline-flex items-center gap-2 transition-colors whitespace-nowrap cursor-pointer"
         >
           {darkMode ? (
             <Sun className="w-4 h-4 text-amber-400" />
           ) : (
             <Moon className="w-4 h-4 text-slate-600" />
           )}
-          <span>{darkMode ? 'Giao diện Sáng' : 'Giao diện Tối'}</span>
+          <span className="hidden sm:inline">
+            {darkMode ? 'Giao diện Sáng' : 'Giao diện Tối'}
+          </span>
         </button>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex items-center justify-center p-4 sm:p-8">
-        <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-12 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden shadow-sm">
-          {/* Left Panel: System Overview */}
-          <div className="lg:col-span-6 p-6 sm:p-8 bg-slate-900 text-slate-100 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-slate-800">
-            <div className="space-y-6">
-              <div>
-                <p className="text-xs font-mono text-emerald-400 tracking-wider">
-                  HỆ THỐNG QUẢN LÝ BÁN HÀNG & OCR
-                </p>
-                <h1 className="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-white">
-                  Quản lý Hóa Đơn, Danh Mục & Dòng Tiền Thời Gian Thực
-                </h1>
-                <p className="mt-3 text-sm text-slate-300 leading-relaxed">
-                  Tự động nhận diện món ăn từ ảnh chụp bill hoặc văn bản, phân loại danh mục thông minh, theo dõi công nợ, hoàn trả món và đối soát doanh thu thực nhận.
-                </p>
-              </div>
-
-              <div className="space-y-3 pt-4 border-t border-slate-800 text-xs text-slate-300">
-                <div className="flex items-start gap-2.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                  <span>
-                    Trích xuất hóa đơn bằng AI OCR sang cấu trúc JSON chuẩn và tự động cộng số lượng bán theo thời gian thực.
-                  </span>
-                </div>
-                <div className="flex items-start gap-2.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                  <span>
-                    Phân tích biểu đồ cột doanh thu và thống kê chi tiết từng mặt hàng trong mỗi danh mục.
-                  </span>
-                </div>
-                <div className="flex items-start gap-2.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                  <span>
-                    Quản lý công nợ theo khách hàng, theo dõi hoàn trả món và lưu trữ dữ liệu đồng bộ trên Firebase.
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-              <span className="inline-flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span>Đồng bộ Firebase Cloud (vqbill)</span>
-              </span>
-              <span className="font-mono">Bảo mật phân quyền</span>
-            </div>
-          </div>
-
-          {/* Right Panel: Login Form */}
-          <div className="lg:col-span-6 p-6 sm:p-8 flex flex-col justify-center">
+      <main className="flex-1 flex items-center justify-center p-4 sm:p-6 lg:p-10">
+        <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 border border-slate-200/90 dark:border-slate-800 rounded-3xl bg-white dark:bg-slate-900 overflow-hidden shadow-sm">
+          {/* Left Panel: Login Form (First on Mobile for immediate thumb reach) */}
+          <div className="lg:col-span-6 p-6 sm:p-10 flex flex-col justify-center order-1 lg:order-2">
             <div className="mb-6">
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-                Đăng nhập hệ thống
-              </h2>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                Nhập tên đăng nhập và mật khẩu được cấp hoặc xác thực qua tài khoản Google Firebase.
+              <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 mb-2">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Hệ thống Quản lý & Đối soát Hóa đơn</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                Đăng nhập VQBill
+              </h1>
+              <p className="mt-1.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                Nhập tài khoản được Admin phân quyền hoặc đăng nhập qua Google Cloud.
               </p>
             </div>
 
             {(localError || authError) && (
-              <div className="mb-4 p-3 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 flex items-start gap-2.5 text-xs text-rose-700 dark:text-rose-300">
+              <div className="mb-5 p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 flex items-start gap-2.5 text-xs text-rose-700 dark:text-rose-300">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{localError || authError}</span>
+                <span className="leading-relaxed">{localError || authError}</span>
               </div>
             )}
 
             <form onSubmit={handleFormSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                   Tên đăng nhập (Username)
                 </label>
                 <div className="relative">
-                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     required
+                    autoComplete="username"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Nhập tên đăng nhập..."
-                    className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    placeholder="Nhập username (VD: admin)..."
+                    className="w-full h-11 pl-10 pr-4 text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/80 text-slate-900 dark:text-white focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
                     Mật khẩu (Password)
                   </label>
                   <button
                     type="button"
                     onClick={() => setShowPassword((prev) => !prev)}
-                    className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    className="text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
                   >
                     {showPassword ? (
                       <>
@@ -253,25 +222,26 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     ) : (
                       <>
                         <Eye className="w-3.5 h-3.5" />
-                        <span>Hiện mật khẩu để kiểm tra</span>
+                        <span>Hiện mật khẩu</span>
                       </>
                     )}
                   </button>
                 </div>
                 <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
+                    autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Nhập mật khẩu..."
-                    className="w-full pl-9 pr-20 py-2.5 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full h-11 pl-10 pr-20 text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/80 text-slate-900 dark:text-white focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword((prev) => !prev)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 px-2 py-1 rounded text-xs font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700 inline-flex items-center gap-1 transition-colors cursor-pointer"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 h-8 px-2.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white bg-slate-200/70 dark:bg-slate-700/80 hover:bg-slate-200 dark:hover:bg-slate-700 inline-flex items-center gap-1 transition-colors cursor-pointer"
                     title={
                       showPassword
                         ? 'Ẩn mật khẩu'
@@ -295,16 +265,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full h-11 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-semibold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs"
               >
                 <LogIn className="w-4 h-4" />
-                <span>Đăng nhập</span>
+                <span>Đăng nhập vào hệ thống</span>
               </button>
             </form>
 
             <div className="my-5 flex items-center gap-3">
               <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
-              <span className="text-xs text-slate-400">HOẶC ĐỒNG BỘ CLOUD FIRESTORE</span>
+              <span className="text-[11px] font-medium text-slate-400">
+                HOẶC ĐỒNG BỘ GOOGLE CLOUD
+              </span>
               <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
             </div>
 
@@ -312,9 +284,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               type="button"
               disabled={isSubmitting}
               onClick={handleGoogleClick}
-              className="w-full py-2.5 px-4 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+              className="w-full h-11 px-4 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
             >
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>
                 {isSubmitting
                   ? 'Đang kết nối Firebase...'
@@ -322,11 +294,63 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               </span>
             </button>
           </div>
+
+          {/* Right Panel: Brand Overview */}
+          <div className="lg:col-span-6 p-6 sm:p-10 bg-slate-900 text-slate-100 flex flex-col justify-between border-t lg:border-t-0 lg:border-r border-slate-800 order-2 lg:order-1">
+            <div className="space-y-6">
+              <div>
+                <span className="text-xs font-mono text-emerald-400">
+                  01. NỀN TẢNG QUẢN TRỊ DOANH THU & BILL OCR
+                </span>
+                <h2 className="mt-2 text-xl sm:text-2xl font-bold tracking-tight text-white leading-snug">
+                  Tự động hóa quy trình nhập Bill, thống kê Danh mục & kiểm soát Công nợ
+                </h2>
+                <p className="mt-3 text-xs sm:text-sm text-slate-300 leading-relaxed">
+                  Thiết kế tối ưu cho cả máy tính và điện thoại di động. Chụp ảnh hóa đơn bằng camera điện thoại, nhận diện món ăn tự động bằng Gemini AI và đối soát dòng tiền thực nhận theo thời gian thực.
+                </p>
+              </div>
+
+              <div className="space-y-3.5 pt-4 border-t border-slate-800/90 text-xs sm:text-sm text-slate-300">
+                <div className="flex items-start gap-3">
+                  <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-xs flex items-center justify-center shrink-0 mt-0.5">
+                    1
+                  </span>
+                  <span>
+                    Quét ảnh hóa đơn & văn bản sang cấu trúc JSON chuẩn, tự động cộng lũy kế số lượng bán theo từng nhóm hàng.
+                  </span>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-xs flex items-center justify-center shrink-0 mt-0.5">
+                    2
+                  </span>
+                  <span>
+                    Tự động tính <strong>Tổng ngày = Tiền mặt + Chuyển khoản - Khoản trừ - Công nợ</strong> chính xác tuyệt đối.
+                  </span>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-xs flex items-center justify-center shrink-0 mt-0.5">
+                    3
+                  </span>
+                  <span>
+                    Phân quyền chi tiết danh mục quản lý theo từng Role (Admin, Quản lý, Thu ngân, Kế toán) và từng tài khoản nhân sự.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 pt-4 border-t border-slate-800/90 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+              <span className="inline-flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>Đồng bộ thời gian thực trên Firebase Cloud</span>
+              </span>
+              <span className="font-mono text-slate-500">Responsive Mobile & Desktop</span>
+            </div>
+          </div>
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500 dark:text-slate-400">
+      <footer className="px-4 sm:px-8 py-4 border-t border-slate-200/80 dark:border-slate-800/80 text-center text-xs text-slate-500 dark:text-slate-400">
         VQBill — Hệ thống quản lý hóa đơn bán hàng, phân loại danh mục & đối soát doanh thu.
       </footer>
     </div>

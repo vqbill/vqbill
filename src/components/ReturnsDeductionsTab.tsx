@@ -13,7 +13,7 @@ import {
   PAYMENT_LABELS,
   ConfirmRequestOptions,
 } from '../types';
-import { formatVND, formatNumber } from '../utils/parser';
+import { formatVND, formatNumber, getCurrentBusinessDate } from '../utils/parser';
 
 interface ReturnsDeductionsTabProps {
   bills: BillRecord[];
@@ -48,9 +48,8 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   menuProductsCount,
   requestConfirm,
 }) => {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getCurrentBusinessDate();
 
-  // Unique dates that have bills (so user can easily click 2026-08-20 or today)
   const availableBillDates = useMemo(() => {
     const set = new Set(bills.map((b) => b.billDate));
     return Array.from(set).sort((a, b) => b.localeCompare(a));
@@ -176,7 +175,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             type: 'ok',
             text: `Đã hoàn trả ${safeQty} ${activeBillItem.productName} (${formatVND(
               refundAmt
-            )}) và lưu vào Khoản trừ + Ghi chú trên Firebase!`,
+            )}) và lưu vào Khoản trừ trên Firebase!`,
           });
           setNote('');
         } catch (err: any) {
@@ -245,16 +244,16 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Return Builder Card */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-5">
+      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
               Hoàn Trả Hàng Hóa & Ghi Nhận Khoản Trừ
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Ví dụ: Bill ngày 20/08/2026 có 15 lon bia → Chọn ngày 2026-08-20, chọn Bill, chọn món Bia và số lon trả lại để hệ thống tự động lưu vào Khoản trừ kèm ghi chú.
+              Chọn ngày hóa đơn, chọn Bill và món khách trả lại để tự động trừ số lượng bán và ghi nhận vào Khoản trừ.
             </p>
           </div>
 
@@ -262,17 +261,17 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             <button
               type="button"
               onClick={onDeleteAllMenuProducts}
-              className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap self-start"
+              className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap self-start"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span>Xóa tất cả sản phẩm trong Menu ({menuProductsCount})</span>
+              <span>Xóa tất cả SP Menu ({menuProductsCount})</span>
             </button>
           )}
         </div>
 
         {statusMsg && (
           <div
-            className={`p-3.5 rounded-lg border flex items-center gap-2.5 text-xs ${
+            className={`p-3 rounded-xl border flex items-center gap-2 text-xs ${
               statusMsg.type === 'ok'
                 ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
                 : 'border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
@@ -292,19 +291,19 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
             Bước 1: Chọn Ngày Hóa Đơn cần hoàn trả
           </label>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
             <button
               type="button"
               onClick={() => setSelectedBillDate('all')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
                 selectedBillDate === 'all'
                   ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
                   : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
               }`}
             >
-              Tất cả các ngày ({bills.length} bill)
+              Tất cả ({bills.length} bill)
             </button>
-            {availableBillDates.map((d) => (
+            {availableBillDates.slice(0, 6).map((d) => (
               <button
                 key={d}
                 type="button"
@@ -312,13 +311,13 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   setSelectedBillDate(d);
                   setSelectedBillId('');
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors cursor-pointer ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-mono border transition-colors whitespace-nowrap cursor-pointer ${
                   selectedBillDate === d
                     ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold'
                     : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
                 }`}
               >
-                {d === '2026-08-20' ? '2026-08-20 (Bill 15 lon bia)' : d}
+                {d}
               </button>
             ))}
             <input
@@ -328,17 +327,17 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                 setSelectedBillDate(e.target.value || 'all');
                 setSelectedBillId('');
               }}
-              className="px-2.5 py-1 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
+              className="px-2.5 py-1.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 shrink-0"
             />
           </div>
         </div>
 
-        <form onSubmit={handleConfirmReturn} className="grid grid-cols-1 lg:grid-cols-12 gap-5 pt-2">
+        <form onSubmit={handleConfirmReturn} className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 pt-1">
           {/* Step 2: Select Bill & Item */}
           <div className="lg:col-span-7 space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                Bước 2: Chọn Hóa Đơn (Bill) trong ngày
+                Bước 2: Chọn Hóa Đơn (Bill)
               </label>
               <select
                 value={activeBill?.id || ''}
@@ -346,32 +345,82 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   setSelectedBillId(e.target.value);
                   setSelectedItemId('');
                 }}
-                className="w-full px-3 py-2.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                className="w-full px-3 py-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               >
                 {filteredBillsForDate.map((b) => (
                   <option key={b.id} value={b.id}>
                     [{b.billDate}] {b.billCode} — {PAYMENT_LABELS[b.paymentType]} (
-                    {formatVND(b.totalAmount)}) — {b.itemsSummary.slice(0, 65)}
+                    {formatVND(b.totalAmount)}) — {b.itemsSummary.slice(0, 55)}
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* Table of Items in Selected Bill to Click & Return */}
+            {/* Items in Selected Bill to Click & Return */}
             <div className="space-y-2">
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Bước 3: Chọn món ăn / đồ uống trong Bill để hoàn trả
+                Bước 3: Chọn món trong Bill để hoàn trả
               </label>
-              <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
+
+              {/* Mobile Cards (< sm) */}
+              <div className="sm:hidden space-y-2">
+                {itemsInActiveBill.map((it) => {
+                  const remain = Math.max(0, it.quantity - it.returnedQuantity);
+                  const isPicked = activeBillItem?.id === it.id;
+                  return (
+                    <div
+                      key={it.id}
+                      onClick={() => {
+                        setSelectedItemId(it.id);
+                        setReturnQty(Math.min(1, remain));
+                      }}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 text-xs ${
+                        isPicked
+                          ? 'border-rose-500 bg-rose-50/60 dark:bg-rose-950/30'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <input
+                          type="radio"
+                          name="returnItemMobile"
+                          checked={isPicked}
+                          onChange={() => setSelectedItemId(it.id)}
+                          className="text-rose-600 focus:ring-rose-500"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-bold text-slate-900 dark:text-white truncate">
+                            {it.productName}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500">
+                            Đơn giá: {formatVND(it.unitPrice)}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right font-mono shrink-0">
+                        <div className="text-[11px] text-slate-500">
+                          Mua: {it.quantity} · Trả: {it.returnedQuantity}
+                        </div>
+                        <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                          Còn lại: {remain}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop Table (>= sm) */}
+              <div className="hidden sm:block border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-hidden">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      <th className="py-2 px-3">Chọn</th>
-                      <th className="py-2 px-3">Tên món trong Bill</th>
-                      <th className="py-2 px-2 text-right">Đã mua</th>
-                      <th className="py-2 px-2 text-right">Đã trả</th>
-                      <th className="py-2 px-2 text-right">Còn lại</th>
-                      <th className="py-2 px-3 text-right">Đơn giá</th>
+                      <th className="py-2.5 px-3">Chọn</th>
+                      <th className="py-2.5 px-3">Tên món trong Bill</th>
+                      <th className="py-2.5 px-2 text-right">Đã mua</th>
+                      <th className="py-2.5 px-2 text-right">Đã trả</th>
+                      <th className="py-2.5 px-2 text-right">Còn lại</th>
+                      <th className="py-2.5 px-3 text-right">Đơn giá</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono">
@@ -421,10 +470,10 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           </div>
 
           {/* Step 4: Quantity & Note Confirmation */}
-          <div className="lg:col-span-5 p-4 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/60 dark:bg-slate-950/40 flex flex-col justify-between space-y-4">
-            <div className="space-y-3">
-              <div className="pb-2 border-b border-slate-200 dark:border-slate-800">
-                <span className="text-xs text-slate-500 block">Món đang chọn hoàn trả:</span>
+          <div className="lg:col-span-5 p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-slate-50/60 dark:bg-slate-950/40 flex flex-col justify-between space-y-4">
+            <div className="space-y-3.5">
+              <div className="pb-2.5 border-b border-slate-200 dark:border-slate-800">
+                <span className="text-[11px] text-slate-500 block">Món đang chọn hoàn trả:</span>
                 <span className="text-sm font-bold text-slate-900 dark:text-white">
                   {activeBillItem ? activeBillItem.productName : 'Chưa chọn món'}
                 </span>
@@ -441,19 +490,19 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                     max={Math.max(1, maxReturnableQty)}
                     value={returnQty}
                     onChange={(e) => setReturnQty(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                    className="w-full px-3 py-2 text-sm font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Ngày ghi nhận Khoản trừ
+                    Ngày ghi Khoản trừ
                   </label>
                   <input
                     type="date"
                     value={deductionDate}
                     onChange={(e) => setDeductionDate(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                   />
                 </div>
               </div>
@@ -466,15 +515,15 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   rows={3}
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  placeholder="Ví dụ: Khách trả lại 5 lon bia Tiger Lùn chưa khui..."
-                  className="w-full p-2.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  placeholder="Ví dụ: Khách trả lại 5 lon bia Tiger chưa khui..."
+                  className="w-full p-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 />
               </div>
             </div>
 
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
               <div className="flex items-center justify-between text-xs font-mono">
-                <span className="text-slate-500">Số tiền trừ vào doanh thu:</span>
+                <span className="text-slate-500">Số tiền trừ doanh thu:</span>
                 <span className="text-base font-bold text-rose-600 dark:text-rose-400">
                   -{formatVND((activeBillItem?.unitPrice || 0) * (returnQty || 0))}
                 </span>
@@ -483,13 +532,13 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
               <button
                 type="submit"
                 disabled={isSubmitting || !canWrite || maxReturnableQty <= 0}
-                className="w-full py-2.5 px-4 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>
                   {isSubmitting
                     ? 'Đang lưu khoản trừ...'
-                    : 'Xác Nhận Hoàn Trả & Lưu Vào Khoản Trừ'}
+                    : 'Xác Nhận Hoàn Trả & Lưu Khoản Trừ'}
                 </span>
               </button>
             </div>
@@ -497,15 +546,15 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
         </form>
       </div>
 
-      {/* Deduction History Table */}
-      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+      {/* Deduction History */}
+      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Danh Sách Khoản Trừ & Lịch Sử Hoàn Trả ({filteredDeductions.length})
+            <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+              Lịch Sử Khoản Trừ & Hoàn Trả ({filteredDeductions.length})
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Tổng tiền khoản trừ đang hiển thị:{' '}
+              Tổng tiền khoản trừ hiển thị:{' '}
               <strong className="font-mono text-rose-600 dark:text-rose-400">
                 -{formatVND(totalDeductionsAmount)}
               </strong>
@@ -513,14 +562,14 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
+            <div className="relative flex-1 sm:w-56">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchDeduction}
                 onChange={(e) => setSearchDeduction(e.target.value)}
                 placeholder="Tìm món trả, mã bill, ghi chú..."
-                className="pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
             </div>
 
@@ -528,75 +577,121 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
               <button
                 type="button"
                 onClick={handleDeleteAllDeductionsClick}
-                className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Xóa tất cả khoản trừ ({filteredDeductions.length})</span>
+                <span>Xóa tất cả ({filteredDeductions.length})</span>
               </button>
             )}
           </div>
         </div>
 
         {filteredDeductions.length === 0 ? (
-          <div className="py-10 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg">
+          <div className="py-10 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
             Chưa có khoản trừ / hoàn trả nào.
           </div>
         ) : (
-          <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[680px] text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  <th className="py-2.5 px-3">Ngày trừ</th>
-                  <th className="py-2.5 px-3">Bill gốc (Ngày bill)</th>
-                  <th className="py-2.5 px-3">Món hoàn trả</th>
-                  <th className="py-2.5 px-3">Danh mục</th>
-                  <th className="py-2.5 px-3 text-right">Số lượng trả</th>
-                  <th className="py-2.5 px-3 text-right">Số tiền trừ</th>
-                  <th className="py-2.5 px-3">Ghi chú hoàn trả</th>
-                  {canDelete && <th className="py-2.5 px-3 text-right">Thao tác</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {filteredDeductions.map((ded) => (
-                  <tr key={ded.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                    <td className="py-2.5 px-3 font-mono text-slate-700 dark:text-slate-300">
-                      {ded.deductionDate}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-400">
-                      {ded.billCode} ({ded.billDate})
-                    </td>
-                    <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
-                      {ded.productName}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">
-                      {ded.category}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
-                      -{formatNumber(ded.quantity)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
-                      -{formatVND(ded.amount)}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                      {ded.note}
-                    </td>
-                    {canDelete && (
-                      <td className="py-2.5 px-3 text-right">
+          <>
+            {/* Mobile Cards (< md) */}
+            <div className="md:hidden space-y-2.5">
+              {filteredDeductions.map((ded) => (
+                <div
+                  key={ded.id}
+                  className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 space-y-1.5 text-xs"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        {ded.productName}{' '}
+                        <span className="font-mono text-rose-600 dark:text-rose-400">
+                          (-{ded.quantity})
+                        </span>
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-500">
+                        Ngày trừ: {ded.deductionDate} · Bill: {ded.billCode}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-rose-600 dark:text-rose-400">
+                        -{formatVND(ded.amount)}
+                      </span>
+                      {canDelete && (
                         <button
                           type="button"
                           onClick={() => handleDeleteOneDeduction(ded)}
                           className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
-                          title="Xóa khoản trừ"
                         >
-                          <Trash2 className="w-3.5 h-3.5 inline" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
-                      </td>
-                    )}
+                      )}
+                    </div>
+                  </div>
+                  {ded.note && (
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                      {ded.note}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table (>= md) */}
+            <div className="hidden md:block border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <th className="py-2.5 px-3">Ngày trừ</th>
+                    <th className="py-2.5 px-3">Bill gốc</th>
+                    <th className="py-2.5 px-3">Món hoàn trả</th>
+                    <th className="py-2.5 px-3">Danh mục</th>
+                    <th className="py-2.5 px-3 text-right">SL trả</th>
+                    <th className="py-2.5 px-3 text-right">Số tiền trừ</th>
+                    <th className="py-2.5 px-3">Ghi chú</th>
+                    {canDelete && <th className="py-2.5 px-3 text-right">Xóa</th>}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {filteredDeductions.map((ded) => (
+                    <tr key={ded.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="py-2.5 px-3 font-mono text-slate-700 dark:text-slate-300">
+                        {ded.deductionDate}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-400">
+                        {ded.billCode} ({ded.billDate})
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
+                        {ded.productName}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">
+                        {ded.category}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
+                        -{formatNumber(ded.quantity)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
+                        -{formatVND(ded.amount)}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                        {ded.note}
+                      </td>
+                      {canDelete && (
+                        <td className="py-2.5 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteOneDeduction(ded)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                            title="Xóa khoản trừ"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 inline" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>
