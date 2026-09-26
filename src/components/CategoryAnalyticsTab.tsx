@@ -1,0 +1,489 @@
+import React, { useState, useMemo } from 'react';
+import { ChevronRight, Layers, BarChart3, Trash2 } from 'lucide-react';
+import { BillItemRecord, ProductRecord, STANDARD_CATEGORIES } from '../types';
+import { formatVND, formatNumber } from '../utils/parser';
+
+interface CategoryAnalyticsTabProps {
+  billItems: BillItemRecord[];
+  products: ProductRecord[];
+  periodLabel: string;
+  canWrite: boolean;
+  onDeleteAllMenuProducts: () => void;
+  onDeleteCategoryMenuProducts: (category: string) => void;
+}
+
+interface ProductAgg {
+  productName: string;
+  category: string;
+  unitPrice: number;
+  soldQty: number;
+  returnedQty: number;
+  netQty: number;
+  grossRevenue: number;
+  netRevenue: number;
+}
+
+interface CategoryAgg {
+  category: string;
+  soldQty: number;
+  returnedQty: number;
+  netQty: number;
+  grossRevenue: number;
+  netRevenue: number;
+  products: ProductAgg[];
+}
+
+export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
+  billItems,
+  products,
+  periodLabel,
+  canWrite,
+  onDeleteAllMenuProducts,
+  onDeleteCategoryMenuProducts,
+}) => {
+  const [selectedCategory, setSelectedCategory] = useState<string>('Bia');
+  const [metricMode, setMetricMode] = useState<'quantity' | 'revenue'>('quantity');
+
+  const categoryStats = useMemo<CategoryAgg[]>(() => {
+    const catMap = new Map<string, Map<string, ProductAgg>>();
+
+    for (const cat of STANDARD_CATEGORIES) {
+      catMap.set(cat, new Map());
+    }
+
+    for (const item of billItems) {
+      const catName = item.category || 'Khác';
+      if (!catMap.has(catName)) {
+        catMap.set(catName, new Map());
+      }
+      const prodMap = catMap.get(catName)!;
+      const pKey = item.productName.trim().toLowerCase();
+      const existing = prodMap.get(pKey);
+
+      const sold = Number(item.quantity) || 0;
+      const ret = Number(item.returnedQuantity) || 0;
+      const net = Math.max(0, sold - ret);
+      const uPrice = Number(item.unitPrice) || 0;
+      const grossRev = sold * uPrice;
+      const netRev = net * uPrice;
+
+      if (existing) {
+        existing.soldQty += sold;
+        existing.returnedQty += ret;
+        existing.netQty += net;
+        existing.grossRevenue += grossRev;
+        existing.netRevenue += netRev;
+        if (uPrice > 0) existing.unitPrice = uPrice;
+      } else {
+        prodMap.set(pKey, {
+          productName: item.productName.trim(),
+          category: catName,
+          unitPrice: uPrice,
+          soldQty: sold,
+          returnedQty: ret,
+          netQty: net,
+          grossRevenue: grossRev,
+          netRevenue: netRev,
+        });
+      }
+    }
+
+    const result: CategoryAgg[] = [];
+    for (const [category, prodMap] of catMap.entries()) {
+      const products = Array.from(prodMap.values()).sort((a, b) =>
+        metricMode === 'quantity' ? b.netQty - a.netQty : b.netRevenue - a.netRevenue
+      );
+      const soldQty = products.reduce((s, p) => s + p.soldQty, 0);
+      const returnedQty = products.reduce((s, p) => s + p.returnedQty, 0);
+      const netQty = products.reduce((s, p) => s + p.netQty, 0);
+      const grossRevenue = products.reduce((s, p) => s + p.grossRevenue, 0);
+      const netRevenue = products.reduce((s, p) => s + p.netRevenue, 0);
+
+      result.push({
+        category,
+        soldQty,
+        returnedQty,
+        netQty,
+        grossRevenue,
+        netRevenue,
+        products,
+      });
+    }
+
+    return result;
+  }, [billItems, metricMode]);
+
+  const totalAllNetRevenue = useMemo(
+    () => Math.max(1, categoryStats.reduce((s, c) => s + c.netRevenue, 0)),
+    [categoryStats]
+  );
+
+  const maxCatMetric = useMemo(() => {
+    return Math.max(
+      1,
+      ...categoryStats.map((c) => (metricMode === 'quantity' ? c.netQty : c.netRevenue))
+    );
+  }, [categoryStats, metricMode]);
+
+  const activeCategoryData = useMemo(() => {
+    return (
+      categoryStats.find((c) => c.category === selectedCategory) ||
+      categoryStats[0] || {
+        category: 'Bia',
+        soldQty: 0,
+        returnedQty: 0,
+        netQty: 0,
+        grossRevenue: 0,
+        netRevenue: 0,
+        products: [],
+      }
+    );
+  }, [categoryStats, selectedCategory]);
+
+  const maxProductMetric = useMemo(() => {
+    return Math.max(
+      1,
+      ...activeCategoryData.products.map((p) =>
+        metricMode === 'quantity' ? p.netQty : p.netRevenue
+      )
+    );
+  }, [activeCategoryData, metricMode]);
+
+  return (
+    <div className="space-y-6">
+      {/* Top Control Header */}
+      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+            Quản Lý Số Lượng Bán Theo Danh Mục & Từng Loại Hàng
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Kỳ thống kê: <strong className="text-slate-800 dark:text-slate-200">{periodLabel}</strong> · Bấm vào từng danh mục (Bia, Nước ngọt, Khai vị, Ếch, Gà...) để xem biểu đồ chi tiết từng mặt hàng bên trong.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 self-start">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setMetricMode('quantity')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                metricMode === 'quantity'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              Biểu đồ theo Số lượng bán
+            </button>
+            <button
+              type="button"
+              onClick={() => setMetricMode('revenue')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                metricMode === 'revenue'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              Biểu đồ theo Doanh thu (₫)
+            </button>
+          </div>
+
+          {canWrite && products.length > 0 && (
+            <button
+              type="button"
+              onClick={onDeleteAllMenuProducts}
+              className="px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Xóa tất cả sản phẩm trong Menu ({products.length})</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Overview Chart: All 8 Categories */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left: Category Column Chart & Selector */}
+        <div className="lg:col-span-6 p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                1. Biểu đồ tổng hợp theo Danh mục (Category)
+              </h3>
+            </div>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Bấm chọn danh mục để lọc
+            </span>
+          </div>
+
+          <div className="space-y-2.5 pt-2">
+            {categoryStats.map((cat) => {
+              const val = metricMode === 'quantity' ? cat.netQty : cat.netRevenue;
+              const widthPct = Math.max(2, Math.round((val / maxCatMetric) * 100));
+              const isSelected = cat.category === activeCategoryData.category;
+
+              return (
+                <button
+                  key={cat.category}
+                  type="button"
+                  onClick={() => setSelectedCategory(cat.category)}
+                  className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer ${
+                    isSelected
+                      ? 'border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/20'
+                      : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {cat.category}
+                      </span>
+                      <span className="text-slate-400">·</span>
+                      <span className="text-slate-500 dark:text-slate-400">
+                        {cat.products.length} mặt hàng
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 font-mono">
+                      <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                        Thực bán: {formatNumber(cat.netQty)}
+                      </span>
+                      <span className="text-slate-400">|</span>
+                      <span className="text-slate-700 dark:text-slate-300">
+                        {formatVND(cat.netRevenue)}
+                      </span>
+                      <ChevronRight
+                        className={`w-3.5 h-3.5 transition-transform ${
+                          isSelected ? 'text-emerald-500 translate-x-0.5' : 'text-slate-400'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                  <div className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      style={{ width: `${val > 0 ? widthPct : 0}%` }}
+                      className={`h-full rounded-full transition-all ${
+                        isSelected
+                          ? 'bg-emerald-600 dark:bg-emerald-500'
+                          : 'bg-slate-400 dark:bg-slate-600'
+                      }`}
+                    />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Right: Drill-down Column Chart for Items inside Selected Category */}
+        <div className="lg:col-span-6 p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 flex flex-col justify-between space-y-4">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    2. Chi tiết từng loại hàng trong nhóm "{activeCategoryData.category}"
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Tổng bán: {formatNumber(activeCategoryData.soldQty)} · Đã trả:{' '}
+                    {formatNumber(activeCategoryData.returnedQty)} · Thực bán:{' '}
+                    {formatNumber(activeCategoryData.netQty)}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right font-mono flex flex-col items-end gap-1">
+                <div>
+                  <span className="text-xs text-slate-500 block">Doanh thu nhóm</span>
+                  <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
+                    {formatVND(activeCategoryData.netRevenue)}
+                  </span>
+                </div>
+                {canWrite &&
+                  products.some((p) => p.category === activeCategoryData.category) && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onDeleteCategoryMenuProducts(activeCategoryData.category)
+                      }
+                      className="px-2.5 py-1 rounded border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-[11px] font-sans font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>
+                        Xóa SP nhóm "{activeCategoryData.category}" trong Menu
+                      </span>
+                    </button>
+                  )}
+              </div>
+            </div>
+
+            {activeCategoryData.products.length === 0 ? (
+              <div className="py-16 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg">
+                Chưa phát sinh số lượng bán cho danh mục "{activeCategoryData.category}" trong kỳ này.
+              </div>
+            ) : (
+              <>
+                {/* Vertical Column Chart for Individual Products in Category */}
+                <div className="pt-4 pb-2 px-3 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50/50 dark:bg-slate-950/40 overflow-x-auto">
+                  <div className="min-w-[360px]">
+                    <div className="h-48 flex items-end gap-4 border-b border-slate-200 dark:border-slate-800 pb-2 px-2">
+                      {activeCategoryData.products.map((prod) => {
+                        const val =
+                          metricMode === 'quantity' ? prod.netQty : prod.netRevenue;
+                        const colH = Math.max(4, Math.round((val / maxProductMetric) * 150));
+
+                        return (
+                          <div
+                            key={prod.productName}
+                            className="flex-1 flex flex-col items-center justify-end h-full"
+                          >
+                            <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 mb-1 whitespace-nowrap">
+                              {metricMode === 'quantity'
+                                ? `${formatNumber(prod.netQty)}`
+                                : `${formatNumber(Math.round(prod.netRevenue / 1000))}k`}
+                            </span>
+                            <div
+                              style={{ height: `${val > 0 ? colH : 4}px` }}
+                              className="w-8 sm:w-11 bg-emerald-600 dark:bg-emerald-500 rounded-t-sm transition-all"
+                              title={`${prod.productName}: Thực bán ${prod.netQty} (${formatVND(
+                                prod.netRevenue
+                              )})`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-start gap-4 pt-2 px-2">
+                      {activeCategoryData.products.map((prod) => (
+                        <div key={prod.productName} className="flex-1 text-center">
+                          <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300 line-clamp-2">
+                            {prod.productName}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Product Table inside Category */}
+                <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                        <th className="py-2 px-3">Tên mặt hàng</th>
+                        <th className="py-2 px-2 text-right">Bán ra</th>
+                        <th className="py-2 px-2 text-right">Hoàn trả</th>
+                        <th className="py-2 px-2 text-right">Thực bán</th>
+                        <th className="py-2 px-3 text-right">Thành tiền thực</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono">
+                      {activeCategoryData.products.map((prod) => (
+                        <tr
+                          key={prod.productName}
+                          className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
+                        >
+                          <td className="py-2.5 px-3 font-sans font-medium text-slate-900 dark:text-white">
+                            {prod.productName}
+                          </td>
+                          <td className="py-2.5 px-2 text-right text-slate-600 dark:text-slate-300">
+                            {formatNumber(prod.soldQty)}
+                          </td>
+                          <td className="py-2.5 px-2 text-right text-rose-600 dark:text-rose-400">
+                            {prod.returnedQty > 0 ? `-${formatNumber(prod.returnedQty)}` : '0'}
+                          </td>
+                          <td className="py-2.5 px-2 text-right font-bold text-emerald-600 dark:text-emerald-400">
+                            {formatNumber(prod.netQty)}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-semibold text-slate-900 dark:text-white">
+                            {formatVND(prod.netRevenue)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Full Matrix Table: All Categories & Their Products */}
+      <div className="p-5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 space-y-4">
+        <div>
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">
+            Bảng tổng hợp toàn bộ Danh mục & Chi tiết từng mặt hàng
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Đối soát số lượng bán ra, số lượng hoàn trả và doanh thu thực tế của mọi mặt hàng trong từng nhóm
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {categoryStats.map((cat) => {
+            const sharePct = Math.round((cat.netRevenue / totalAllNetRevenue) * 100);
+            return (
+              <div
+                key={cat.category}
+                className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden flex flex-col justify-between"
+              >
+                <div>
+                  <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {cat.category}
+                      </span>
+                      <span className="text-slate-400">·</span>
+                      <span className="font-mono text-slate-500 dark:text-slate-400">
+                        Thực bán: {formatNumber(cat.netQty)}
+                      </span>
+                    </div>
+                    <div className="text-xs font-mono">
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatVND(cat.netRevenue)}
+                      </span>
+                      <span className="text-slate-400 ml-1.5">({sharePct}%)</span>
+                    </div>
+                  </div>
+
+                  {cat.products.length === 0 ? (
+                    <div className="p-4 text-xs text-slate-400 text-center">
+                      Chưa có món bán ra
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
+                      {cat.products.map((p) => (
+                        <div
+                          key={p.productName}
+                          className="px-4 py-2 flex items-center justify-between hover:bg-slate-50/50 dark:hover:bg-slate-800/30"
+                        >
+                          <span className="font-medium text-slate-800 dark:text-slate-200">
+                            {p.productName}
+                          </span>
+                          <div className="flex items-center gap-3 font-mono text-xs">
+                            <span className="text-slate-500">
+                              SL: <strong className="text-slate-900 dark:text-white">{p.netQty}</strong>
+                              {p.returnedQty > 0 && (
+                                <span className="text-rose-500 ml-1">
+                                  (Trả {p.returnedQty})
+                                </span>
+                              )}
+                            </span>
+                            <span className="w-24 text-right font-semibold text-slate-900 dark:text-white">
+                              {formatVND(p.netRevenue)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};

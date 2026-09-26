@@ -1,0 +1,333 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Primitive Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && request.auth.token.email == 'toannq06034@gmail.com';
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        isBootstrappedAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // 3. Entity Validation Blueprints (Anti-Update-Gap)
+    function isValidAdminDoc(data) {
+      return data.keys().hasAll(['uid', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'createdAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'username', 'displayName', 'role', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'username', 'displayName', 'role', 'createdAt', 'updatedAt']) &&
+        data.uid == request.auth.uid &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.username is string && data.username.size() >= 1 && data.username.size() <= 64 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.role is string && data.role in ['admin', 'manager', 'cashier', 'viewer'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStaffAccount(data) {
+      return data.keys().hasAll([
+          'ownerId', 'username', 'password', 'displayName',
+          'info', 'role', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'username', 'password', 'displayName',
+          'info', 'role', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.username is string && data.username.size() >= 1 && data.username.size() <= 64 &&
+        data.password is string && data.password.size() >= 1 && data.password.size() <= 100 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.info is string && data.info.size() <= 500 &&
+        data.role is string && data.role in ['admin', 'manager', 'cashier', 'viewer'] &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll([
+          'ownerId', 'productName', 'category', 'unitPrice', 'unit',
+          'totalSold', 'totalReturned', 'totalRevenue', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'productName', 'category', 'unitPrice', 'unit',
+          'totalSold', 'totalReturned', 'totalRevenue', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.unitPrice is number && data.unitPrice >= 0 &&
+        data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 40 &&
+        data.totalSold is number && data.totalSold >= 0 &&
+        data.totalReturned is number && data.totalReturned >= 0 &&
+        data.totalRevenue is number &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBill(data) {
+      return data.keys().hasAll([
+          'ownerId', 'billCode', 'billDate', 'paymentType', 'debtorName',
+          'debtStatus', 'totalAmount', 'deductedAmount', 'itemsSummary',
+          'note', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'billCode', 'billDate', 'paymentType', 'debtorName',
+          'debtStatus', 'totalAmount', 'deductedAmount', 'itemsSummary',
+          'note', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&
+        data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.paymentType is string && data.paymentType in ['cash', 'transfer', 'debt'] &&
+        data.debtorName is string && data.debtorName.size() <= 120 &&
+        data.debtStatus is string && data.debtStatus in ['none', 'unpaid', 'paid'] &&
+        data.totalAmount is number && data.totalAmount >= 0 &&
+        data.deductedAmount is number && data.deductedAmount >= 0 &&
+        data.itemsSummary is string && data.itemsSummary.size() <= 1000 &&
+        data.note is string && data.note.size() <= 500 &&
+        data.status is string && data.status in ['active', 'locked'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBillItem(data) {
+      return data.keys().hasAll([
+          'ownerId', 'billId', 'billDate', 'productName', 'category',
+          'quantity', 'returnedQuantity', 'unitPrice', 'subtotal', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'billId', 'billDate', 'productName', 'category',
+          'quantity', 'returnedQuantity', 'unitPrice', 'subtotal', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.billId is string && data.billId.size() >= 1 && data.billId.size() <= 128 && data.billId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.quantity is number && data.quantity > 0 &&
+        data.returnedQuantity is number && data.returnedQuantity >= 0 && data.returnedQuantity <= data.quantity &&
+        data.unitPrice is number && data.unitPrice >= 0 &&
+        data.subtotal is number && data.subtotal >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDeduction(data) {
+      return data.keys().hasAll([
+          'ownerId', 'billId', 'billCode', 'billDate', 'deductionDate',
+          'productName', 'category', 'quantity', 'unitPrice', 'amount',
+          'note', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'billId', 'billCode', 'billDate', 'deductionDate',
+          'productName', 'category', 'quantity', 'unitPrice', 'amount',
+          'note', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.billId is string && data.billId.size() >= 1 && data.billId.size() <= 128 && data.billId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&
+        data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.deductionDate is string && data.deductionDate.size() == 10 && data.deductionDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.quantity is number && data.quantity > 0 &&
+        data.unitPrice is number && data.unitPrice >= 0 &&
+        data.amount is number && data.amount >= 0 &&
+        data.note is string && data.note.size() <= 500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow list: if false;
+      allow create: if isVerified() && isValidId(adminId) && isValidAdminDoc(incoming()) &&
+        incoming().createdAt == request.time && isAdmin();
+      allow update: if false;
+      allow delete: if isVerified() && isValidId(adminId) && isAdmin();
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isVerified() && isValidId(userId) && request.auth.uid == userId &&
+        isValidUser(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (incoming().role != 'admin' || isAdmin());
+      allow update: if isVerified() && isValidId(userId) && isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            request.auth.uid == userId &&
+            incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'updatedAt'])
+          )
+        );
+      allow delete: if isVerified() && isValidId(userId) && isAdmin();
+    }
+
+    match /staff_accounts/{accountId} {
+      allow get: if isSignedIn() && isValidId(accountId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isVerified() && isValidId(accountId) && isValidStaffAccount(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(accountId) && isValidStaffAccount(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'username', 'password', 'displayName', 'info', 'role', 'active', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerified() && isValidId(accountId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /products/{productId} {
+      allow get: if isSignedIn() && isValidId(productId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isVerified() && isValidId(productId) && isValidProduct(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(productId) && isValidProduct(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            existing().ownerId == request.auth.uid && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['productName', 'category', 'unitPrice', 'unit', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['totalSold', 'totalReturned', 'totalRevenue', 'unitPrice', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'productName', 'category', 'unitPrice', 'unit',
+                'totalSold', 'totalReturned', 'totalRevenue', 'updatedAt'
+              ])
+            )
+          )
+        );
+      allow delete: if isVerified() && isValidId(productId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /bills/{billId} {
+      allow get: if isSignedIn() && isValidId(billId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isVerified() && isValidId(billId) && isValidBill(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(billId) && isValidBill(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            existing().ownerId == request.auth.uid &&
+            existing().status != 'locked' && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['debtStatus', 'paymentType', 'note', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['deductedAmount', 'itemsSummary', 'note', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'billCode', 'billDate', 'paymentType', 'debtorName', 'debtStatus',
+                'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'updatedAt'
+              ])
+            )
+          )
+        );
+      allow delete: if isVerified() && isValidId(billId) && (
+        isAdmin() || (existing().ownerId == request.auth.uid && existing().status != 'locked')
+      );
+    }
+
+    match /bill_items/{itemId} {
+      allow get: if isSignedIn() && isValidId(itemId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isVerified() && isValidId(itemId) && isValidBillItem(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/bills/$(incoming().billId)) &&
+        get(/databases/$(database)/documents/bills/$(incoming().billId)).data.ownerId == request.auth.uid;
+      allow update: if isVerified() && isValidId(itemId) && isValidBillItem(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().billId == existing().billId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            existing().ownerId == request.auth.uid && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['returnedQuantity', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'billDate', 'productName', 'category', 'quantity',
+                'returnedQuantity', 'unitPrice', 'subtotal', 'updatedAt'
+              ])
+            )
+          )
+        );
+      allow delete: if isVerified() && isValidId(itemId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /deductions/{deductionId} {
+      allow get: if isSignedIn() && isValidId(deductionId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isVerified() && isValidId(deductionId) && isValidDeduction(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/bills/$(incoming().billId)) &&
+        get(/databases/$(database)/documents/bills/$(incoming().billId)).data.ownerId == request.auth.uid;
+      allow update: if isVerified() && isValidId(deductionId) && isValidDeduction(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().billId == existing().billId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'deductionDate', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerified() && isValidId(deductionId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+  }
+}

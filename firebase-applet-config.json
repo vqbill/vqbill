@@ -1,0 +1,12 @@
+{
+  "projectId": "vqbill",
+  "appId": "1:861268369087:web:fd3100feb7d3f1a7a7f00a",
+  "apiKey": "AIzaSyABK9oGf3bCD-jXzzCtOG0o1p0vQRnry70",
+  "authDomain": "vqbill.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-0dbf20d9-33fb-41f4-92b6-ce178ae475ba",
+  "storageBucket": "vqbill.firebasestorage.app",
+  "messagingSenderId": "861268369087",
+  "measurementId": "",
+  "oAuthClientId": "861268369087-gvkdpndhmhq9laj3bge7u1vheaoc95ps.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
+}

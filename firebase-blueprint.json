@@ -1,0 +1,478 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and role information for VQBill access control.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique Firebase Auth UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "description": "Login username handle.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the staff or manager.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "description": "Access role of the user.",
+          "enum": ["admin", "manager", "cashier", "viewer"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp."
+        }
+      },
+      "required": ["uid", "username", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "StaffAccount": {
+      "title": "StaffAccount",
+      "description": "Staff account managed by Admin for username/password login and RBAC.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the workspace owner/admin.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "description": "Login username.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "password": {
+          "type": "string",
+          "description": "Login password customized by Admin.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Full display name of the account.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "info": {
+          "type": "string",
+          "description": "Additional staff info (shift, title, notes).",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned RBAC role.",
+          "enum": ["admin", "manager", "cashier", "viewer"]
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether the account is enabled."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "username",
+        "password",
+        "displayName",
+        "info",
+        "role",
+        "active",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Catalog item representing a dish, beverage, or service.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the creator/owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "productName": {
+          "type": "string",
+          "description": "Name of the food or beverage item.",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "category": {
+          "type": "string",
+          "description": "Category name (Bia, Nước ngọt, Khai vị, Ếch, Gà, Hải sản, Lẩu / Món chính, Khác).",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "unitPrice": {
+          "type": "number",
+          "description": "Standard unit price in VND."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Unit of measure (Lon, Chai, Phần, Đĩa, Nồi...).",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "totalSold": {
+          "type": "number",
+          "description": "Cumulative quantity sold."
+        },
+        "totalReturned": {
+          "type": "number",
+          "description": "Cumulative quantity returned."
+        },
+        "totalRevenue": {
+          "type": "number",
+          "description": "Cumulative net revenue for this product."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "productName",
+        "category",
+        "unitPrice",
+        "unit",
+        "totalSold",
+        "totalReturned",
+        "totalRevenue",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Bill": {
+      "title": "Bill",
+      "description": "Sales invoice header containing payment type, date, debt status, and totals.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who recorded the bill.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "billCode": {
+          "type": "string",
+          "description": "Human-readable bill code.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "billDate": {
+          "type": "string",
+          "description": "Bill date in YYYY-MM-DD format.",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "paymentType": {
+          "type": "string",
+          "description": "Payment method: cash, transfer, or debt.",
+          "enum": ["cash", "transfer", "debt"]
+        },
+        "debtorName": {
+          "type": "string",
+          "description": "Name of debtor if paymentType is debt, otherwise empty string.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "debtStatus": {
+          "type": "string",
+          "description": "Debt settlement status.",
+          "enum": ["none", "unpaid", "paid"]
+        },
+        "totalAmount": {
+          "type": "number",
+          "description": "Gross bill total amount in VND."
+        },
+        "deductedAmount": {
+          "type": "number",
+          "description": "Total amount deducted/returned from this bill in VND."
+        },
+        "itemsSummary": {
+          "type": "string",
+          "description": "Short human-readable summary of items in the bill.",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional note on the bill.",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "status": {
+          "type": "string",
+          "description": "Bill lifecycle state.",
+          "enum": ["active", "locked"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "billCode",
+        "billDate",
+        "paymentType",
+        "debtorName",
+        "debtStatus",
+        "totalAmount",
+        "deductedAmount",
+        "itemsSummary",
+        "note",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BillItem": {
+      "title": "BillItem",
+      "description": "Individual line item belonging to a sales bill.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "billId": {
+          "type": "string",
+          "description": "ID of the parent bill document.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "billDate": {
+          "type": "string",
+          "description": "Date of the bill in YYYY-MM-DD format.",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "productName": {
+          "type": "string",
+          "description": "Name of the dish or beverage.",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "category": {
+          "type": "string",
+          "description": "Category classification.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "quantity": {
+          "type": "number",
+          "description": "Quantity sold."
+        },
+        "returnedQuantity": {
+          "type": "number",
+          "description": "Quantity returned from this line item."
+        },
+        "unitPrice": {
+          "type": "number",
+          "description": "Unit price in VND."
+        },
+        "subtotal": {
+          "type": "number",
+          "description": "Line item subtotal (quantity * unitPrice)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "billId",
+        "billDate",
+        "productName",
+        "category",
+        "quantity",
+        "returnedQuantity",
+        "unitPrice",
+        "subtotal",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Deduction": {
+      "title": "Deduction",
+      "description": "Record of returned items or financial deductions linked to a bill.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who created the deduction.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "billId": {
+          "type": "string",
+          "description": "ID of the associated bill.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "billCode": {
+          "type": "string",
+          "description": "Human-readable bill code.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "billDate": {
+          "type": "string",
+          "description": "Original bill date in YYYY-MM-DD format.",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "deductionDate": {
+          "type": "string",
+          "description": "Date the return/deduction occurred in YYYY-MM-DD format.",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "productName": {
+          "type": "string",
+          "description": "Returned item name or deduction label.",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "category": {
+          "type": "string",
+          "description": "Category of the returned item.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "quantity": {
+          "type": "number",
+          "description": "Returned quantity."
+        },
+        "unitPrice": {
+          "type": "number",
+          "description": "Unit price refunded."
+        },
+        "amount": {
+          "type": "number",
+          "description": "Total deducted amount in VND."
+        },
+        "note": {
+          "type": "string",
+          "description": "Reason or note for the return/deduction.",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "billId",
+        "billCode",
+        "billDate",
+        "deductionDate",
+        "productName",
+        "category",
+        "quantity",
+        "unitPrice",
+        "amount",
+        "note",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user profile and RBAC role."
+    },
+    "/staff_accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/StaffAccount" },
+      "description": "Stores staff login accounts and role permissions managed by Admin."
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Stores product catalog and cumulative sales statistics."
+    },
+    "/bills/{billId}": {
+      "schema": { "$ref": "#/entities/Bill" },
+      "description": "Stores sales bills (cash, transfer, debt)."
+    },
+    "/bill_items/{itemId}": {
+      "schema": { "$ref": "#/entities/BillItem" },
+      "description": "Stores individual line items for bills."
+    },
+    "/deductions/{deductionId}": {
+      "schema": { "$ref": "#/entities/Deduction" },
+      "description": "Stores item returns and financial deductions."
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "VQBill — Quản Lý Hóa Đơn & Doanh Thu AI",
+  "description": "Hệ thống quản lý hóa đơn bán hàng, trích xuất bill bằng AI OCR, theo dõi doanh thu thời gian thực, công nợ, hoàn trả và thống kê theo danh mục.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
