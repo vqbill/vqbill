@@ -87,6 +87,17 @@ export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
     allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER].allowedTabs,
     useCustomTabs: false,
   },
+  {
+    id: 'staff_inventory',
+    username: 'kiemkho',
+    password: '123456',
+    displayName: 'Hoàng Văn Nam (Kiểm kho)',
+    info: 'Bộ phận kiểm kho — Xem số lượng bán theo danh mục được cấp quyền',
+    role: UserRole.INVENTORY,
+    active: true,
+    allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.INVENTORY].allowedTabs,
+    useCustomTabs: false,
+  },
 ];
 
 export function normalizeStaffAccountsWithFixedAdmin(

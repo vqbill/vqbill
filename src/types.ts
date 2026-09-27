@@ -3,6 +3,7 @@ export enum UserRole {
   MANAGER = 'manager',
   CASHIER = 'cashier',
   VIEWER = 'viewer',
+  INVENTORY = 'inventory',
 }
 
 export type ManagementTabId =
@@ -88,6 +89,8 @@ export interface RolePermissionConfig {
   allowedTabs: ManagementTabId[];
   canWrite: boolean;
   canDelete: boolean;
+  restrictProductCategories?: boolean;
+  allowedProductCategories?: string[];
 }
 
 export type RolePermissionsMap = Record<UserRole, RolePermissionConfig>;
@@ -107,6 +110,8 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     ],
     canWrite: true,
     canDelete: true,
+    restrictProductCategories: false,
+    allowedProductCategories: [],
   },
   [UserRole.MANAGER]: {
     role: UserRole.MANAGER,
@@ -121,18 +126,32 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     ],
     canWrite: true,
     canDelete: true,
+    restrictProductCategories: false,
+    allowedProductCategories: [],
   },
   [UserRole.CASHIER]: {
     role: UserRole.CASHIER,
     allowedTabs: ['dashboard', 'ocr', 'debts', 'deductions', 'returns'],
     canWrite: true,
     canDelete: false,
+    restrictProductCategories: false,
+    allowedProductCategories: [],
   },
   [UserRole.VIEWER]: {
     role: UserRole.VIEWER,
     allowedTabs: ['dashboard', 'categories', 'debts', 'deductions', 'returns'],
     canWrite: false,
     canDelete: false,
+    restrictProductCategories: false,
+    allowedProductCategories: [],
+  },
+  [UserRole.INVENTORY]: {
+    role: UserRole.INVENTORY,
+    allowedTabs: ['categories'],
+    canWrite: false,
+    canDelete: false,
+    restrictProductCategories: false,
+    allowedProductCategories: [],
   },
 };
 
@@ -280,6 +299,9 @@ export interface StaffAccount {
   active: boolean;
   allowedTabs?: ManagementTabId[];
   useCustomTabs?: boolean;
+  restrictProductCategories?: boolean;
+  allowedProductCategories?: string[];
+  useCustomProductCategories?: boolean;
   createdAtMs?: number;
   updatedAtMs?: number;
 }
@@ -309,6 +331,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   [UserRole.MANAGER]: 'Quản lý',
   [UserRole.CASHIER]: 'Thu ngân',
   [UserRole.VIEWER]: 'Kế toán (Chỉ xem)',
+  [UserRole.INVENTORY]: 'Kiểm kho',
 };
 
 export const PAYMENT_LABELS: Record<PaymentType, string> = {
@@ -329,6 +352,23 @@ export function sanitizeTabList(tabs?: unknown): ManagementTabId[] {
   return Array.from(new Set(filtered));
 }
 
+export function sanitizeCategoryList(cats?: unknown): string[] {
+  if (!Array.isArray(cats)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const c of cats) {
+    if (typeof c !== 'string') continue;
+    const trimmed = c.trim();
+    if (!trimmed) continue;
+    const lower = trimmed.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      result.push(trimmed);
+    }
+  }
+  return result;
+}
+
 export function getEffectiveRolePermissions(
   account: StaffAccount | null,
   rolePermissions: RolePermissionsMap
@@ -337,6 +377,9 @@ export function getEffectiveRolePermissions(
   canWrite: boolean;
   canDelete: boolean;
   isCustomAccountTabs: boolean;
+  restrictProductCategories: boolean;
+  allowedProductCategories: string[];
+  isCustomProductCategories: boolean;
 } {
   if (!account) {
     return {
@@ -344,6 +387,9 @@ export function getEffectiveRolePermissions(
       canWrite: false,
       canDelete: false,
       isCustomAccountTabs: false,
+      restrictProductCategories: false,
+      allowedProductCategories: [],
+      isCustomProductCategories: false,
     };
   }
 
@@ -364,7 +410,10 @@ export function getEffectiveRolePermissions(
   }
 
   // Primary admin account always retains access to 'accounts' tab so Admin cannot lock themselves out
-  if (account.username === 'admin' || account.role === UserRole.ADMIN) {
+  const isAdminAccount =
+    account.username === 'admin' || account.role === UserRole.ADMIN;
+
+  if (isAdminAccount) {
     if (!tabs.includes('accounts')) {
       tabs = [...tabs, 'accounts'];
     }
@@ -379,20 +428,43 @@ export function getEffectiveRolePermissions(
     tabs.includes(id)
   );
 
+  // Resolve Product Categories restriction for "Số lượng theo Danh mục" tab
+  let restrictProductCategories = false;
+  let allowedProductCategories: string[] = [];
+  let isCustomProductCategories = false;
+
+  if (!isAdminAccount) {
+    if (account.useCustomProductCategories) {
+      isCustomProductCategories = true;
+      restrictProductCategories = Boolean(
+        account.restrictProductCategories ?? true
+      );
+      allowedProductCategories = sanitizeCategoryList(
+        account.allowedProductCategories
+      );
+    } else {
+      restrictProductCategories = Boolean(roleConfig.restrictProductCategories);
+      allowedProductCategories = sanitizeCategoryList(
+        roleConfig.allowedProductCategories
+      );
+    }
+  }
+
   return {
     allowedTabs: orderedTabs,
-    canWrite:
-      account.role === UserRole.ADMIN
-        ? true
-        : typeof roleConfig.canWrite === 'boolean'
-        ? roleConfig.canWrite
-        : account.role !== UserRole.VIEWER,
-    canDelete:
-      account.role === UserRole.ADMIN
-        ? true
-        : typeof roleConfig.canDelete === 'boolean'
-        ? roleConfig.canDelete
-        : account.role === UserRole.MANAGER,
+    canWrite: isAdminAccount
+      ? true
+      : typeof roleConfig.canWrite === 'boolean'
+      ? roleConfig.canWrite
+      : account.role !== UserRole.VIEWER && account.role !== UserRole.INVENTORY,
+    canDelete: isAdminAccount
+      ? true
+      : typeof roleConfig.canDelete === 'boolean'
+      ? roleConfig.canDelete
+      : account.role === UserRole.MANAGER,
     isCustomAccountTabs: useCustom,
+    restrictProductCategories,
+    allowedProductCategories,
+    isCustomProductCategories,
   };
 }

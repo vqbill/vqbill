@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Shield,
   Plus,
@@ -14,6 +14,7 @@ import {
   CheckSquare,
   RotateCcw,
   Lock,
+  Filter,
 } from 'lucide-react';
 import {
   StaffAccount,
@@ -24,6 +25,7 @@ import {
   ManagementTabId,
   RolePermissionsMap,
   DEFAULT_ROLE_PERMISSIONS,
+  STANDARD_CATEGORIES,
   getEffectiveRolePermissions,
 } from '../types';
 
@@ -31,6 +33,7 @@ interface AccountsManagerTabProps {
   staffAccounts: StaffAccount[];
   currentAccount: StaffAccount;
   rolePermissions: RolePermissionsMap;
+  productCategories?: string[];
   onSaveRolePermissions: (
     updatedMap: RolePermissionsMap,
     syncAccountsOfRoles: boolean
@@ -48,12 +51,21 @@ const ROLE_ORDER: UserRole[] = [
   UserRole.MANAGER,
   UserRole.CASHIER,
   UserRole.VIEWER,
+  UserRole.INVENTORY,
+];
+
+const NON_ADMIN_ROLES: UserRole[] = [
+  UserRole.MANAGER,
+  UserRole.CASHIER,
+  UserRole.VIEWER,
+  UserRole.INVENTORY,
 ];
 
 export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   staffAccounts,
   currentAccount,
   rolePermissions,
+  productCategories,
   onSaveRolePermissions,
   onCreateAccount,
   onUpdateAccount,
@@ -62,13 +74,34 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   onSwitchAccount,
   requestConfirm,
 }) => {
-  const [draftRolePerms, setDraftRolePerms] = useState<RolePermissionsMap>(
-    rolePermissions
-  );
+  const allProductCategories = useMemo(() => {
+    const source =
+      productCategories && productCategories.length > 0
+        ? productCategories
+        : Array.from(STANDARD_CATEGORIES);
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const c of source) {
+      const clean = (c || '').trim();
+      if (clean && !seen.has(clean.toLowerCase())) {
+        seen.add(clean.toLowerCase());
+        result.push(clean);
+      }
+    }
+    return result;
+  }, [productCategories]);
+
+  const [draftRolePerms, setDraftRolePerms] = useState<RolePermissionsMap>(() => ({
+    ...DEFAULT_ROLE_PERMISSIONS,
+    ...rolePermissions,
+  }));
   const [syncRoleToAccounts, setSyncRoleToAccounts] = useState<boolean>(true);
 
   useEffect(() => {
-    setDraftRolePerms(rolePermissions);
+    setDraftRolePerms({
+      ...DEFAULT_ROLE_PERMISSIONS,
+      ...rolePermissions,
+    });
   }, [rolePermissions]);
 
   const [newUsername, setNewUsername] = useState('');
@@ -81,15 +114,21 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     rolePermissions[UserRole.CASHIER]?.allowedTabs ||
       DEFAULT_ROLE_PERMISSIONS[UserRole.CASHIER].allowedTabs
   );
+  const [newUseCustomProdCats, setNewUseCustomProdCats] = useState<boolean>(false);
+  const [newRestrictProdCats, setNewRestrictProdCats] = useState<boolean>(false);
+  const [newAllowedProdCats, setNewAllowedProdCats] = useState<string[]>([]);
 
   useEffect(() => {
+    const roleCfg =
+      rolePermissions[newRole] || DEFAULT_ROLE_PERMISSIONS[newRole];
     if (!newUseCustomTabs) {
-      setNewAllowedTabs(
-        rolePermissions[newRole]?.allowedTabs ||
-          DEFAULT_ROLE_PERMISSIONS[newRole].allowedTabs
-      );
+      setNewAllowedTabs(roleCfg.allowedTabs);
     }
-  }, [newRole, newUseCustomTabs, rolePermissions]);
+    if (!newUseCustomProdCats) {
+      setNewRestrictProdCats(Boolean(roleCfg.restrictProductCategories));
+      setNewAllowedProdCats(roleCfg.allowedProductCategories || []);
+    }
+  }, [newRole, newUseCustomTabs, newUseCustomProdCats, rolePermissions]);
 
   const [editingAcc, setEditingAcc] = useState<StaffAccount | null>(null);
   const [visiblePasswords, setVisiblePasswords] = useState<Record<string, boolean>>({});
@@ -146,14 +185,86 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     }));
   };
 
+  // Toggle or set product categories allowed in "Số lượng theo Danh mục" for a Role
+  const handleSetRoleCategoryMode = (
+    role: UserRole,
+    restrict: boolean,
+    initialCats?: string[]
+  ) => {
+    if (role === UserRole.ADMIN) return;
+    setDraftRolePerms((prev) => {
+      const currentRoleCfg = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const nextTabs = currentRoleCfg.allowedTabs.includes('categories')
+        ? currentRoleCfg.allowedTabs
+        : MANAGEMENT_TABS.map((m) => m.id).filter(
+            (id) => currentRoleCfg.allowedTabs.includes(id) || id === 'categories'
+          );
+      return {
+        ...prev,
+        [role]: {
+          ...currentRoleCfg,
+          allowedTabs: nextTabs,
+          restrictProductCategories: restrict,
+          allowedProductCategories:
+            initialCats !== undefined
+              ? initialCats
+              : restrict
+              ? currentRoleCfg.allowedProductCategories || []
+              : [],
+        },
+      };
+    });
+  };
+
+  const handleToggleRoleProductCategory = (role: UserRole, categoryName: string) => {
+    if (role === UserRole.ADMIN) return;
+    setDraftRolePerms((prev) => {
+      const currentRoleCfg = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const wasRestricted = Boolean(currentRoleCfg.restrictProductCategories);
+      const currentCats = currentRoleCfg.allowedProductCategories || [];
+
+      let nextCats: string[];
+      if (!wasRestricted) {
+        // When switching from "Xem tất cả" by clicking a category, start with just that category selected
+        nextCats = [categoryName];
+      } else {
+        const exists = currentCats.some(
+          (c) => c.toLowerCase() === categoryName.toLowerCase()
+        );
+        nextCats = exists
+          ? currentCats.filter(
+              (c) => c.toLowerCase() !== categoryName.toLowerCase()
+            )
+          : [...currentCats, categoryName];
+      }
+
+      // Ensure 'categories' tab is enabled for this role when configuring its categories
+      const nextTabs = currentRoleCfg.allowedTabs.includes('categories')
+        ? currentRoleCfg.allowedTabs
+        : MANAGEMENT_TABS.map((m) => m.id).filter(
+            (id) => currentRoleCfg.allowedTabs.includes(id) || id === 'categories'
+          );
+
+      return {
+        ...prev,
+        [role]: {
+          ...currentRoleCfg,
+          allowedTabs: nextTabs,
+          restrictProductCategories: true,
+          allowedProductCategories: nextCats,
+        },
+      };
+    });
+  };
+
   const handleSaveRoleMatrixClick = () => {
     requestConfirm({
-      title: 'Xác nhận Lưu Phân Phối Danh Mục Quản Lý Theo Role',
-      message: `Bạn có chắc chắn muốn lưu cấu hình danh mục quản lý cho các Role (${
+      title: 'Xác nhận Lưu Phân Quyền Role & Danh Mục Món Ăn',
+      message: `Bạn có chắc chắn muốn lưu cấu hình phân quyền các Tab quản lý và quyền xem Danh mục món ăn trong tab "Số lượng theo Danh mục" cho các Role (${
         syncRoleToAccounts
-          ? 'đồng thời áp dụng danh mục mới cho các tài khoản thuộc Role tương ứng'
+          ? 'đồng thời áp dụng cho các tài khoản thuộc Role tương ứng'
           : 'chỉ áp dụng cho các tài khoản mặc định theo Role'
-      }) lên Firebase không?`,
+      }) lên Cloud/Firebase không?`,
       confirmLabel: 'Lưu phân quyền Role',
       variant: 'primary',
       onConfirm: async () => {
@@ -184,6 +295,21 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
       const next = exists ? prev.filter((t) => t !== tabId) : [...prev, tabId];
       if (next.length === 0) return ['dashboard'];
       return MANAGEMENT_TABS.map((m) => m.id).filter((id) => next.includes(id));
+    });
+  };
+
+  const handleToggleNewAccountProdCat = (catName: string) => {
+    setNewUseCustomProdCats(true);
+    if (!newRestrictProdCats) {
+      setNewRestrictProdCats(true);
+      setNewAllowedProdCats([catName]);
+      return;
+    }
+    setNewAllowedProdCats((prev) => {
+      const exists = prev.some((c) => c.toLowerCase() === catName.toLowerCase());
+      return exists
+        ? prev.filter((c) => c.toLowerCase() !== catName.toLowerCase())
+        : [...prev, catName];
     });
   };
 
@@ -218,12 +344,20 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           active: true,
           allowedTabs: assignedTabs,
           useCustomTabs: newUseCustomTabs,
+          useCustomProductCategories: newUseCustomProdCats,
+          restrictProductCategories: newUseCustomProdCats
+            ? newRestrictProdCats
+            : rolePermissions[newRole]?.restrictProductCategories || false,
+          allowedProductCategories: newUseCustomProdCats
+            ? newAllowedProdCats
+            : rolePermissions[newRole]?.allowedProductCategories || [],
         });
         setNewUsername('');
         setNewPassword('');
         setNewDisplayName('');
         setNewInfo('');
         setNewUseCustomTabs(false);
+        setNewUseCustomProdCats(false);
         setNewAllowedTabs(
           rolePermissions[newRole]?.allowedTabs ||
             DEFAULT_ROLE_PERMISSIONS[newRole].allowedTabs
@@ -239,6 +373,9 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
       password: acc.username.toLowerCase() === 'admin' ? 'admin123' : acc.password,
       allowedTabs: eff.allowedTabs,
       useCustomTabs: Boolean(acc.useCustomTabs),
+      useCustomProductCategories: Boolean(acc.useCustomProductCategories),
+      restrictProductCategories: eff.restrictProductCategories,
+      allowedProductCategories: eff.allowedProductCategories,
     });
   };
 
@@ -282,6 +419,31 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     });
   };
 
+  const handleToggleEditingAccountProdCat = (catName: string) => {
+    if (!editingAcc) return;
+    const wasRestricted = Boolean(editingAcc.restrictProductCategories);
+    const currentCats = editingAcc.allowedProductCategories || [];
+
+    let nextCats: string[];
+    if (!wasRestricted) {
+      nextCats = [catName];
+    } else {
+      const exists = currentCats.some(
+        (c) => c.toLowerCase() === catName.toLowerCase()
+      );
+      nextCats = exists
+        ? currentCats.filter((c) => c.toLowerCase() !== catName.toLowerCase())
+        : [...currentCats, catName];
+    }
+
+    setEditingAcc({
+      ...editingAcc,
+      useCustomProductCategories: true,
+      restrictProductCategories: true,
+      allowedProductCategories: nextCats,
+    });
+  };
+
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAcc) return;
@@ -318,6 +480,13 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           info: editingAcc.info.trim(),
           allowedTabs: finalTabs,
           useCustomTabs: Boolean(editingAcc.useCustomTabs),
+          useCustomProductCategories: Boolean(
+            editingAcc.useCustomProductCategories
+          ),
+          restrictProductCategories: Boolean(
+            editingAcc.restrictProductCategories
+          ),
+          allowedProductCategories: editingAcc.allowedProductCategories || [],
         });
         setEditingAcc(null);
       },
@@ -366,7 +535,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               Quản Lý Tài Khoản & Phân Quyền Danh Mục
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Phân phối các Danh mục quản lý cho từng Role hoặc tùy chỉnh riêng cho từng tài khoản nhân viên.
+              Phân phối các Tab quản lý và phân quyền chi tiết từng Danh mục món ăn được phép xem trong tab <strong>Số lượng theo Danh mục</strong> cho từng Role hoặc tài khoản.
             </p>
           </div>
         </div>
@@ -381,17 +550,17 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         </button>
       </div>
 
-      {/* SECTION 1: ROLE-BASED MANAGEMENT TABS PERMISSION MATRIX */}
-      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
+      {/* SECTION 1: ROLE-BASED MANAGEMENT TABS & PRODUCT CATEGORIES PERMISSION MATRIX */}
+      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-start gap-2.5">
             <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                1. Phân Phối Danh Mục Quản Lý Theo Loại Tài Khoản (Role)
+                1. Phân Quyền Theo Loại Tài Khoản (Role)
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Chọn các danh mục được phép truy cập cho từng Role: Admin, Quản lý, Thu ngân, Kế toán
+                Chọn các mục quản lý được truy cập và giới hạn danh mục món ăn được phép xem trong tab <strong>Số lượng theo Danh mục</strong> cho từng Role (Quản lý, Thu ngân, Kế toán, Kiểm kho).
               </p>
             </div>
           </div>
@@ -444,7 +613,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                       {ROLE_LABELS[roleKey]}
                     </div>
                     <div className="text-[11px] font-mono text-slate-500">
-                      {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} danh mục
+                      {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} mục quản lý
                     </div>
                   </div>
                   <div className="flex items-center gap-2 text-[11px]">
@@ -639,6 +808,144 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
             </tbody>
           </table>
         </div>
+
+        {/* SUB-PANEL: GRANULAR PRODUCT CATEGORY PERMISSIONS FOR "SỐ LƯỢNG THEO DANH MỤC" TAB */}
+        <div className="p-4 rounded-2xl border border-emerald-200/90 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-emerald-200/70 dark:border-emerald-900/50">
+            <div className="flex items-start gap-2">
+              <Filter className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+              <div>
+                <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                  Phân Quyền Xem Danh Mục Món Ăn Trong Tab &ldquo;Số Lượng Theo Danh Mục&rdquo; (Theo Role)
+                </h4>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                  Chọn cụ thể từng danh mục món ăn ({allProductCategories.length} nhóm hiện có: {allProductCategories.join(', ')}) mà mỗi Role được phép xem. Ví dụ: Role <strong>Kiểm kho</strong> chỉ tích chọn <strong>Nước ngọt</strong> và <strong>Bia / Đồ uống</strong> thì khi đăng nhập chỉ thấy đúng các danh mục đó.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveRoleMatrixClick}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Lưu Phân Quyền Danh Mục</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {NON_ADMIN_ROLES.map((roleKey) => {
+              const cfg =
+                draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
+              const isRestricted = Boolean(cfg.restrictProductCategories);
+              const selectedCats = cfg.allowedProductCategories || [];
+              const hasCategoryTabAccess = cfg.allowedTabs.includes('categories');
+
+              return (
+                <div
+                  key={roleKey}
+                  className="p-3.5 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3 shadow-2xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white">
+                          Role: {ROLE_LABELS[roleKey]}
+                        </span>
+                        {!hasCategoryTabAccess && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
+                            Tab Danh mục đang khóa
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {!isRestricted ? (
+                          <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                            Đang cho phép xem tất cả ({allProductCategories.length} danh mục)
+                          </span>
+                        ) : selectedCats.length > 0 ? (
+                          <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                            Giới hạn chỉ xem {selectedCats.length}/{allProductCategories.length} danh mục: {selectedCats.join(', ')}
+                          </span>
+                        ) : (
+                          <span className="text-rose-600 dark:text-rose-400 font-semibold">
+                            Đang giới hạn (Chưa tích chọn danh mục nào)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleSetRoleCategoryMode(roleKey, false)}
+                        className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                          !isRestricted
+                            ? 'border-emerald-600 bg-emerald-600 text-white'
+                            : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        Xem tất cả ({allProductCategories.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSetRoleCategoryMode(roleKey, true, [])
+                        }
+                        className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                          isRestricted
+                            ? 'border-amber-500 bg-amber-500 text-white'
+                            : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100'
+                        }`}
+                        title="Bấm để bỏ tích tất cả và chỉ chọn các danh mục cho phép Role này xem"
+                      >
+                        Chỉ chọn riêng
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    {allProductCategories.map((catName) => {
+                      const isChecked = !isRestricted
+                        ? true
+                        : selectedCats.some(
+                            (c) => c.toLowerCase() === catName.toLowerCase()
+                          );
+
+                      return (
+                        <label
+                          key={catName}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs transition-all cursor-pointer select-none ${
+                            isRestricted
+                              ? isChecked
+                                ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200 font-semibold shadow-2xs'
+                                : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900 text-slate-400 hover:border-slate-300'
+                              : 'border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/30 dark:bg-emerald-950/20 text-slate-700 dark:text-slate-200 hover:border-emerald-400'
+                          }`}
+                          title={
+                            !isRestricted
+                              ? `Bấm vào "${catName}" để chuyển sang chế độ chỉ xem riêng "${catName}"`
+                              : `Bật/tắt quyền xem danh mục "${catName}" cho Role ${ROLE_LABELS[roleKey]}`
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() =>
+                              handleToggleRoleProductCategory(roleKey, catName)
+                            }
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
+                          />
+                          <span>{catName}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {/* SECTION 2: ADD NEW ACCOUNT WITH ROLE & MANAGEMENT TABS ASSIGNMENT */}
@@ -662,7 +969,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               required
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
-              placeholder="Ví dụ: thungan_ca1"
+              placeholder="Ví dụ: kiemkho_ca1"
               className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
             />
           </div>
@@ -694,7 +1001,11 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               <input
                 type={showNewPassword ? 'text' : 'password'}
                 required
-                value={newUsername.trim().toLowerCase() === 'admin' ? 'admin123' : newPassword}
+                value={
+                  newUsername.trim().toLowerCase() === 'admin'
+                    ? 'admin123'
+                    : newPassword
+                }
                 readOnly={newUsername.trim().toLowerCase() === 'admin'}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Nhập mật khẩu..."
@@ -704,7 +1015,9 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 type="button"
                 onClick={() => setShowNewPassword((prev) => !prev)}
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
-                title={showNewPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu để kiểm tra'}
+                title={
+                  showNewPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu để kiểm tra'
+                }
               >
                 {showNewPassword ? (
                   <EyeOff className="w-3.5 h-3.5" />
@@ -750,12 +1063,15 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               value={newRole}
               onChange={(e) => {
                 const selectedRole = e.target.value as UserRole;
+                const roleCfg =
+                  rolePermissions[selectedRole] ||
+                  DEFAULT_ROLE_PERMISSIONS[selectedRole];
                 setNewRole(selectedRole);
                 setNewUseCustomTabs(false);
-                setNewAllowedTabs(
-                  rolePermissions[selectedRole]?.allowedTabs ||
-                    DEFAULT_ROLE_PERMISSIONS[selectedRole].allowedTabs
-                );
+                setNewAllowedTabs(roleCfg.allowedTabs);
+                setNewUseCustomProdCats(false);
+                setNewRestrictProdCats(Boolean(roleCfg.restrictProductCategories));
+                setNewAllowedProdCats(roleCfg.allowedProductCategories || []);
               }}
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
             >
@@ -763,17 +1079,18 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               <option value={UserRole.MANAGER}>Quản lý</option>
               <option value={UserRole.CASHIER}>Thu ngân</option>
               <option value={UserRole.VIEWER}>Kế toán (Chỉ xem)</option>
+              <option value={UserRole.INVENTORY}>Kiểm kho</option>
             </select>
           </div>
         </div>
 
         {/* Selectable Management Tabs for the New Account */}
-        <div className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2.5">
+        <div className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
               <CheckSquare className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               <span>
-                Danh mục được phép truy cập ({newAllowedTabs.length}/{MANAGEMENT_TABS.length}):
+                Mục quản lý được phép truy cập ({newAllowedTabs.length}/{MANAGEMENT_TABS.length}):
               </span>
             </div>
 
@@ -820,6 +1137,101 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               );
             })}
           </div>
+
+          {/* Per-Account Product Category Filter when 'categories' tab is enabled */}
+          {newRole !== UserRole.ADMIN && newAllowedTabs.includes('categories') && (
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                  Danh mục món được xem trong tab &ldquo;Số lượng theo Danh mục&rdquo;:
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const roleCfg =
+                        rolePermissions[newRole] ||
+                        DEFAULT_ROLE_PERMISSIONS[newRole];
+                      setNewUseCustomProdCats(false);
+                      setNewRestrictProdCats(
+                        Boolean(roleCfg.restrictProductCategories)
+                      );
+                      setNewAllowedProdCats(
+                        roleCfg.allowedProductCategories || []
+                      );
+                    }}
+                    className={`px-2 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
+                      !newUseCustomProdCats
+                        ? 'border-emerald-600 bg-emerald-600 text-white'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    Theo Role ({ROLE_LABELS[newRole]})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewUseCustomProdCats(true);
+                      setNewRestrictProdCats(false);
+                      setNewAllowedProdCats([]);
+                    }}
+                    className={`px-2 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
+                      newUseCustomProdCats && !newRestrictProdCats
+                        ? 'border-emerald-600 bg-emerald-600 text-white'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    Xem tất cả
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewUseCustomProdCats(true);
+                      setNewRestrictProdCats(true);
+                      setNewAllowedProdCats([]);
+                    }}
+                    className={`px-2 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
+                      newUseCustomProdCats && newRestrictProdCats
+                        ? 'border-amber-500 bg-amber-500 text-white'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    Chỉ chọn riêng
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {allProductCategories.map((catName) => {
+                  const checked = !newRestrictProdCats
+                    ? true
+                    : newAllowedProdCats.some(
+                        (c) => c.toLowerCase() === catName.toLowerCase()
+                      );
+                  return (
+                    <label
+                      key={catName}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs cursor-pointer ${
+                        newRestrictProdCats
+                          ? checked
+                            ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200 font-semibold'
+                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400'
+                          : 'border-emerald-200 dark:border-emerald-900/50 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => handleToggleNewAccountProdCat(catName)}
+                        className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
+                      />
+                      <span>{catName}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end">
@@ -840,7 +1252,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
             <div className="flex items-center gap-2">
               <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                Sửa Tài khoản & Danh mục: @{editingAcc.username}
+                Sửa Tài khoản & Phân quyền Danh mục: @{editingAcc.username}
               </h3>
             </div>
             <button
@@ -920,7 +1332,11 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                     type="button"
                     onClick={() => setShowEditPassword((prev) => !prev)}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
-                    title={showEditPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu để kiểm tra'}
+                    title={
+                      showEditPassword
+                        ? 'Ẩn mật khẩu'
+                        : 'Hiện mật khẩu để kiểm tra'
+                    }
                   >
                     {showEditPassword ? (
                       <EyeOff className="w-3.5 h-3.5" />
@@ -968,15 +1384,23 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   value={editingAcc.role}
                   onChange={(e) => {
                     const nextRole = e.target.value as UserRole;
-                    const roleTabs =
-                      rolePermissions[nextRole]?.allowedTabs ||
-                      DEFAULT_ROLE_PERMISSIONS[nextRole].allowedTabs;
+                    const roleCfg =
+                      rolePermissions[nextRole] ||
+                      DEFAULT_ROLE_PERMISSIONS[nextRole];
                     setEditingAcc({
                       ...editingAcc,
                       role: nextRole,
                       allowedTabs: editingAcc.useCustomTabs
                         ? editingAcc.allowedTabs
-                        : roleTabs,
+                        : roleCfg.allowedTabs,
+                      restrictProductCategories:
+                        editingAcc.useCustomProductCategories
+                          ? editingAcc.restrictProductCategories
+                          : Boolean(roleCfg.restrictProductCategories),
+                      allowedProductCategories:
+                        editingAcc.useCustomProductCategories
+                          ? editingAcc.allowedProductCategories
+                          : roleCfg.allowedProductCategories || [],
                     });
                   }}
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
@@ -985,6 +1409,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   <option value={UserRole.MANAGER}>Quản lý</option>
                   <option value={UserRole.CASHIER}>Thu ngân</option>
                   <option value={UserRole.VIEWER}>Kế toán (Chỉ xem)</option>
+                  <option value={UserRole.INVENTORY}>Kiểm kho</option>
                 </select>
               </div>
             </div>
@@ -994,7 +1419,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-xs font-bold text-slate-900 dark:text-white">
-                    Danh mục được phép truy cập cho @{editingAcc.username}
+                    Mục quản lý được phép truy cập cho @{editingAcc.username}
                   </div>
                 </div>
 
@@ -1076,6 +1501,122 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                   );
                 })}
               </div>
+
+              {/* Per-account Product Category Permissions in Edit Drawer */}
+              {editingAcc.username.toLowerCase() !== 'admin' &&
+                editingAcc.role !== UserRole.ADMIN && (
+                  <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-bold text-slate-900 dark:text-white">
+                          Phân quyền xem Danh mục món trong tab &ldquo;Số lượng theo Danh mục&rdquo;
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {!editingAcc.restrictProductCategories
+                            ? `Đang xem tất cả (${allProductCategories.length} danh mục)`
+                            : `Chỉ xem ${(editingAcc.allowedProductCategories || []).length}/${allProductCategories.length} danh mục đã chọn`}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const roleCfg =
+                              rolePermissions[editingAcc.role] ||
+                              DEFAULT_ROLE_PERMISSIONS[editingAcc.role];
+                            setEditingAcc({
+                              ...editingAcc,
+                              useCustomProductCategories: false,
+                              restrictProductCategories: Boolean(
+                                roleCfg.restrictProductCategories
+                              ),
+                              allowedProductCategories:
+                                roleCfg.allowedProductCategories || [],
+                            });
+                          }}
+                          className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
+                            !editingAcc.useCustomProductCategories
+                              ? 'border-emerald-600 bg-emerald-600 text-white'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          Theo Role ({ROLE_LABELS[editingAcc.role]})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingAcc({
+                              ...editingAcc,
+                              useCustomProductCategories: true,
+                              restrictProductCategories: false,
+                              allowedProductCategories: [],
+                            })
+                          }
+                          className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
+                            editingAcc.useCustomProductCategories &&
+                            !editingAcc.restrictProductCategories
+                              ? 'border-emerald-600 bg-emerald-600 text-white'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          Xem tất cả
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingAcc({
+                              ...editingAcc,
+                              useCustomProductCategories: true,
+                              restrictProductCategories: true,
+                              allowedProductCategories: [],
+                            })
+                          }
+                          className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
+                            editingAcc.useCustomProductCategories &&
+                            editingAcc.restrictProductCategories
+                              ? 'border-amber-500 bg-amber-500 text-white'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          Chỉ chọn riêng
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {allProductCategories.map((catName) => {
+                        const checked = !editingAcc.restrictProductCategories
+                          ? true
+                          : (editingAcc.allowedProductCategories || []).some(
+                              (c) => c.toLowerCase() === catName.toLowerCase()
+                            );
+                        return (
+                          <label
+                            key={catName}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer ${
+                              editingAcc.restrictProductCategories
+                                ? checked
+                                  ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200 font-semibold'
+                                  : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900 text-slate-400'
+                                : 'border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/30 dark:bg-emerald-950/20 text-slate-700 dark:text-slate-200'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                handleToggleEditingAccountProdCat(catName)
+                              }
+                              className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
+                            />
+                            <span>{catName}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
@@ -1119,7 +1660,8 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
             3. Danh Sách Tài Khoản & Quyền Danh Mục Hiện Tại ({staffAccounts.length})
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Mật khẩu tài khoản <strong>admin</strong> được cố định là <code className="font-mono font-bold text-emerald-600">admin123</code>.
+            Mật khẩu tài khoản <strong>admin</strong> được cố định là{' '}
+            <code className="font-mono font-bold text-emerald-600">admin123</code>.
           </p>
         </div>
 
@@ -1172,17 +1714,43 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         onClick={() => toggleShowPassword(acc.id)}
                         className="p-0.5 text-slate-400 hover:text-slate-700 cursor-pointer"
                       >
-                        {showPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        {showPw ? (
+                          <EyeOff className="w-3.5 h-3.5" />
+                        ) : (
+                          <Eye className="w-3.5 h-3.5" />
+                        )}
                       </button>
                     )}
                   </div>
                 </div>
 
-                <div className="text-[11px] text-slate-500">
-                  <strong className="text-slate-700 dark:text-slate-300">
-                    Danh mục ({allowedMetas.length}/{MANAGEMENT_TABS.length}):
-                  </strong>{' '}
-                  {allowedMetas.map((m) => m.shortLabel).join(' · ')}
+                <div className="text-[11px] text-slate-500 space-y-1">
+                  <div>
+                    <strong className="text-slate-700 dark:text-slate-300">
+                      Mục quản lý ({allowedMetas.length}/{MANAGEMENT_TABS.length}):
+                    </strong>{' '}
+                    {allowedMetas.map((m) => m.shortLabel).join(' · ')}
+                  </div>
+                  {eff.allowedTabs.includes('categories') && (
+                    <div>
+                      <strong className="text-slate-700 dark:text-slate-300">
+                        Tab SL theo Danh mục:
+                      </strong>{' '}
+                      {eff.restrictProductCategories ? (
+                        <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                          Chỉ xem {eff.allowedProductCategories.length} nhóm (
+                          {eff.allowedProductCategories.length > 0
+                            ? eff.allowedProductCategories.join(', ')
+                            : 'Chưa chọn'}
+                          )
+                        </span>
+                      ) : (
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                          Xem tất cả ({allProductCategories.length} nhóm)
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-200/60 dark:border-slate-800">
@@ -1227,7 +1795,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 <th className="py-2.5 px-3">Tài khoản</th>
                 <th className="py-2.5 px-3">Mật khẩu</th>
                 <th className="py-2.5 px-3">Role & Quyền</th>
-                <th className="py-2.5 px-3">Các Danh Mục Được Truy Cập</th>
+                <th className="py-2.5 px-3">Các Mục & Danh Mục Món Được Xem</th>
                 <th className="py-2.5 px-3 text-right">Thao tác</th>
               </tr>
             </thead>
@@ -1302,14 +1870,36 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                       </div>
                     </td>
 
-                    <td className="py-3 px-3 max-w-md">
-                      <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mb-0.5">
-                        {allowedMetas.length}/{MANAGEMENT_TABS.length} danh mục
-                        {eff.isCustomAccountTabs ? ' (Tùy chỉnh riêng)' : ' (Theo Role)'}
+                    <td className="py-3 px-3 max-w-md space-y-1">
+                      <div>
+                        <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                          {allowedMetas.length}/{MANAGEMENT_TABS.length} mục quản lý
+                          {eff.isCustomAccountTabs ? ' (Tùy chỉnh)' : ' (Theo Role)'}:
+                        </span>{' '}
+                        <span className="text-[11px] text-slate-600 dark:text-slate-300">
+                          {allowedMetas.map((m) => m.shortLabel).join(' · ')}
+                        </span>
                       </div>
-                      <div className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                        {allowedMetas.map((m) => m.shortLabel).join(' · ')}
-                      </div>
+                      {eff.allowedTabs.includes('categories') && (
+                        <div className="text-[11px]">
+                          <span className="font-semibold text-slate-700 dark:text-slate-300">
+                            Xem SL theo Danh mục:
+                          </span>{' '}
+                          {eff.restrictProductCategories ? (
+                            <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                              Chỉ xem {eff.allowedProductCategories.length} nhóm (
+                              {eff.allowedProductCategories.length > 0
+                                ? eff.allowedProductCategories.join(', ')
+                                : 'Chưa chọn nhóm nào'}
+                              )
+                            </span>
+                          ) : (
+                            <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                              Tất cả ({allProductCategories.length} nhóm)
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
 
                     <td className="py-3 px-3 text-right whitespace-nowrap space-x-1.5">

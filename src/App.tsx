@@ -1247,6 +1247,19 @@ export default function App() {
                   typeof data.useCustomTabs === 'boolean'
                     ? data.useCustomTabs
                     : Boolean(existingLocal?.useCustomTabs),
+                useCustomProductCategories:
+                  typeof data.useCustomProductCategories === 'boolean'
+                    ? data.useCustomProductCategories
+                    : Boolean(existingLocal?.useCustomProductCategories),
+                restrictProductCategories:
+                  typeof data.restrictProductCategories === 'boolean'
+                    ? data.restrictProductCategories
+                    : Boolean(existingLocal?.restrictProductCategories),
+                allowedProductCategories: Array.isArray(
+                  data.allowedProductCategories
+                )
+                  ? data.allowedProductCategories
+                  : existingLocal?.allowedProductCategories || [],
                 createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
                 updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
               };
@@ -1503,6 +1516,9 @@ export default function App() {
           ...acc,
           allowedTabs: roleCfg.allowedTabs,
           useCustomTabs: false,
+          useCustomProductCategories: false,
+          restrictProductCategories: Boolean(roleCfg.restrictProductCategories),
+          allowedProductCategories: roleCfg.allowedProductCategories || [],
           updatedAtMs: Date.now(),
         };
       });
@@ -1638,6 +1654,41 @@ export default function App() {
     }
     return result;
   }, [categories, products, effectiveBillItems]);
+
+  // Filtered categories, products, and billItems for "Số lượng theo Danh mục" tab based on Role/Account permissions
+  const isProductCategoryRestricted = Boolean(
+    effectivePermissions.restrictProductCategories && !isAdminUser
+  );
+
+  const allowedProductCategoriesSet = useMemo(() => {
+    if (!isProductCategoryRestricted) return null;
+    return new Set(
+      (effectivePermissions.allowedProductCategories || []).map((c) =>
+        c.trim().toLowerCase()
+      )
+    );
+  }, [isProductCategoryRestricted, effectivePermissions.allowedProductCategories]);
+
+  const permittedCategoriesForTab = useMemo(() => {
+    if (!allowedProductCategoriesSet) return effectiveCategories;
+    return effectiveCategories.filter((c) =>
+      allowedProductCategoriesSet.has(c.trim().toLowerCase())
+    );
+  }, [effectiveCategories, allowedProductCategoriesSet]);
+
+  const permittedProductsForTab = useMemo(() => {
+    if (!allowedProductCategoriesSet) return products;
+    return products.filter((p) =>
+      allowedProductCategoriesSet.has((p.category || 'Khác').trim().toLowerCase())
+    );
+  }, [products, allowedProductCategoriesSet]);
+
+  const permittedPeriodBillItemsForTab = useMemo(() => {
+    if (!allowedProductCategoriesSet) return periodBillItems;
+    return periodBillItems.filter((it) =>
+      allowedProductCategoriesSet.has((it.category || 'Khác').trim().toLowerCase())
+    );
+  }, [periodBillItems, allowedProductCategoriesSet]);
 
   // Automatically sync any newly discovered categories from products into categories state
   useEffect(() => {
@@ -3408,9 +3459,12 @@ export default function App() {
           {/* TAB 3: CATEGORY & ITEM QUANTITY ANALYTICS */}
           {activeTab === 'categories' && allowedTabs.includes('categories') && (
             <CategoryAnalyticsTab
-              billItems={periodBillItems}
-              products={products}
-              categories={effectiveCategories}
+              billItems={permittedPeriodBillItemsForTab}
+              products={permittedProductsForTab}
+              categories={permittedCategoriesForTab}
+              isCategoryRestricted={isProductCategoryRestricted}
+              totalSystemCategoriesCount={effectiveCategories.length}
+              roleLabel={ROLE_LABELS[activeRole]}
               periodLabel={periodLabel}
               periodType={
                 periodPreset === 'today'
@@ -3548,6 +3602,7 @@ export default function App() {
                 staffAccounts={staffAccounts}
                 currentAccount={currentStaffAccount}
                 rolePermissions={rolePermissions}
+                productCategories={effectiveCategories}
                 onSaveRolePermissions={handleSaveRolePermissions}
                 onCreateAccount={handleCreateStaffAccount}
                 onUpdateAccount={handleUpdateStaffAccount}

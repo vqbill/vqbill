@@ -66,7 +66,7 @@ service cloud.firestore {
         data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.username is string && data.username.size() >= 1 && data.username.size() <= 64 &&
         data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
-        data.role is string && data.role in ['admin', 'manager', 'cashier', 'viewer'] &&
+        data.role is string && data.role in ['admin', 'manager', 'cashier', 'viewer', 'inventory'] &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -86,7 +86,7 @@ service cloud.firestore {
         data.password is string && data.password.size() >= 1 && data.password.size() <= 100 &&
         data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
         data.info is string && data.info.size() <= 500 &&
-        data.role is string && data.role in ['admin', 'manager', 'cashier', 'viewer'] &&
+        data.role is string && data.role in ['admin', 'manager', 'cashier', 'viewer', 'inventory'] &&
         data.active is bool &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;

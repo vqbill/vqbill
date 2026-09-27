@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -11,6 +11,7 @@ import {
   Filter,
   ChevronsDownUp,
   ChevronsUpDown,
+  Shield,
 } from 'lucide-react';
 import {
   BillItemRecord,
@@ -33,6 +34,9 @@ interface CategoryAnalyticsTabProps {
     customDate?: string
   ) => void;
   canWrite: boolean;
+  isCategoryRestricted?: boolean;
+  totalSystemCategoriesCount?: number;
+  roleLabel?: string;
   onAddCategory: (categoryName: string) => Promise<void>;
   onRenameCategory: (oldName: string, newName: string) => Promise<void>;
   onDeleteCategory: (categoryName: string) => Promise<void>;
@@ -73,6 +77,9 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
   yesterdayBusinessStr,
   onChangePeriod,
   canWrite,
+  isCategoryRestricted = false,
+  totalSystemCategoriesCount,
+  roleLabel,
   onAddCategory,
   onRenameCategory,
   onDeleteCategory,
@@ -151,6 +158,12 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
     }
     return Array.from(set);
   }, [categories, products, billItems, prodCategoryMap]);
+
+  useEffect(() => {
+    if (allCategories.length > 0 && !allCategories.includes(selectedCategory)) {
+      setSelectedCategory(allCategories[0]);
+    }
+  }, [allCategories, selectedCategory]);
 
   const categoryStats = useMemo<CategoryAgg[]>(() => {
     const catMap = new Map<string, Map<string, ProductAgg>>();
@@ -454,8 +467,23 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
           </div>
         </div>
 
+        {/* Permission Filter Banner when Role/Account has restricted category view */}
+        {isCategoryRestricted && (
+          <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/30 px-3.5 py-2.5 rounded-xl border border-emerald-200/80 dark:border-emerald-900/50">
+            <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span>
+              Phân quyền <strong>{roleLabel || 'Nhân sự'}</strong>: Đang hiển thị{' '}
+              <strong>
+                {allCategories.length}/{totalSystemCategoriesCount || allCategories.length}
+              </strong>{' '}
+              danh mục được Admin cấp quyền xem
+              {allCategories.length > 0 ? ` (${allCategories.join(' · ')})` : ''}.
+            </span>
+          </div>
+        )}
+
         {/* Quick Add Category Bar */}
-        {canWrite && (
+        {canWrite && !isCategoryRestricted && (
           <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
               Danh mục hiện có ({allCategories.length}): {allCategories.join(' · ')}
