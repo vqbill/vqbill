@@ -35,6 +35,8 @@ import {
   getCurrentBusinessDate,
   resolveBusinessBillDate,
   DEFAULT_CATALOG_PRODUCTS,
+  extractReceiptOriginalPrice,
+  reconstructBillItemsFromSummary,
 } from '../utils/parser';
 
 export const FIXED_ADMIN_USERNAME = 'admin';
@@ -457,18 +459,28 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
 
     const billItems: BillItemRecord[] = itemsSnap.docs.map((d) => {
       const data = d.data();
+      const unitPrice = Number(data.unitPrice) || 0;
+      const productName = data.productName || '';
+      const note = data.note || '';
+      const originalUnitPrice = extractReceiptOriginalPrice({
+        productName,
+        note,
+        unitPrice,
+        originalUnitPrice: Number(data.originalUnitPrice) || undefined,
+      });
       return {
         id: d.id,
         ownerId: data.ownerId,
         billId: data.billId,
         billDate: data.billDate,
-        productName: data.productName,
+        productName,
         category: data.category,
-        note: data.note || '',
+        note,
         quantity: Number(data.quantity) || 1,
         returnedQuantity: Number(data.returnedQuantity) || 0,
-        unitPrice: Number(data.unitPrice) || 0,
+        unitPrice,
         subtotal: Number(data.subtotal) || 0,
+        originalUnitPrice,
         createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
         updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
       };
@@ -490,6 +502,15 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
         updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
       };
     });
+
+    // Ensure any bill whose bill_items were missing in Firestore is populated from itemsSummary
+    const existingItemBillIds = new Set(billItems.map((it) => it.billId));
+    for (const b of bills) {
+      if (!existingItemBillIds.has(b.id) && b.itemsSummary) {
+        const reconstructed = reconstructBillItemsFromSummary(b, products);
+        billItems.push(...reconstructed);
+      }
+    }
 
     const deductions: DeductionRecord[] = deductionsSnap.docs.map((d) => {
       const data = d.data();
@@ -1125,6 +1146,10 @@ export async function saveNewBillToCloud(params: {
   const validItems = items.map((it) => {
     const qty = Math.max(1, Math.round(it.quantity || 1));
     const uPrice = Math.max(0, Math.round(it.unitPrice || 0));
+    const origPrice =
+      it.originalUnitPrice && it.originalUnitPrice > uPrice
+        ? Math.round(it.originalUnitPrice)
+        : undefined;
     const sub = qty * uPrice;
     const pName = truncateStr(it.productName, 150, 'Món ăn');
     const itemNote = truncateStr(it.note || '', 400, '');
@@ -1135,6 +1160,7 @@ export async function saveNewBillToCloud(params: {
       category: cat,
       quantity: qty,
       unitPrice: uPrice,
+      originalUnitPrice: origPrice,
       subtotal: sub,
     };
   });
@@ -1195,6 +1221,7 @@ export async function saveNewBillToCloud(params: {
     returnedQuantity: 0,
     unitPrice: it.unitPrice,
     subtotal: it.subtotal,
+    originalUnitPrice: it.originalUnitPrice,
     createdAtMs: now,
     updatedAtMs: now,
   }));
@@ -1213,8 +1240,8 @@ export async function saveNewBillToCloud(params: {
       existing.totalSold += it.quantity;
       existing.totalRevenue += it.subtotal;
       // Giữ nguyên giá mặc định (existing.unitPrice) của sản phẩm trong Menu khi chỉnh giá trong Bill
-      if (existing.unitPrice <= 0 && it.unitPrice > 0) {
-        existing.unitPrice = it.unitPrice;
+      if (existing.unitPrice <= 0 && (it.originalUnitPrice || it.unitPrice) > 0) {
+        existing.unitPrice = it.originalUnitPrice || it.unitPrice;
       }
       existing.updatedAtMs = now;
       productsMap.set(key, existing);
@@ -1225,7 +1252,7 @@ export async function saveNewBillToCloud(params: {
         ownerId: cleanOwnerId,
         productName: it.productName,
         category: it.category,
-        unitPrice: it.unitPrice,
+        unitPrice: it.originalUnitPrice || it.unitPrice,
         unit: inferUnit(it.productName, it.category),
         totalSold: it.quantity,
         totalReturned: 0,

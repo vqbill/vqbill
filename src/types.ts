@@ -159,6 +159,9 @@ export interface ExtractedBillItem {
   quantity: number;
   unitPrice: number;
   subtotal: number;
+  originalUnitPrice?: number;
+  discountAmount?: number;
+  discountPercent?: number;
 }
 
 export interface ExtractedBillJSON {
@@ -211,6 +214,9 @@ export interface BillItemRecord {
   returnedQuantity: number;
   unitPrice: number;
   subtotal: number;
+  originalUnitPrice?: number;
+  discountAmount?: number;
+  discountPercent?: number;
   createdAtMs: number;
   updatedAtMs: number;
 }

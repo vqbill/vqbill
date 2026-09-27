@@ -38,6 +38,7 @@ import {
   RefreshCw,
   UploadCloud,
   DownloadCloud,
+  Eye,
 } from 'lucide-react';
 import {
   auth,
@@ -75,6 +76,7 @@ import {
   truncateStr,
   getCurrentBusinessDate,
   getYesterdayBusinessDate,
+  reconstructBillItemsFromSummary,
 } from './utils/parser';
 import {
   fetchGeminiStatus,
@@ -122,6 +124,7 @@ import { ReturnsDeductionsTab } from './components/ReturnsDeductionsTab';
 import { ProductCatalogTab } from './components/ProductCatalogTab';
 import { AccountsManagerTab } from './components/AccountsManagerTab';
 import { BillEditModal } from './components/BillEditModal';
+import { BillCheckModal } from './components/BillCheckModal';
 import { ConfirmDialogModal } from './components/ConfirmDialogModal';
 import { GeminiKeyBar } from './components/GeminiKeyBar';
 
@@ -299,6 +302,7 @@ export default function App() {
   );
 
   // Modals & Cross-tab selections
+  const [inspectingBill, setInspectingBill] = useState<BillRecord | null>(null);
   const [editingBill, setEditingBill] = useState<BillRecord | null>(null);
   const [preselectedReturnBillId, setPreselectedReturnBillId] = useState<string | null>(
     null
@@ -824,7 +828,7 @@ export default function App() {
           setCloudSyncStatus('synced');
           if (manualNotify) {
             showToast(
-              `Đã đồng bộ dữ liệu Cloud mới nhất (v${remoteSnap.version || 1} · ${
+              `Đã đồng bộ dữ liệu Cloud mới nhất (${
                 remoteSnap.bills?.length || 0
               } bill, ${remoteSnap.products?.length || 0} món)!`
             );
@@ -884,7 +888,7 @@ export default function App() {
         updatedAtMs: Date.now(),
       });
       showToast(
-        `Đã đồng bộ toàn bộ dữ liệu máy này (${bills.length} bill, ${products.length} món) lên Firebase Cloud (v${finalVersion})! Mọi máy tính và điện thoại khác đều xem được ngay.`
+        `Đã đồng bộ toàn bộ dữ liệu máy này (${bills.length} bill, ${products.length} món) lên Firebase Cloud! Mọi máy tính và điện thoại khác đều xem được ngay.`
       );
     } else {
       setCloudSyncStatus('offline');
@@ -1296,6 +1300,37 @@ export default function App() {
     return 'Toàn bộ thời gian';
   }, [periodPreset, todayStr, yesterdayStr, customStartDate, customEndDate]);
 
+  // Ensure every bill has its billItems (auto-reconstructing from itemsSummary if any older bill had 0 items saved)
+  // Also auto-sync each billItem's category with its matching product in Menu (`products`)
+  const effectiveBillItems = useMemo<BillItemRecord[]>(() => {
+    const productCatMap = new Map<string, string>();
+    for (const p of products) {
+      const pName = (p.productName || '').trim().toLowerCase();
+      const pCat = (p.category || '').trim();
+      if (pName && pCat) {
+        productCatMap.set(pName, pCat);
+      }
+    }
+
+    const existingBillIds = new Set(billItems.map((it) => it.billId));
+    const missingItems: BillItemRecord[] = [];
+    for (const b of bills) {
+      if (!existingBillIds.has(b.id) && b.itemsSummary) {
+        missingItems.push(...reconstructBillItemsFromSummary(b, products));
+      }
+    }
+    const baseItems =
+      missingItems.length === 0 ? billItems : [...billItems, ...missingItems];
+
+    return baseItems.map((it) => {
+      const mappedCat = productCatMap.get((it.productName || '').trim().toLowerCase());
+      if (mappedCat && mappedCat !== it.category) {
+        return { ...it, category: mappedCat };
+      }
+      return it;
+    });
+  }, [bills, billItems, products]);
+
   // Filtered Bills & Deductions for Active Period + Search + Category + Payment
   const periodBills = useMemo(() => {
     return bills.filter((b) => isDateInPeriod(b.billDate));
@@ -1304,8 +1339,8 @@ export default function App() {
   const periodBillIds = useMemo(() => new Set(periodBills.map((b) => b.id)), [periodBills]);
 
   const periodBillItems = useMemo(() => {
-    return billItems.filter((it) => periodBillIds.has(it.billId));
-  }, [billItems, periodBillIds]);
+    return effectiveBillItems.filter((it) => periodBillIds.has(it.billId));
+  }, [effectiveBillItems, periodBillIds]);
 
   const periodDeductions = useMemo(() => {
     return deductions.filter((d) => isDateInPeriod(d.deductionDate));
@@ -1323,7 +1358,7 @@ export default function App() {
       })
       .filter((b) => {
         if (categoryFilter === 'all') return true;
-        return billItems.some(
+        return effectiveBillItems.some(
           (it) => it.billId === b.id && it.category === categoryFilter
         );
       })
@@ -1339,7 +1374,7 @@ export default function App() {
         );
       })
       .sort((a, b) => b.billDate.localeCompare(a.billDate) || b.createdAtMs - a.createdAtMs);
-  }, [periodBills, paymentFilter, categoryFilter, searchKeyword, billItems]);
+  }, [periodBills, paymentFilter, categoryFilter, searchKeyword, effectiveBillItems]);
 
   // Financial Metrics
   const financialSummary = useMemo(() => {
@@ -1597,12 +1632,12 @@ export default function App() {
     };
     categories.forEach(addCat);
     products.forEach((p) => addCat(p.category));
-    billItems.forEach((it) => addCat(it.category));
+    effectiveBillItems.forEach((it) => addCat(it.category));
     if (result.length === 0) {
       STANDARD_CATEGORIES.forEach(addCat);
     }
     return result;
-  }, [categories, products, billItems]);
+  }, [categories, products, effectiveBillItems]);
 
   // Automatically sync any newly discovered categories from products into categories state
   useEffect(() => {
@@ -2063,6 +2098,7 @@ export default function App() {
   }) => {
     setWorkspaceInitialized(true);
     const cleanCat = prodInput.category.trim() || 'Khác';
+    const cleanProdName = prodInput.productName.trim();
 
     let nextCatsToSave: string[] | null = null;
     setCategories((prev) => {
@@ -2077,56 +2113,104 @@ export default function App() {
     }
 
     const now = Date.now();
-    let productToSave: ProductRecord | null = null;
-    let isUpdatingExisting = false;
+    const existingProd = products.find(
+      (p) =>
+        (prodInput.id && p.id === prodInput.id) ||
+        p.productName.toLowerCase().trim() === cleanProdName.toLowerCase()
+    );
 
-    setProducts((prev) => {
-      const existing = prev.find(
-        (p) =>
-          (prodInput.id && p.id === prodInput.id) ||
-          p.productName.toLowerCase().trim() ===
-            prodInput.productName.toLowerCase().trim()
+    const matchNamesLower = new Set<string>([cleanProdName.toLowerCase()]);
+    if (existingProd?.productName) {
+      matchNamesLower.add(existingProd.productName.trim().toLowerCase());
+    }
+
+    // Calculate cumulative sold/returned/revenue from matching billItems if product had 0 stats
+    const matchingBillItems = effectiveBillItems.filter((it) =>
+      matchNamesLower.has((it.productName || '').trim().toLowerCase())
+    );
+    const calcSold = matchingBillItems.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+    const calcRet = matchingBillItems.reduce(
+      (s, it) => s + (Number(it.returnedQuantity) || 0),
+      0
+    );
+    const calcRev = matchingBillItems.reduce(
+      (s, it) =>
+        s +
+        Math.max(0, (Number(it.quantity) || 0) - (Number(it.returnedQuantity) || 0)) *
+          (Number(it.unitPrice) || 0),
+      0
+    );
+
+    let productToSave: ProductRecord;
+    const isUpdatingExisting = Boolean(existingProd);
+
+    if (existingProd) {
+      productToSave = {
+        ...existingProd,
+        productName: cleanProdName,
+        category: cleanCat,
+        unitPrice: prodInput.unitPrice,
+        unit: prodInput.unit,
+        totalSold: Math.max(existingProd.totalSold || 0, calcSold),
+        totalReturned: Math.max(existingProd.totalReturned || 0, calcRet),
+        totalRevenue: Math.max(existingProd.totalRevenue || 0, calcRev),
+        updatedAtMs: now,
+      };
+      setProducts((prev) =>
+        prev.map((p) => (p.id === existingProd.id ? productToSave : p))
       );
-      if (existing) {
-        isUpdatingExisting = true;
-        const updated: ProductRecord = {
-          ...existing,
-          productName: prodInput.productName.trim(),
-          category: cleanCat,
-          unitPrice: prodInput.unitPrice,
-          unit: prodInput.unit,
-          updatedAtMs: now,
-        };
-        productToSave = updated;
-        return prev.map((p) => (p.id === existing.id ? updated : p));
-      } else {
-        isUpdatingExisting = false;
-        const created: ProductRecord = {
-          id: sanitizeId(
-            `prod_${now}_${Math.random().toString(36).slice(2, 7)}`
-          ),
-          ownerId,
-          productName: prodInput.productName.trim(),
-          category: cleanCat,
-          unitPrice: prodInput.unitPrice,
-          unit: prodInput.unit,
-          totalSold: 0,
-          totalReturned: 0,
-          totalRevenue: 0,
-          createdAtMs: now,
-          updatedAtMs: now,
-        };
-        productToSave = created;
-        return [created, ...prev];
-      }
-    });
-
-    if (productToSave) {
-      await createOrUpdateProductInFirestore(
+    } else {
+      productToSave = {
+        id: sanitizeId(`prod_${now}_${Math.random().toString(36).slice(2, 7)}`),
         ownerId,
-        productToSave,
-        isUpdatingExisting
-      );
+        productName: cleanProdName,
+        category: cleanCat,
+        unitPrice: prodInput.unitPrice,
+        unit: prodInput.unit,
+        totalSold: calcSold,
+        totalReturned: calcRet,
+        totalRevenue: calcRev,
+        createdAtMs: now,
+        updatedAtMs: now,
+      };
+      setProducts((prev) => [productToSave, ...prev]);
+    }
+
+    // Sync category & productName to all matching billItems so CategoryAnalyticsTab updates immediately
+    const affectedBillItems: BillItemRecord[] = [];
+    const nextBillItems = billItems.map((it) => {
+      if (matchNamesLower.has((it.productName || '').trim().toLowerCase())) {
+        if (it.category !== cleanCat || it.productName.trim() !== cleanProdName) {
+          const updatedItem: BillItemRecord = {
+            ...it,
+            productName: cleanProdName,
+            category: cleanCat,
+            updatedAtMs: now,
+          };
+          affectedBillItems.push(updatedItem);
+          return updatedItem;
+        }
+      }
+      return it;
+    });
+    if (affectedBillItems.length > 0) {
+      setBillItems(nextBillItems);
+    }
+
+    await createOrUpdateProductInFirestore(
+      ownerId,
+      productToSave,
+      isUpdatingExisting
+    );
+
+    if (affectedBillItems.length > 0) {
+      await renameOrReassignCategoryInCloud({
+        ownerId,
+        categories: nextCatsToSave || effectiveCategories,
+        affectedProducts: [],
+        affectedBillItems,
+        affectedDeductions: [],
+      });
     }
   };
 
@@ -2166,6 +2250,7 @@ export default function App() {
     const now = Date.now();
     const nextProducts = [...products];
     const toSyncCloud: { prod: ProductRecord; isUpdate: boolean }[] = [];
+    const prodNameCatMap = new Map<string, string>();
 
     items.forEach((item, idx) => {
       const cleanName = item.productName.trim();
@@ -2174,6 +2259,8 @@ export default function App() {
       const canonicalCat =
         nextCategories.find((c) => c.toLowerCase() === rawCat.toLowerCase()) ||
         rawCat;
+
+      prodNameCatMap.set(cleanName.toLowerCase(), canonicalCat);
 
       const existingIdx = nextProducts.findIndex(
         (p) => p.productName.toLowerCase().trim() === cleanName.toLowerCase()
@@ -2213,12 +2300,43 @@ export default function App() {
 
     setProducts(nextProducts);
 
+    // Sync categories to matching billItems as well
+    const affectedBillItems: BillItemRecord[] = [];
+    const nextBillItems = billItems.map((it) => {
+      const targetCat = prodNameCatMap.get(
+        (it.productName || '').trim().toLowerCase()
+      );
+      if (targetCat && it.category !== targetCat) {
+        const updatedItem: BillItemRecord = {
+          ...it,
+          category: targetCat,
+          updatedAtMs: now,
+        };
+        affectedBillItems.push(updatedItem);
+        return updatedItem;
+      }
+      return it;
+    });
+    if (affectedBillItems.length > 0) {
+      setBillItems(nextBillItems);
+    }
+
     for (const entry of toSyncCloud) {
       await createOrUpdateProductInFirestore(
         ownerId,
         entry.prod,
         entry.isUpdate
       );
+    }
+
+    if (affectedBillItems.length > 0) {
+      await renameOrReassignCategoryInCloud({
+        ownerId,
+        categories: nextCategories,
+        affectedProducts: [],
+        affectedBillItems,
+        affectedDeductions: [],
+      });
     }
 
     return {
@@ -2443,7 +2561,7 @@ export default function App() {
             )}
             <span className="hidden md:inline">
               {cloudSyncStatus === 'synced'
-                ? `Cloud: Đồng bộ (v${cloudVersion || 1})`
+                ? 'Cloud: Đồng bộ'
                 : cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting'
                 ? 'Đang đồng bộ...'
                 : 'Cloud: Offline'}
@@ -2752,18 +2870,6 @@ export default function App() {
                       />
                     </div>
                   )}
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {canWrite && (
-                      <button
-                        type="button"
-                        onClick={handleRequestRestoreSeedData}
-                        className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 whitespace-nowrap cursor-pointer"
-                      >
-                        Khôi phục dữ liệu mẫu
-                      </button>
-                    )}
-                  </div>
                 </div>
               </div>
             )}
@@ -2953,7 +3059,7 @@ export default function App() {
                       Danh Sách Hóa Đơn Bán Hàng ({displayedBills.length} bill)
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Tìm kiếm theo món ăn, khách hàng, hình thức thanh toán hoặc danh mục
+                      Bấm trực tiếp vào từng hóa đơn để mở xem chi tiết các món trên bill và đối soát
                     </p>
                   </div>
 
@@ -3033,15 +3139,24 @@ export default function App() {
                           0,
                           bill.totalAmount - (bill.deductedAmount || 0)
                         );
+                        const billItemCount = effectiveBillItems.filter(
+                          (it) => it.billId === bill.id
+                        ).length;
                         return (
                           <div
                             key={bill.id}
-                            className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 space-y-2 text-xs"
+                            onClick={() => setInspectingBill(bill)}
+                            className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:border-emerald-500/60 dark:hover:border-emerald-500/60 transition-colors space-y-2 text-xs cursor-pointer"
                           >
                             <div className="flex items-start justify-between gap-2">
                               <div>
-                                <div className="font-mono font-bold text-slate-900 dark:text-white">
-                                  {bill.billCode} · {bill.billDate}
+                                <div className="font-mono font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                                  <span>
+                                    {bill.billCode} · {bill.billDate}
+                                  </span>
+                                  <span className="text-[11px] font-normal text-emerald-600 dark:text-emerald-400">
+                                    ({billItemCount} món)
+                                  </span>
                                 </div>
                                 {(bill.checkInTime || bill.checkOutTime) && (
                                   <div className="text-[11px] font-mono text-slate-500">
@@ -3075,39 +3190,53 @@ export default function App() {
                               {bill.itemsSummary}
                             </p>
 
-                            <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-200/60 dark:border-slate-800">
-                              {canWrite && (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingBill(bill)}
-                                    className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
-                                  >
-                                    Sửa Bill
-                                  </button>
-                                  {allowedTabs.includes('returns') && (
+                            <div
+                              className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-200/60 dark:border-slate-800"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setInspectingBill(bill)}
+                                className="px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/70 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Xem Bill</span>
+                              </button>
+
+                              <div className="flex items-center gap-1.5">
+                                {canWrite && (
+                                  <>
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        setPreselectedReturnBillId(bill.id);
-                                        handleSelectTab('returns');
-                                      }}
-                                      className="px-2.5 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-[11px] font-semibold text-rose-600 dark:text-rose-400 cursor-pointer"
+                                      onClick={() => setEditingBill(bill)}
+                                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
                                     >
-                                      Hoàn trả
+                                      Sửa Bill
                                     </button>
-                                  )}
-                                </>
-                              )}
-                              {canDelete && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleConfirmDeleteBill(bill)}
-                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+                                    {allowedTabs.includes('returns') && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setPreselectedReturnBillId(bill.id);
+                                          handleSelectTab('returns');
+                                        }}
+                                        className="px-2.5 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-[11px] font-semibold text-rose-600 dark:text-rose-400 cursor-pointer"
+                                      >
+                                        Hoàn trả
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                                {canDelete && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConfirmDeleteBill(bill)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         );
@@ -3121,7 +3250,7 @@ export default function App() {
                           <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                             <th className="py-2.5 px-3">Mã Bill / Ngày</th>
                             <th className="py-2.5 px-3">Hình thức & Khách</th>
-                            <th className="py-2.5 px-3">Chi tiết các món</th>
+                            <th className="py-2.5 px-3">Chi tiết các món (Bấm vào dòng để xem bill)</th>
                             <th className="py-2.5 px-3 text-right">Tổng gốc</th>
                             <th className="py-2.5 px-3 text-right">Khoản trừ</th>
                             <th className="py-2.5 px-3 text-right">Thực thu</th>
@@ -3134,13 +3263,17 @@ export default function App() {
                               0,
                               bill.totalAmount - (bill.deductedAmount || 0)
                             );
+                            const billItemCount = effectiveBillItems.filter(
+                              (it) => it.billId === bill.id
+                            ).length;
                             return (
                               <tr
                                 key={bill.id}
-                                className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
+                                onClick={() => setInspectingBill(bill)}
+                                className="hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer group"
                               >
                                 <td className="py-3 px-3 font-mono">
-                                  <div className="font-bold text-slate-900 dark:text-white">
+                                  <div className="font-bold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
                                     {bill.billCode}
                                   </div>
                                   <div className="text-[11px] text-slate-500">
@@ -3174,6 +3307,9 @@ export default function App() {
 
                                 <td className="py-3 px-3 text-slate-600 dark:text-slate-300 max-w-xs">
                                   <div className="line-clamp-2">{bill.itemsSummary}</div>
+                                  <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
+                                    {billItemCount} mặt hàng · Bấm để xem chi tiết bill
+                                  </div>
                                 </td>
 
                                 <td className="py-3 px-3 text-right font-mono font-semibold text-slate-900 dark:text-white">
@@ -3190,13 +3326,24 @@ export default function App() {
                                   {formatVND(netBill)}
                                 </td>
 
-                                <td className="py-3 px-3 text-right whitespace-nowrap space-x-1">
+                                <td
+                                  className="py-3 px-3 text-right whitespace-nowrap space-x-1"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => setInspectingBill(bill)}
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/70 hover:bg-emerald-100 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1 cursor-pointer align-middle"
+                                  >
+                                    <Eye className="w-3 h-3" />
+                                    <span>Xem Bill</span>
+                                  </button>
                                   {canWrite && (
                                     <>
                                       <button
                                         type="button"
                                         onClick={() => setEditingBill(bill)}
-                                        className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
+                                        className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer align-middle"
                                       >
                                         Sửa Bill
                                       </button>
@@ -3207,7 +3354,7 @@ export default function App() {
                                             setPreselectedReturnBillId(bill.id);
                                             handleSelectTab('returns');
                                           }}
-                                          className="px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[11px] font-semibold text-rose-600 dark:text-rose-400 cursor-pointer"
+                                          className="px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[11px] font-semibold text-rose-600 dark:text-rose-400 cursor-pointer align-middle"
                                         >
                                           Hoàn trả
                                         </button>
@@ -3306,7 +3453,7 @@ export default function App() {
           {activeTab === 'debts' && allowedTabs.includes('debts') && (
             <DebtManagerTab
               bills={bills}
-              billItems={billItems}
+              billItems={effectiveBillItems}
               products={products}
               debtors={effectiveDebtors}
               onAddDebtor={handleAddDebtor}
@@ -3332,7 +3479,7 @@ export default function App() {
             <ReturnsDeductionsTab
               mode="deductions"
               bills={bills}
-              billItems={billItems}
+              billItems={effectiveBillItems}
               deductions={deductions}
               returns={returns}
               canWrite={canWrite}
@@ -3353,7 +3500,7 @@ export default function App() {
             <ReturnsDeductionsTab
               mode="returns"
               bills={bills}
-              billItems={billItems}
+              billItems={effectiveBillItems}
               deductions={deductions}
               returns={returns}
               canWrite={canWrite}
@@ -3484,7 +3631,7 @@ export default function App() {
                     </span>
                   </span>
                   <span className="font-mono font-bold px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[11px]">
-                    Phiên bản Cloud v{cloudVersion || 1}
+                    Trực tuyến
                   </span>
                 </div>
                 <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
@@ -3634,11 +3781,55 @@ export default function App() {
         </div>
       )}
 
+      {/* Bill Check / Receipt Inspection Modal */}
+      {inspectingBill &&
+        (() => {
+          const liveBill =
+            bills.find((b) => b.id === inspectingBill.id) || inspectingBill;
+          const currentIdx = displayedBills.findIndex(
+            (b) => b.id === liveBill.id
+          );
+          const hasPrev = currentIdx > 0;
+          const hasNext =
+            currentIdx >= 0 && currentIdx < displayedBills.length - 1;
+          return (
+            <BillCheckModal
+              bill={liveBill}
+              items={effectiveBillItems.filter((it) => it.billId === liveBill.id)}
+              products={products}
+              billReturns={returns.filter((r) => r.billId === liveBill.id)}
+              billDeductions={deductions.filter((d) => d.billId === liveBill.id)}
+              canWrite={canWrite}
+              canDelete={canDelete}
+              canAccessReturns={allowedTabs.includes('returns')}
+              currentIndex={currentIdx >= 0 ? currentIdx : 0}
+              totalBills={displayedBills.length}
+              onPrevBill={
+                hasPrev
+                  ? () => setInspectingBill(displayedBills[currentIdx - 1])
+                  : undefined
+              }
+              onNextBill={
+                hasNext
+                  ? () => setInspectingBill(displayedBills[currentIdx + 1])
+                  : undefined
+              }
+              onClose={() => setInspectingBill(null)}
+              onEditBill={(b) => setEditingBill(b)}
+              onReturnBill={(b) => {
+                setPreselectedReturnBillId(b.id);
+                handleSelectTab('returns');
+              }}
+              onDeleteBill={(b) => handleConfirmDeleteBill(b)}
+            />
+          );
+        })()}
+
       {/* Edit Bill Modal */}
       {editingBill && (
         <BillEditModal
           bill={editingBill}
-          items={billItems.filter((it) => it.billId === editingBill.id)}
+          items={effectiveBillItems.filter((it) => it.billId === editingBill.id)}
           categories={effectiveCategories}
           products={products}
           debtors={effectiveDebtors}

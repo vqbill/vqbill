@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { Type } from '@google/genai';
 import {
+  formatItemDiscountNote,
   getCurrentBusinessDate,
   inferCategory,
   inferUnit,
@@ -335,8 +336,25 @@ Nhiệm vụ của bạn là tiếp nhận dữ liệu đầu vào (HÌNH ẢNH 
    - "debt": Công nợ, Ghi nợ, Nợ, Ký nợ (trích xuất debtorName).
    - "cash": Mặc định cho tất cả trường hợp còn lại.
 
-5. CHUẨN HÓA SỐ LIỆU (Numbers):
+5. MÓN ĂN CÓ GIẢM GIÁ TRỰC TIẾP TRÊN TỪNG MÓN (RẤT QUAN TRỌNG):
+   - Trường hợp A (Copy nhiều dòng từ KiotViet POS):
+     Gà hấp hành nửa con
+     1
+     319,000
+     140,000
+     43.89%
+     179,000
+     179,000
+     -> Có nghĩa là: Giá gốc 319000, giảm 43.89% (-140000), số lượng (quantity) = 1, giá bán còn lại (unitPrice) = 179000, thành tiền (subtotal) = 179000, và ghi vào note: "Giá gốc 319.000đ, giảm 43.89% (-140.000đ), giá bán còn lại 179.000đ".
+   - Trường hợp B (Bill in nhiệt Vịnh Quán có 2 mức đơn giá trước dấu x SL):
+     Gà hấp
+     Gà hấp hành nửa con 179,000 319,000 x 1 179,000
+     -> Dòng trên "Gà hấp" là phần đầu của tên món dòng dưới nên lấy tên món đầy đủ là productName: "Gà hấp hành nửa con" (tương tự "Rau rừng" đứng trước "Rau rừng xào bò 119,000 x 1 119,000" thì lấy productName: "Rau rừng xào bò", không tách thành 2 món).
+     -> Hai mức giá "179,000 319,000 x 1 179,000" nghĩa là: Giá gốc 319000, giảm 43.89% (-140000), quantity = 1, giá bán còn lại (unitPrice) = 179000, thành tiền (subtotal) = 179000, note: "Giá gốc 319.000đ, giảm 43.89% (-140.000đ), giá bán còn lại 179.000đ".
+
+6. CHUẨN HÓA SỐ LIỆU (Numbers):
    - Trả về số nguyên thuần túy (VNĐ). Ví dụ: "129.000đ" -> 129000, "22k" -> 22000.
+   - unitPrice luôn là GIÁ BÁN CÒN LẠI (sau khi giảm trên món nếu có).
    - subtotal = quantity * unitPrice.
    - totalAmount = subtotalAmount - discountAmount.`;
 }
@@ -428,13 +446,36 @@ function sanitizeExtractedBill(
           ? item.category.trim()
           : split.category || inferCategory(split.productName, customCategories);
 
+      let originalUnitPrice = normalizeMoneyNumber(item?.originalUnitPrice);
+      if (originalUnitPrice > 0 && originalUnitPrice < 1000) originalUnitPrice *= 1000;
+      const discInfo =
+        originalUnitPrice > unitPrice
+          ? formatItemDiscountNote(
+              originalUnitPrice,
+              unitPrice,
+              typeof item?.discountPercent === 'number' ? item.discountPercent : undefined
+            )
+          : null;
+
+      const finalNote =
+        discInfo && !combinedNote.toLowerCase().includes('giá gốc')
+          ? [combinedNote, discInfo.discountNote].filter(Boolean).join(' · ')
+          : combinedNote;
+
       return {
         productName: split.productName || rawProductName,
-        note: combinedNote || '',
+        note: finalNote || '',
         category,
         quantity,
         unitPrice,
         subtotal,
+        ...(discInfo
+          ? {
+              originalUnitPrice: discInfo.originalUnitPrice,
+              discountAmount: discInfo.discountAmount,
+              discountPercent: discInfo.discountPercent,
+            }
+          : {}),
       };
     })
     .filter(Boolean);

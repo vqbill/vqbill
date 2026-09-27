@@ -10,6 +10,7 @@ import {
 import {
   formatVND,
   inferCategory,
+  reconstructBillItemsFromSummary,
   resolveBusinessBillDate,
   sanitizeId,
   splitProductNameAndInlineNote,
@@ -45,9 +46,13 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   const [debtorName, setDebtorName] = useState(bill.debtorName);
   const [debtStatus, setDebtStatus] = useState<'none' | 'unpaid' | 'paid'>(bill.debtStatus);
   const [note, setNote] = useState(bill.note);
-  const [editItems, setEditItems] = useState<BillItemRecord[]>(() =>
-    items.map((it) => ({ ...it, note: it.note || '' }))
-  );
+  const [editItems, setEditItems] = useState<BillItemRecord[]>(() => {
+    const source =
+      items && items.length > 0
+        ? items
+        : reconstructBillItemsFromSummary(bill, products);
+    return source.map((it) => ({ ...it, note: it.note || '' }));
+  });
   const [isSaving, setIsSaving] = useState(false);
 
   const subtotalAmount = editItems.reduce(

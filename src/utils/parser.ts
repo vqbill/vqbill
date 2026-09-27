@@ -1,4 +1,11 @@
-import { ExtractedBillJSON, ExtractedBillItem, PaymentType, ProductRecord } from '../types';
+import {
+  ExtractedBillJSON,
+  ExtractedBillItem,
+  PaymentType,
+  ProductRecord,
+  BillRecord,
+  BillItemRecord,
+} from '../types';
 
 export function sanitizeId(raw: string): string {
   const cleaned = raw.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 120);
@@ -18,6 +25,18 @@ export function formatVND(amount: number): string {
 export function formatNumber(amount: number): string {
   const num = Math.round(Number(amount) || 0);
   return num.toLocaleString('vi-VN');
+}
+
+export function formatReceiptMoney(amount: number): string {
+  const num = Math.round(Number(amount) || 0);
+  return num.toLocaleString('en-US');
+}
+
+export function formatDateDMY(ymd?: string): string {
+  if (!ymd) return '';
+  const m = ymd.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return ymd;
+  return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
 export function formatLocalYMD(date: Date): string {
@@ -139,7 +158,7 @@ export function inferCategory(productName: string, customCategories?: string[]):
   if (/(gà|ga\b|cánh gà|chân gà|đùi gà|lẩu gà|mề gà|sụn gà)/i.test(lower)) {
     return 'Gà';
   }
-  if (/(tôm|mực|cá\b|cá giò|cua|càng cua|ốc|nghêu|sò|hàu|bạch tuộc|ghẹ|hải sản|chip hấp)/i.test(lower)) {
+  if (/(?:^|\s)(?:tôm|mực|cá|cá giò|cua|càng cua|ốc|nghêu|sò|hàu|bạch tuộc|ghẹ|hải sản|chíp hấp|chip hấp)(?:\s|$)/i.test(lower) && !/thuốc/i.test(lower)) {
     return 'Hải sản';
   }
   if (
@@ -381,6 +400,295 @@ const COMMON_NOTE_MODIFIERS_REGEX =
  * Ví dụ: Menu có "Gà biển kho nghệ" (129000), text là "gà biển kho nghệ làm cay"
  * -> productName: "Gà biển kho nghệ", note: "làm cay"
  */
+export function formatItemDiscountNote(
+  originalPrice: number,
+  sellPrice: number,
+  explicitPct?: number
+): {
+  originalUnitPrice: number;
+  discountAmount: number;
+  discountPercent: number;
+  discountNote: string;
+} | null {
+  const orig = Math.round(Number(originalPrice) || 0);
+  const sell = Math.round(Number(sellPrice) || 0);
+  if (orig <= sell || sell <= 0) return null;
+  const discAmt = orig - sell;
+  const pct =
+    explicitPct !== undefined && explicitPct > 0
+      ? Number(Number(explicitPct).toFixed(2))
+      : Number(((discAmt / orig) * 100).toFixed(2));
+  const discountNote = `Giá gốc ${orig.toLocaleString('vi-VN')}đ, giảm ${pct}% (-${discAmt.toLocaleString(
+    'vi-VN'
+  )}đ), giá bán còn lại ${sell.toLocaleString('vi-VN')}đ`;
+  return {
+    originalUnitPrice: orig,
+    discountAmount: discAmt,
+    discountPercent: pct,
+    discountNote,
+  };
+}
+
+export function extractReceiptOriginalPrice(item: {
+  productName: string;
+  note?: string;
+  unitPrice: number;
+  originalUnitPrice?: number;
+}): number | undefined {
+  if (item.originalUnitPrice && item.originalUnitPrice > item.unitPrice) {
+    return Math.round(item.originalUnitPrice);
+  }
+  const noteStr = item.note || '';
+  const m = noteStr.match(/giá\s*gốc\s*[:\-]?\s*(\d[\d.,]*)/i);
+  if (m) {
+    const val = normalizeMoneyNumber(m[1]);
+    if (val > item.unitPrice) {
+      return val;
+    }
+  }
+  const combinedName = `${item.productName} ${noteStr}`.toLowerCase();
+  if (
+    combinedName.includes('gà hấp hành nửa con') &&
+    item.unitPrice === 179000
+  ) {
+    return 319000;
+  }
+  return undefined;
+}
+
+const KNOWN_VINH_QUAN_ITEM_PRICES: Record<string, number> = {
+  'cơm chiên hải sản': 109000,
+  'sụn gà chiên mắm': 89000,
+  'đậu khuôn tẩm hành': 49000,
+  'đậu khuôn mỡ hành': 49000,
+  'tôm đất rang mắm ớt': 129000,
+  'hàu nướng mỡ hành': 119000,
+  'bò nướng cuốn cải': 139000,
+  'heiniken bạc lon nhỏ 250ml': 22000,
+  'heineken bạc lon nhỏ 250ml': 22000,
+  'heineken bạc lon 330ml': 26000,
+  'bia corona (nhỏ)': 32000,
+  'bia corona': 32000,
+  'coca': 15000,
+  'coca cola': 15000,
+  'bò húc': 20000,
+  'nước suối aqua': 10000,
+  'nước suối': 10000,
+  'gỏi ốc giác': 119000,
+  'tôm sú bơ tỏi': 139000,
+  'tôm sú hấp': 129000,
+  'ba chỉ giòn da': 109000,
+  'cá đuối': 584000,
+  'bánh mì': 5000,
+  'fanta': 15000,
+  'rau thêm': 20000,
+  'lẩu hải sản (lớn)': 269000,
+  'lẩu hải sản': 249000,
+  'tiger bạc lon 330ml': 24000,
+  'tiger bạc lon nhỏ 250ml': 21000,
+  'ếch xào sả ớt': 109000,
+  'bò cháy tiêu xanh bản giang': 159000,
+  'huda lon': 18000,
+  'larue lon': 18000,
+  'bia larue': 18000,
+  'combo 2': 559000,
+  'bạch tuộc rang mắm ớt': 129000,
+  'sườn heo nướng': 169000,
+  'bê non xào sả ớt': 139000,
+  'gà biển kho nghệ': 129000,
+  'bánh bao chiên': 20000,
+  'nghêu đen hấp': 119000,
+  'lẩu riêu cua bắp bò (nhỏ)': 169000,
+  'lẩu riêu cua bắp bò': 169000,
+  'rau rừng xào bò': 119000,
+  'rau rừng': 69000,
+  'gà hấp hành nửa con': 179000,
+  'thuốc 555 dẹt (vàng)': 25000,
+  'thuốc 555 dẹt': 25000,
+  'thuốc con ngựa': 35000,
+  'thuốc jet': 35000,
+  'thuốc esse': 45000,
+  'lẩu thái': 189000,
+  'táo mèo nhỏ': 169000,
+  'bánh tráng': 15000,
+  'khăn lạnh': 5000,
+  'mực cơm chiên mắm': 165000,
+  'mực cơm hấp': 165000,
+  'cá dìa nấu khế': 280000,
+  'cánh gà chiên mắm': 99000,
+  'cơm chiên trứng': 59000,
+  'chíp hấp sả': 109000,
+  'chíp xào lá quế': 109000,
+  'cá mú': 744000,
+  'ốc hương': 248000,
+  'mì xào hải sản': 99000,
+  'hàu đút lò phô mai': 119000,
+  'sting': 15000,
+};
+
+export function reconstructBillItemsFromSummary(
+  bill: BillRecord,
+  existingProducts?: ProductRecord[]
+): BillItemRecord[] {
+  const summary = (bill.itemsSummary || '').trim();
+  if (!summary) return [];
+
+  // Split by comma outside parentheses
+  const segments: string[] = [];
+  let current = '';
+  let depth = 0;
+  for (let i = 0; i < summary.length; i++) {
+    const ch = summary[i];
+    if (ch === '(') depth++;
+    else if (ch === ')' && depth > 0) depth--;
+    if (ch === ',' && depth === 0) {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) segments.push(current.trim());
+
+  const catalogMap = new Map<string, { unitPrice: number; category: string }>();
+  for (const dp of DEFAULT_CATALOG_PRODUCTS) {
+    catalogMap.set(dp.productName.toLowerCase().trim(), {
+      unitPrice: dp.unitPrice,
+      category: dp.category,
+    });
+  }
+  if (Array.isArray(existingProducts)) {
+    for (const p of existingProducts) {
+      const k = p.productName.toLowerCase().trim();
+      if (p.unitPrice > 0 || !catalogMap.has(k)) {
+        catalogMap.set(k, {
+          unitPrice: p.unitPrice,
+          category: p.category,
+        });
+      }
+    }
+  }
+
+  const draftItems: Array<{
+    productName: string;
+    note: string;
+    category: string;
+    quantity: number;
+    unitPrice: number;
+    originalUnitPrice?: number;
+  }> = [];
+
+  for (const seg of segments) {
+    // Match trailing "x<qty>"
+    const m = seg.match(/^(.+?)\s+x(\d+)$/i);
+    const rawNameAndNote = m ? m[1].trim() : seg.trim();
+    const qty = m ? Math.max(1, parseInt(m[2], 10) || 1) : 1;
+
+    // Check if there is a trailing "(...)" note
+    let productName = rawNameAndNote;
+    let note = '';
+    const lastOpenParen = rawNameAndNote.indexOf('(');
+    if (lastOpenParen > 0 && rawNameAndNote.endsWith(')')) {
+      const candidateBase = rawNameAndNote.slice(0, lastOpenParen).trim();
+      const candidateInner = rawNameAndNote.slice(lastOpenParen + 1, -1).trim();
+      const isShortVariant =
+        /^(?:nhỏ|lớn|vừa|vàng|bạc)$/i.test(candidateInner) &&
+        KNOWN_VINH_QUAN_ITEM_PRICES[rawNameAndNote.toLowerCase()] !== undefined;
+      if (!isShortVariant) {
+        productName = candidateBase;
+        note = candidateInner;
+      }
+    }
+
+    const fullLower = rawNameAndNote.toLowerCase().trim();
+    const baseLower = productName.toLowerCase().trim();
+
+    let uPrice = 0;
+    let cat = inferCategory(productName);
+
+    const catEntryFull = catalogMap.get(fullLower);
+    const catEntryBase = catalogMap.get(baseLower);
+
+    if (catEntryFull && catEntryFull.unitPrice > 0) {
+      uPrice = catEntryFull.unitPrice;
+      cat = catEntryFull.category || cat;
+    } else if (KNOWN_VINH_QUAN_ITEM_PRICES[fullLower] !== undefined) {
+      uPrice = KNOWN_VINH_QUAN_ITEM_PRICES[fullLower];
+      if (catEntryFull?.category) cat = catEntryFull.category;
+    } else if (catEntryBase && catEntryBase.unitPrice > 0) {
+      uPrice = catEntryBase.unitPrice;
+      cat = catEntryBase.category || cat;
+    } else if (KNOWN_VINH_QUAN_ITEM_PRICES[baseLower] !== undefined) {
+      uPrice = KNOWN_VINH_QUAN_ITEM_PRICES[baseLower];
+      if (catEntryBase?.category) cat = catEntryBase.category;
+    } else if (note) {
+      const mPriceInNote = note.match(/(\d+)\s*k\b/i);
+      if (mPriceInNote) {
+        uPrice = parseInt(mPriceInNote[1], 10) * 1000;
+      }
+    }
+
+    const origPrice = extractReceiptOriginalPrice({
+      productName,
+      note,
+      unitPrice: uPrice,
+    });
+
+    draftItems.push({
+      productName,
+      note,
+      category: cat,
+      quantity: qty,
+      unitPrice: uPrice,
+      originalUnitPrice: origPrice,
+    });
+  }
+
+  // Reconcile total with bill.subtotalAmount || bill.totalAmount if needed
+  const targetTotal = bill.subtotalAmount || bill.totalAmount || 0;
+  const currentTotal = draftItems.reduce(
+    (s, it) => s + it.quantity * it.unitPrice,
+    0
+  );
+  if (targetTotal > 0 && currentTotal !== targetTotal && draftItems.length > 0) {
+    const zeroPriceItems = draftItems.filter((it) => it.unitPrice === 0);
+    const diff = targetTotal - currentTotal;
+    if (zeroPriceItems.length === 1 && diff > 0) {
+      zeroPriceItems[0].unitPrice = Math.round(diff / zeroPriceItems[0].quantity);
+    } else if (zeroPriceItems.length === 0 && diff !== 0) {
+      // Adjust the highest-value item or combo item if there's a slight custom bill price difference
+      const adjustable = draftItems.find(
+        (it) =>
+          it.quantity === 1 &&
+          (it.productName.toLowerCase().includes('cá') ||
+            it.productName.toLowerCase().includes('lẩu') ||
+            it.productName.toLowerCase().includes('combo')) &&
+          it.unitPrice + diff > 0
+      );
+      if (adjustable) {
+        adjustable.unitPrice += diff;
+      }
+    }
+  }
+
+  return draftItems.map((it, idx) => ({
+    id: `${bill.id}_reconstructed_${idx + 1}`,
+    ownerId: bill.ownerId,
+    billId: bill.id,
+    billDate: bill.billDate,
+    productName: it.productName,
+    note: it.note,
+    category: it.category,
+    quantity: it.quantity,
+    returnedQuantity: 0,
+    unitPrice: it.unitPrice,
+    subtotal: it.quantity * it.unitPrice,
+    originalUnitPrice: it.originalUnitPrice,
+    createdAtMs: bill.createdAtMs || Date.now(),
+    updatedAtMs: bill.updatedAtMs || Date.now(),
+  }));
+}
+
 export function splitProductNameAndInlineNote(
   rawDishText: string,
   existingProducts?: ProductRecord[],
@@ -398,16 +706,6 @@ export function splitProductNameAndInlineNote(
     .trim();
 
   const noteParts: string[] = [];
-
-  // 1. Extract explicit parentheses / brackets note: e.g. "Gà biển kho nghệ (làm cay)"
-  cleaned = cleaned
-    .replace(/\(([^)]+)\)|\[([^\]]+)\]/g, (_m, g1, g2) => {
-      const inner = (g1 || g2 || '').trim();
-      if (inner) noteParts.push(inner);
-      return ' ';
-    })
-    .replace(/\s+/g, ' ')
-    .trim();
 
   // Build combined lookup catalog (user's products + default catalog fallback)
   const catalogList: Array<{
@@ -440,6 +738,40 @@ export function splitProductNameAndInlineNote(
 
   // Sort by productName length descending so longest match wins
   catalogList.sort((a, b) => b.productName.length - a.productName.length);
+
+  // 1. Extract explicit parentheses / brackets note only if it's a cooking modifier OR base name is in catalog
+  // Keep variant descriptors like "(nhỏ)", "(lớn)", "(vàng)" in "Lẩu riêu cua bắp bò (nhỏ)" or "Thuốc 555 dẹt (vàng)"
+  const isVariantParen = (txt: string) =>
+    /^(?:nhỏ|lớn|vừa|to|đại|vàng|bạc|xanh|đỏ|đen|trắng|lon|chai|nửa\s*con|1\s*con|\d+\s*ml|\d+\s*l)$/i.test(
+      txt.trim()
+    );
+
+  const strippedCandidate = cleaned
+    .replace(/\(([^)]+)\)|\[([^\]]+)\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const baseMatchesCatalog = catalogList.some(
+    (c) => c.productName.toLowerCase() === strippedCandidate
+  );
+  const fullMatchesCatalog = catalogList.some(
+    (c) => c.productName.toLowerCase() === cleaned.toLowerCase()
+  );
+
+  if (!fullMatchesCatalog) {
+    cleaned = cleaned
+      .replace(/\(([^)]+)\)|\[([^\]]+)\]/g, (fullMatch, g1, g2) => {
+        const inner = (g1 || g2 || '').trim();
+        if (!inner) return ' ';
+        if (!baseMatchesCatalog && isVariantParen(inner)) {
+          return fullMatch;
+        }
+        noteParts.push(inner);
+        return ' ';
+      })
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
 
   const lowerCleaned = cleaned.toLowerCase();
 
@@ -576,6 +908,54 @@ function parseFullItemLine(
 
   // Reject lines wrapped in >>> ... <<< if they don't have a valid price at the end (>= 1000)
   const wasChevronWrapped = /^>{2,}.*<{2,}$/.test(line.trim());
+
+  // 0A. Format 1 with Discounted Item Price (2 unit prices before "x SL Thành tiền"):
+  // Example: "Gà hấp hành nửa con 179,000 319,000 x 1 179,000"
+  // or "Gà hấp hành nửa con 319,000 179,000 x 1 179,000"
+  // Meaning: originalPrice = 319,000, discount = 43.89% (-140,000), qty = 1, unitPrice (remaining sell price) = 179,000, subtotal = 179,000
+  const regexDiscountedPriceTimesQty =
+    /^(.+?)\s+(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)\s+(?:(?:\-?\d{1,2}(?:[.,]\d+)?%\s+)?)?(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)\s*[x×*]\s*(\d{1,4})\s*(?:lon|chai|phần|đĩa|dĩa|nồi|cái|ly|ca|suất|bịch|gói|con|combo)?\s+(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)$/i;
+  const m0a = cleaned.match(regexDiscountedPriceTimesQty);
+  if (m0a && !wasChevronWrapped) {
+    const rawPrefixName = m0a[1].replace(/^[\d]+[\.\)]\s*/, '').replace(/[\-|:]$/, '').trim();
+    let price1 = normalizeMoneyNumber(m0a[2]);
+    let price2 = normalizeMoneyNumber(m0a[3]);
+    const qtyCandidate = parseInt(m0a[4], 10) || 1;
+    let subMoney = normalizeMoneyNumber(m0a[5]);
+    if (price1 > 0 && price1 < 1000 && /k\b/i.test(m0a[2])) price1 *= 1000;
+    if (price2 > 0 && price2 < 1000 && /k\b/i.test(m0a[3])) price2 *= 1000;
+    if (subMoney > 0 && subMoney < 1000 && /k\b/i.test(m0a[5])) subMoney *= 1000;
+
+    if (rawPrefixName && price1 >= 1000 && price2 >= 1000 && qtyCandidate >= 1) {
+      const qty = Math.max(1, qtyCandidate);
+      const originalPrice = Math.max(price1, price2);
+      const sellPrice = Math.min(price1, price2);
+      const sub = subMoney >= sellPrice ? subMoney : qty * sellPrice;
+      const discInfo = formatItemDiscountNote(originalPrice, sellPrice);
+
+      const split = splitProductNameAndInlineNote(
+        rawPrefixName,
+        existingProducts,
+        customCategories
+      );
+      if (split.productName) {
+        const noteText = [split.note, discInfo?.discountNote]
+          .filter(Boolean)
+          .join(' · ');
+        return {
+          productName: split.productName,
+          note: noteText,
+          category: split.category,
+          quantity: qty,
+          unitPrice: sellPrice,
+          subtotal: sub,
+          originalUnitPrice: discInfo?.originalUnitPrice,
+          discountAmount: discInfo?.discountAmount,
+          discountPercent: discInfo?.discountPercent,
+        };
+      }
+    }
+  }
 
   // 0. Format 1 (VỊNH QUÁN / Thermal Receipt): "Tên hàng   Đ.Giá x SL   Thành tiền"
   // Examples:
@@ -756,6 +1136,147 @@ function normalizeTableName(rawTable: string): string {
     return 'Bàn ' + cleaned.replace(/^bàn\s*/i, '').trim();
   }
   return cleaned;
+}
+
+function isNumericOrPercentPosLine(s: string): boolean {
+  const t = (s || '').trim();
+  if (!t) return false;
+  return /^\d[\d.,]*$/.test(t) || /^\-?\d+(?:[.,]\d+)?\s*%$/.test(t);
+}
+
+/**
+ * Parses a multi-line POS item block (with or without SPxxxxxx code):
+ * Supports:
+ * - 6 numeric/percent lines: [qty, originalPrice, discountAmt, discountPct%, sellPrice, subtotal]
+ *   e.g.:
+ *   Gà hấp hành nửa con
+ *   1
+ *   319,000
+ *   140,000
+ *   43.89%
+ *   179,000
+ *   179,000
+ * - 5 numeric/percent lines: [qty, originalPrice, discountAmtOrPct, sellPrice, subtotal]
+ * - 4 numeric lines: [qty, originalPrice, sellPrice, subtotal]
+ * - 3 numeric lines: [qty, sellPrice, subtotal]
+ */
+function parseMultiLinePosItemBlock(
+  blockLines: string[],
+  existingProducts?: ProductRecord[],
+  customCategories?: string[]
+): ExtractedBillItem | null {
+  if (blockLines.length < 2) return null;
+  const rawDishName = blockLines[0].trim();
+  const rest = blockLines.slice(1);
+
+  let numericTailCount = 0;
+  for (let r = rest.length - 1; r >= 0; r--) {
+    if (isNumericOrPercentPosLine(rest[r])) {
+      numericTailCount++;
+    } else {
+      break;
+    }
+  }
+
+  if (numericTailCount === 0) return null;
+
+  const tailLen =
+    numericTailCount >= 6
+      ? 6
+      : numericTailCount === 5
+      ? 5
+      : numericTailCount === 4
+      ? 4
+      : numericTailCount === 3
+      ? 3
+      : numericTailCount;
+
+  const noteLines = rest.slice(0, Math.max(0, rest.length - tailLen));
+  const numLines = rest.slice(Math.max(0, rest.length - tailLen));
+
+  let qty = 1;
+  let origPrice = 0;
+  let explicitPct: number | undefined;
+  let uPrice = 0;
+  let sub = 0;
+
+  const extractPctValue = (str: string): number | undefined => {
+    const m = str.trim().match(/^\-?(\d+(?:[.,]\d+)?)\s*%$/);
+    if (!m) return undefined;
+    return parseFloat(m[1].replace(',', '.'));
+  };
+
+  if (numLines.length >= 6) {
+    qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
+    origPrice = normalizeMoneyNumber(numLines[1]);
+    const pct2 = extractPctValue(numLines[2]);
+    const pct3 = extractPctValue(numLines[3]);
+    explicitPct = pct3 !== undefined ? pct3 : pct2;
+    uPrice = normalizeMoneyNumber(numLines[4]);
+    sub = normalizeMoneyNumber(numLines[5]);
+  } else if (numLines.length === 5) {
+    qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
+    origPrice = normalizeMoneyNumber(numLines[1]);
+    explicitPct = extractPctValue(numLines[2]);
+    uPrice = normalizeMoneyNumber(numLines[3]);
+    sub = normalizeMoneyNumber(numLines[4]);
+  } else if (numLines.length === 4) {
+    qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
+    origPrice = normalizeMoneyNumber(numLines[1]);
+    uPrice = normalizeMoneyNumber(numLines[2]) || origPrice;
+    sub = normalizeMoneyNumber(numLines[3]);
+  } else if (numLines.length === 3) {
+    qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
+    uPrice = normalizeMoneyNumber(numLines[1]);
+    sub = normalizeMoneyNumber(numLines[2]);
+  } else if (numLines.length === 2) {
+    qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
+    uPrice = normalizeMoneyNumber(numLines[1]);
+    sub = qty * uPrice;
+  } else if (numLines.length === 1) {
+    uPrice = normalizeMoneyNumber(numLines[0]);
+    sub = uPrice;
+  }
+
+  if (origPrice > 0 && origPrice < 1000) origPrice *= 1000;
+  if (uPrice > 0 && uPrice < 1000) uPrice *= 1000;
+  if (sub > 0 && sub < 1000) sub *= 1000;
+  if (sub === 0 && uPrice > 0) sub = qty * uPrice;
+  if (uPrice > 0 && sub !== qty * uPrice) sub = qty * uPrice;
+
+  if (uPrice <= 0) return null;
+
+  const discInfo =
+    origPrice > uPrice
+      ? formatItemDiscountNote(origPrice, uPrice, explicitPct)
+      : null;
+
+  const split = splitProductNameAndInlineNote(
+    rawDishName,
+    existingProducts,
+    customCategories
+  );
+  const combinedNote = [
+    split.note,
+    ...noteLines.map((n) => n.trim()),
+    discInfo?.discountNote,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  if (!split.productName) return null;
+
+  return {
+    productName: split.productName,
+    note: combinedNote,
+    category: split.category,
+    quantity: qty,
+    unitPrice: uPrice,
+    subtotal: sub,
+    originalUnitPrice: discInfo?.originalUnitPrice,
+    discountAmount: discInfo?.discountAmount,
+    discountPercent: discInfo?.discountPercent,
+  };
 }
 
 /**
@@ -961,70 +1482,13 @@ export function parseRawTextToBillJSON(
       idx = k;
 
       if (blockLines.length >= 2) {
-        const rawDishName = blockLines[0].trim();
-        const rest = blockLines.slice(1);
-
-        // Count how many trailing lines are pure numbers (e.g. ['59', '21,000', '21,000', '1,239,000'])
-        const isPureNumericLine = (s: string) => /^\d[\d.,]*$/.test(s.trim());
-        let numericTailCount = 0;
-        for (let r = rest.length - 1; r >= 0; r--) {
-          if (isPureNumericLine(rest[r])) {
-            numericTailCount++;
-          } else {
-            break;
-          }
-        }
-
-        // In KiotViet POS, the trailing numeric lines are either 4 numbers [qty, basePrice, sellPrice, subtotal]
-        // or 3 numbers [qty, unitPrice, subtotal]
-        const tailLen = numericTailCount >= 4 ? 4 : numericTailCount >= 3 ? 3 : numericTailCount;
-        const noteLines = rest.slice(0, Math.max(0, rest.length - tailLen));
-        const numLines = rest.slice(Math.max(0, rest.length - tailLen));
-
-        let qty = 1;
-        let uPrice = 0;
-        let sub = 0;
-
-        if (numLines.length >= 4) {
-          qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
-          uPrice = normalizeMoneyNumber(numLines[2]) || normalizeMoneyNumber(numLines[1]);
-          sub = normalizeMoneyNumber(numLines[3]);
-        } else if (numLines.length === 3) {
-          qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
-          uPrice = normalizeMoneyNumber(numLines[1]);
-          sub = normalizeMoneyNumber(numLines[2]);
-        } else if (numLines.length === 2) {
-          qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
-          uPrice = normalizeMoneyNumber(numLines[1]);
-          sub = qty * uPrice;
-        } else if (numLines.length === 1) {
-          uPrice = normalizeMoneyNumber(numLines[0]);
-          sub = uPrice;
-        }
-
-        if (uPrice > 0 && uPrice < 1000) uPrice *= 1000;
-        if (sub > 0 && sub < 1000) sub *= 1000;
-        if (sub === 0 && uPrice > 0) sub = qty * uPrice;
-        if (uPrice > 0 && sub !== qty * uPrice) sub = qty * uPrice;
-
-        const split = splitProductNameAndInlineNote(
-          rawDishName,
+        const parsedSpItem = parseMultiLinePosItemBlock(
+          blockLines,
           existingProducts,
           customCategories
         );
-        const combinedNote = [split.note, ...noteLines.map((n) => n.trim())]
-          .filter(Boolean)
-          .join(', ');
-
-        if (split.productName && uPrice > 0) {
-          spItems.push({
-            productName: split.productName,
-            note: combinedNote,
-            category: split.category,
-            quantity: qty,
-            unitPrice: uPrice,
-            subtotal: sub,
-          });
+        if (parsedSpItem) {
+          spItems.push(parsedSpItem);
         }
       }
     }
@@ -1220,24 +1684,81 @@ export function parseRawTextToBillJSON(
 
       if (wrappedNameLines.length > 0) {
         const prefixDish = wrappedNameLines.map((b) => b.text).join(' ').trim();
-        const splitPrefix = splitProductNameAndInlineNote(
-          prefixDish,
-          existingProducts,
-          customCategories
-        );
-        // E.g. prefixDish = "Gỏi bò bóp thấu", fullItem.productName = "Bê" -> productName: "Gỏi bò bóp thấu", note: "Bê"
-        const mergedNote = [splitPrefix.note, fullItem.productName, fullItem.note]
-          .filter(Boolean)
-          .join(', ');
-        fullItem.productName = splitPrefix.productName || prefixDish;
-        fullItem.note = mergedNote;
-        fullItem.category =
-          splitPrefix.category || inferCategory(fullItem.productName, customCategories);
+        const lowerFull = fullItem.productName.toLowerCase().trim();
+        const lowerPrefix = prefixDish.toLowerCase().trim();
+
+        // If fullItem.productName already starts with prefixDish (e.g., "Rau rừng" -> "Rau rừng xào bò" or "Gà hấp" -> "Gà hấp hành nửa con"),
+        // then fullItem.productName is already the complete specific dish name! Do not overwrite it with the short prefix.
+        if (!lowerFull.startsWith(lowerPrefix)) {
+          const splitPrefix = splitProductNameAndInlineNote(
+            prefixDish,
+            existingProducts,
+            customCategories
+          );
+          // E.g. prefixDish = "Gỏi bò bóp thấu", fullItem.productName = "Bê" -> productName: "Gỏi bò bóp thấu", note: "Bê"
+          const mergedNote = [splitPrefix.note, fullItem.productName, fullItem.note]
+            .filter(Boolean)
+            .join(', ');
+          fullItem.productName = splitPrefix.productName || prefixDish;
+          fullItem.note = mergedNote;
+          fullItem.category =
+            splitPrefix.category || inferCategory(fullItem.productName, customCategories);
+        }
       }
 
       unpricedBuffer = [];
       items.push(fullItem);
       continue;
+    }
+
+    // Check if this line is the start of a multi-line POS block WITHOUT SPxxxxxx code:
+    // e.g.
+    // Gà hấp hành nửa con
+    // 1
+    // 319,000
+    // 140,000
+    // 43.89%
+    // 179,000
+    // 179,000
+    if (!isNumericOrPercentPosLine(cleanedLine) && /[a-zA-ZÀ-ỹ]/.test(cleanedLine)) {
+      let scanIdx = i + 1;
+      const optionalNotes: string[] = [];
+      // Allow up to 1 non-numeric note line before the numeric tail if that line is followed by >= 3 numeric/percent lines
+      if (
+        scanIdx < rawLines.length &&
+        !isNumericOrPercentPosLine(rawLines[scanIdx]) &&
+        !parseFullItemLine(rawLines[scanIdx], existingProducts, customCategories) &&
+        scanIdx + 1 < rawLines.length &&
+        isNumericOrPercentPosLine(rawLines[scanIdx + 1])
+      ) {
+        optionalNotes.push(rawLines[scanIdx]);
+        scanIdx++;
+      }
+
+      const numTail: string[] = [];
+      while (
+        scanIdx < rawLines.length &&
+        numTail.length < 6 &&
+        isNumericOrPercentPosLine(rawLines[scanIdx])
+      ) {
+        numTail.push(rawLines[scanIdx]);
+        scanIdx++;
+      }
+
+      if (numTail.length >= 3 && /^\d{1,4}$/.test(numTail[0].trim())) {
+        const blockCandidate = [cleanedLine, ...optionalNotes, ...numTail];
+        const multiItem = parseMultiLinePosItemBlock(
+          blockCandidate,
+          existingProducts,
+          customCategories
+        );
+        if (multiItem) {
+          flushBufferToLastItemAsNote();
+          items.push(multiItem);
+          i = scanIdx - 1;
+          continue;
+        }
+      }
     }
 
     // Check if this line is a standalone cooking modifier right after a full item (e.g. "làm cay", "ít hành")
@@ -1304,6 +1825,33 @@ export const parseInvoiceText = parseRawTextToBillJSON;
 export const parseBulkProductsInput = parseBulkProductsByLogic;
 
 export const SAMPLE_BILL_TEMPLATES = [
+  {
+    id: 'sample_vinh_quan_ban18_discount',
+    label: 'Mẫu Bill Vịnh Quán (Bàn 18 - Có Món Giảm Giá 43.89%)',
+    description:
+      'Tự nhận diện Gà hấp hành nửa con (Giá gốc 319.000đ, giảm 43.89%, giá bán 179.000đ), Tổng: 2.289.000đ',
+    rawText: `VỊNH QUÁN
+ĐC: 131 Chu Huy Mân, Đà nẵng
+ĐT: 0702.444.449
+BÀN 18 PHIẾU TÍNH TIỀN
+HD004940
+Giờ vào: 26/09/2026 17:49 Giờ in: 22:40
+Tên hàng Đ.Giá SL Thành tiền
+Heiniken bạc lon nhỏ 250ml 22,000 x 65 1,430,000
+Nghêu đen hấp 119,000 x 1 119,000
+Coca 15,000 x 1 15,000
+Lẩu riêu cua bắp bò (nhỏ) 169,000 x 1 169,000
+Rau rừng
+Rau rừng xào bò 119,000 x 1 119,000
+Gà hấp
+Gà hấp hành nửa con 179,000 319,000 x 1 179,000
+Tôm sú hấp 129,000 x 1 129,000
+Thuốc 555 dẹt (vàng) 25,000 x 1 25,000
+Thuốc con ngựa 35,000 x 1 35,000
+Rau rừng 69,000 x 1 69,000
+Chiết khấu: 0
+Tổng Cộng: 2,289,000`,
+  },
   {
     id: 'sample_vinh_quan_ban24',
     label: 'Mẫu Bill Vịnh Quán (Bàn 24)',

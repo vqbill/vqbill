@@ -173,6 +173,21 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       quantity: Number(it.quantity) || 1,
       unitPrice: Number(it.unitPrice) || 0,
       subtotal: (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0),
+      ...(it.originalUnitPrice && it.originalUnitPrice > (Number(it.unitPrice) || 0)
+        ? {
+            originalUnitPrice: Number(it.originalUnitPrice),
+            discountAmount:
+              it.discountAmount ??
+              Math.max(0, Number(it.originalUnitPrice) - (Number(it.unitPrice) || 0)),
+            discountPercent:
+              it.discountPercent ??
+              Math.round(
+                ((Number(it.originalUnitPrice) - (Number(it.unitPrice) || 0)) /
+                  Number(it.originalUnitPrice)) *
+                  10000
+              ) / 100,
+          }
+        : {}),
     })),
   };
 
@@ -216,6 +231,9 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
           quantity: qty,
           unitPrice: uPrice,
           subtotal: qty * uPrice,
+          originalUnitPrice: it.originalUnitPrice,
+          discountAmount: it.discountAmount,
+          discountPercent: it.discountPercent,
         };
       })
     );
@@ -291,6 +309,9 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               quantity: qty,
               unitPrice: uPrice,
               subtotal: qty * uPrice,
+              originalUnitPrice: it.originalUnitPrice,
+              discountAmount: it.discountAmount,
+              discountPercent: it.discountPercent,
             };
           });
           setItems((prev) => [...prev, ...newItems]);
@@ -1314,9 +1335,27 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
                       <div className="flex items-center justify-between pt-1 border-t border-slate-200/70 dark:border-slate-800 text-xs font-mono">
                         <span className="text-[11px] text-slate-500">
-                          {catalogMatch
-                            ? `Giá Menu: ${formatVND(catalogMatch.unitPrice)}`
-                            : 'Món mới / Tùy chỉnh'}
+                          {item.originalUnitPrice && item.originalUnitPrice > item.unitPrice ? (
+                            <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                              Giá gốc: {formatVND(item.originalUnitPrice)} • Giảm{' '}
+                              {item.discountPercent ??
+                                Math.round(
+                                  ((item.originalUnitPrice - item.unitPrice) /
+                                    item.originalUnitPrice) *
+                                    10000
+                                ) / 100}
+                              % (-
+                              {formatVND(
+                                item.discountAmount ??
+                                  item.originalUnitPrice - item.unitPrice
+                              )}
+                              )
+                            </span>
+                          ) : catalogMatch ? (
+                            `Giá Menu: ${formatVND(catalogMatch.unitPrice)}`
+                          ) : (
+                            'Món mới / Tùy chỉnh'
+                          )}
                         </span>
                         <span className="font-bold text-emerald-600 dark:text-emerald-400">
                           = {formatVND(item.quantity * item.unitPrice)}
@@ -1425,16 +1464,34 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               }
                               className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
                             />
-                            {catalogMatch && (
-                              <div className="text-[10px] text-right mt-0.5 font-mono text-slate-400">
-                                {isCustomBillPrice ? (
-                                  <span className="text-amber-600 dark:text-amber-400">
-                                    Giá gốc: {formatVND(catalogMatch.unitPrice)}
-                                  </span>
-                                ) : (
-                                  <span>Giá chuẩn: {formatVND(catalogMatch.unitPrice)}</span>
-                                )}
+                            {item.originalUnitPrice && item.originalUnitPrice > item.unitPrice ? (
+                              <div className="text-[10px] text-right mt-0.5 font-mono text-amber-600 dark:text-amber-400 font-semibold leading-tight">
+                                <span className="line-through opacity-75 mr-1">
+                                  {formatVND(item.originalUnitPrice)}
+                                </span>
+                                <span>
+                                  -
+                                  {item.discountPercent ??
+                                    Math.round(
+                                      ((item.originalUnitPrice - item.unitPrice) /
+                                        item.originalUnitPrice) *
+                                        10000
+                                    ) / 100}
+                                  %
+                                </span>
                               </div>
+                            ) : (
+                              catalogMatch && (
+                                <div className="text-[10px] text-right mt-0.5 font-mono text-slate-400">
+                                  {isCustomBillPrice ? (
+                                    <span className="text-amber-600 dark:text-amber-400">
+                                      Giá gốc: {formatVND(catalogMatch.unitPrice)}
+                                    </span>
+                                  ) : (
+                                    <span>Giá chuẩn: {formatVND(catalogMatch.unitPrice)}</span>
+                                  )}
+                                </div>
+                              )
                             )}
                           </td>
                           <td className="p-2 align-top text-right font-mono font-semibold text-slate-900 dark:text-white pt-3.5">

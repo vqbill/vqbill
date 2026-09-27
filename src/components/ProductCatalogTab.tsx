@@ -381,10 +381,28 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
         });
         setFeedback({
           type: 'ok',
-          text: `Đã cập nhật sản phẩm "${cleanName}" thành công.`,
+          text: `Đã cập nhật sản phẩm "${cleanName}" (Danh mục: ${editingProduct.category}) và tự động đồng bộ qua Số lượng theo danh mục.`,
         });
         setEditingProduct(null);
       },
+    });
+  };
+
+  const handleInlineCategoryChange = async (
+    prod: ProductRecord,
+    newCategory: string
+  ) => {
+    if (!canWrite || !newCategory || newCategory === prod.category) return;
+    await onAddOrUpdateProduct({
+      id: prod.id,
+      productName: prod.productName,
+      category: newCategory,
+      unitPrice: prod.unitPrice,
+      unit: prod.unit,
+    });
+    setFeedback({
+      type: 'ok',
+      text: `Đã chuyển món "${prod.productName}" sang danh mục "${newCategory}" và tự động đồng bộ qua Số lượng theo danh mục.`,
     });
   };
 
@@ -794,13 +812,13 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                 }
                 className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
               >
-                {Array.from(new Set([...categories, editingProduct.category])).map(
-                  (c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  )
-                )}
+                {Array.from(
+                  new Set([...effectiveCategories, editingProduct.category])
+                ).map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -1124,8 +1142,27 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                       <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
                         {prod.productName}
                       </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                        {prod.category} · {prod.unit}
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1.5">
+                        {canWrite ? (
+                          <select
+                            value={prod.category}
+                            onChange={(e) =>
+                              handleInlineCategoryChange(prod, e.target.value)
+                            }
+                            className="px-2 py-0.5 text-[11px] font-medium rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 cursor-pointer"
+                          >
+                            {Array.from(
+                              new Set([...effectiveCategories, prod.category])
+                            ).map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span>{prod.category}</span>
+                        )}
+                        <span>· {prod.unit}</span>
                       </div>
                     </div>
                     <div className="text-right font-mono shrink-0">
@@ -1196,7 +1233,25 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                         {prod.productName}
                       </td>
                       <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                        {prod.category}
+                        {canWrite ? (
+                          <select
+                            value={prod.category}
+                            onChange={(e) =>
+                              handleInlineCategoryChange(prod, e.target.value)
+                            }
+                            className="px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                          >
+                            {Array.from(
+                              new Set([...effectiveCategories, prod.category])
+                            ).map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          prod.category
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-slate-500">{prod.unit}</td>
                       <td className="py-2.5 px-3 text-right font-mono">

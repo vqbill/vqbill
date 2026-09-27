@@ -124,6 +124,18 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
     setMatrixExpandedCats(next);
   };
 
+  const prodCategoryMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of products) {
+      const cleanName = (p.productName || (p as any).name || '').trim().toLowerCase();
+      const cleanCat = (p.category || '').trim();
+      if (cleanName && cleanCat) {
+        map.set(cleanName, cleanCat);
+      }
+    }
+    return map;
+  }, [products]);
+
   const allCategories = useMemo(() => {
     const set = new Set<string>();
     for (const c of categories) {
@@ -133,10 +145,12 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
       if (p.category && p.category.trim()) set.add(p.category.trim());
     }
     for (const it of billItems) {
-      if (it.category && it.category.trim()) set.add(it.category.trim());
+      const pKey = (it.productName || '').trim().toLowerCase();
+      const resolvedCat = prodCategoryMap.get(pKey) || (it.category || '').trim();
+      if (resolvedCat) set.add(resolvedCat);
     }
     return Array.from(set);
-  }, [categories, products, billItems]);
+  }, [categories, products, billItems, prodCategoryMap]);
 
   const categoryStats = useMemo<CategoryAgg[]>(() => {
     const catMap = new Map<string, Map<string, ProductAgg>>();
@@ -171,12 +185,12 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
     }
 
     for (const item of billItems) {
-      const catName = (item.category || 'Khác').trim();
+      const pKey = item.productName.trim().toLowerCase();
+      const catName = prodCategoryMap.get(pKey) || (item.category || 'Khác').trim();
       if (!catMap.has(catName)) {
         catMap.set(catName, new Map());
       }
       const prodMap = catMap.get(catName)!;
-      const pKey = item.productName.trim().toLowerCase();
       const existing = prodMap.get(pKey);
 
       const sold = Number(item.quantity) || 0;
