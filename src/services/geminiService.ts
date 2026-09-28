@@ -18,18 +18,75 @@ import {
   splitProductNameAndInlineNote,
 } from '../utils/parser';
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3-flash-preview'];
+const GEMINI_MODEL = 'gemini-3.8-flash';
+const GEMINI_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+];
+
+async function generateContentWithModelFallback(
+  ai: GoogleGenAI,
+  params: { contents: any; config?: any }
+): Promise<{ response: any; model: string }> {
+  let lastError: any = null;
+
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: params.contents,
+        ...(params.config ? { config: params.config } : {}),
+      });
+      return { response, model: modelName };
+    } catch (err: any) {
+      lastError = err;
+      const rawStr =
+        typeof err === 'string'
+          ? err
+          : err?.message || JSON.stringify(err || '');
+
+      const isInvalidKey =
+        rawStr.includes('API_KEY_INVALID') ||
+        rawStr.includes('API key not valid');
+      const isProjectDenied =
+        rawStr.includes('Your project has been denied access') ||
+        (rawStr.includes('403') && rawStr.includes('PERMISSION_DENIED'));
+
+      // Stop immediately if the API key itself is invalid or project is denied
+      if (isInvalidKey || isProjectDenied) {
+        throw err;
+      }
+      // Otherwise (e.g. 404 NOT_FOUND / model no longer available to new users), try next model in GEMINI_MODELS
+    }
+  }
+
+  throw lastError || new Error('Không thể kết nối tới model Gemini.');
+}
 
 function formatFriendlyClientGeminiError(rawErr: any): {
   isProjectDenied: boolean;
   isQuota: boolean;
   message: string;
 } {
-  const rawStr =
+  let rawStr =
     typeof rawErr === 'string'
       ? rawErr
       : rawErr?.message || JSON.stringify(rawErr || '');
+
+  try {
+    const trimmed = rawStr.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      const parsedJson = JSON.parse(trimmed);
+      if (parsedJson?.error?.message) {
+        rawStr = `${parsedJson.error.code || ''} ${parsedJson.error.status || ''}: ${parsedJson.error.message}`.trim();
+      }
+    }
+  } catch {
+    // Keep original rawStr
+  }
 
   const isProjectDenied =
     rawStr.includes('Your project has been denied access') ||
@@ -499,12 +556,11 @@ export async function verifyGeminiApiKey(
 
   try {
     const ai = new GoogleGenAI({ apiKey: cleanKey });
-    await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const { model: usedModel } = await generateContentWithModelFallback(ai, {
       contents: 'Trả lời đúng 1 từ: OK',
     });
     const latencyMs = Date.now() - startedAt;
-    const msg = `Gemini Key hợp lệ! Kết nối trực tiếp thành công (${latencyMs}ms).`;
+    const msg = `Gemini Key hợp lệ! Đã kết nối trực tiếp tới model ${usedModel} (${latencyMs}ms).`;
     return {
       ok: true,
       message: msg,
@@ -513,7 +569,7 @@ export async function verifyGeminiApiKey(
         source: 'custom',
         maskedKey: maskApiKey(cleanKey),
         verified: true,
-        model: GEMINI_MODEL,
+        model: usedModel,
         latencyMs,
         message: msg,
       },
@@ -640,8 +696,7 @@ export async function extractBillWithGemini(params: {
 
   parts.push({ text: promptText });
 
-  const response = await ai.models.generateContent({
-    model: GEMINI_MODEL,
+  const { response } = await generateContentWithModelFallback(ai, {
     contents: { parts },
     config: {
       systemInstruction: buildBillOcrSystemInstruction(categories, existingProducts),
@@ -811,8 +866,7 @@ export async function parseMenuProductsWithGemini(params: {
       : `Trích xuất toàn bộ danh sách sản phẩm theo cấu trúc (Tên sản phẩm, Danh mục, Giá bán) từ hình ảnh menu này.`,
   });
 
-  const response = await ai.models.generateContent({
-    model: GEMINI_MODEL,
+  const { response } = await generateContentWithModelFallback(ai, {
     contents: { parts },
     config: {
       systemInstruction: `Bạn là chuyên gia số hóa thực đơn nhà hàng/quán nhậu. Hãy trích xuất các món ăn/thức uống theo đúng logic: Tên sản phẩm (productName), Danh mục (category - giữ nguyên danh mục người dùng ghi trong văn bản hoặc xếp vào [${catList}]), Giá bán (unitPrice - số nguyên VNĐ, ví dụ 129k -> 129000).`,

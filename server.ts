@@ -3,13 +3,14 @@ import express from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { Type } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import {
   formatItemDiscountNote,
   getCurrentBusinessDate,
   inferCategory,
   inferUnit,
   normalizeMoneyNumber,
+  normalizeSynchronizedReceiptText,
   parseBulkProductsInput,
   parseInvoiceText,
   resolveBusinessBillDate,
@@ -18,7 +19,13 @@ import {
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3-flash-preview'];
+const GEMINI_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+];
 
 app.use(express.json({ limit: '25mb' }));
 
@@ -173,10 +180,22 @@ function parseFriendlyGeminiError(rawErr: any): {
   isQuota: boolean;
   friendlyMessage: string;
 } {
-  const rawStr =
+  let rawStr =
     typeof rawErr === 'string'
       ? rawErr
       : rawErr?.message || JSON.stringify(rawErr || '');
+
+  try {
+    const trimmed = rawStr.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      const parsedJson = JSON.parse(trimmed);
+      if (parsedJson?.error?.message) {
+        rawStr = `${parsedJson.error.code || ''} ${parsedJson.error.status || ''}: ${parsedJson.error.message}`.trim();
+      }
+    }
+  } catch {
+    // Keep original rawStr
+  }
 
   const isProjectDenied =
     rawStr.includes('Your project has been denied access') ||
@@ -236,8 +255,36 @@ async function callGeminiGenerateRest(params: {
   const { apiKey, parts, systemInstruction, responseSchema, temperature = 0.1 } = params;
   let lastError: any = null;
 
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
   for (const modelName of GEMINI_MODELS) {
     try {
+      const config: any = { temperature };
+      if (systemInstruction) {
+        config.systemInstruction = systemInstruction;
+      }
+      if (responseSchema) {
+        config.responseMimeType = 'application/json';
+        config.responseSchema = responseSchema;
+      }
+
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: { parts },
+        config,
+      });
+
+      if (response.text) {
+        return { text: response.text, model: modelName };
+      }
+
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const bodyPayload: any = {
         contents: [{ role: 'user', parts }],
@@ -257,7 +304,10 @@ async function callGeminiGenerateRest(params: {
 
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'aistudio-build',
+        },
         body: JSON.stringify(bodyPayload),
       });
 
@@ -272,6 +322,15 @@ async function callGeminiGenerateRest(params: {
       lastError = data?.error ? JSON.stringify(data) : `HTTP ${res.status}`;
     } catch (err: any) {
       lastError = err?.message || String(err);
+      const errStr = String(lastError);
+      if (
+        errStr.includes('API_KEY_INVALID') ||
+        errStr.includes('API key not valid') ||
+        errStr.includes('Your project has been denied access') ||
+        (errStr.includes('403') && errStr.includes('PERMISSION_DENIED'))
+      ) {
+        break;
+      }
     }
   }
 
@@ -820,12 +879,16 @@ app.post('/api/ocr-bill', async (req, res) => {
     const {
       imageBase64,
       mimeType,
-      rawText,
+      rawText: inputRawText,
       defaultDate,
       apiKey,
       categories,
       existingProducts,
     } = req.body || {};
+    const rawText =
+      typeof inputRawText === 'string' && inputRawText.trim()
+        ? normalizeSynchronizedReceiptText(inputRawText)
+        : inputRawText;
     const headerKey = req.headers['x-gemini-api-key'];
     const fallbackDate =
       typeof defaultDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(defaultDate)
