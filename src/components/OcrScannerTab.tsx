@@ -31,6 +31,7 @@ import {
   formatVND,
   getCurrentBusinessDate,
   inferCategory,
+  normalizeSynchronizedReceiptText,
   parseRawTextToBillJSON,
   resolveBusinessBillDate,
   SAMPLE_BILL_TEMPLATES,
@@ -850,15 +851,19 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      const syncedText = normalizeSynchronizedReceiptText(rawText);
+                      if (syncedText && syncedText !== rawText) {
+                        setRawText(syncedText);
+                      }
                       const parsed = parseRawTextToBillJSON(
-                        rawText,
+                        syncedText || rawText,
                         billDate || todayBusinessStr,
                         products,
                         categories
                       );
                       applyExtractedResult(parsed);
                       setSuccessMsg(
-                        `Đã tách chuẩn ${parsed.items.length} món (Tổng cộng: ${formatVND(
+                        `Đã đồng bộ định dạng & tách chuẩn ${parsed.items.length} món (Tổng cộng: ${formatVND(
                           parsed.billInfo.totalAmount
                         )}, Ca ngày: ${parsed.billInfo.billDate}).`
                       );
@@ -870,7 +875,13 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   <button
                     type="button"
                     disabled={isProcessing}
-                    onClick={() => runAiExtraction({ text: rawText })}
+                    onClick={() => {
+                      const syncedText = normalizeSynchronizedReceiptText(rawText);
+                      if (syncedText && syncedText !== rawText) {
+                        setRawText(syncedText);
+                      }
+                      runAiExtraction({ text: syncedText || rawText });
+                    }}
                     className="h-10 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
                   >
                     <RefreshCw

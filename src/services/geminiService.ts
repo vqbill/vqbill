@@ -11,6 +11,7 @@ import {
   inferCategory,
   inferUnit,
   normalizeMoneyNumber,
+  normalizeSynchronizedReceiptText,
   parseBulkProductsInput,
   parseInvoiceText,
   resolveBusinessBillDate,
@@ -159,6 +160,14 @@ QUY TẮC QUAN TRỌNG:
        ======================
        giá 459000
        -> Đó là 1 món duy nhất: productName: "Combo 2", note: "Cơm chiên hải sản, Càng cua trộn bò, Chip hấp thái, Cá giò kho tiêu, 1 dĩa trái cây", quantity: 1, unitPrice: 459000, subtotal: 459000. Tuyệt đối KHÔNG tách các dòng >>> ... <<< không có giá thành món riêng.
+      + Ví dụ 3 (Bill in nhiệt khổ hẹp bị rớt dòng ở tiêu đề "Tên hàng Đ.Giá SL Thành / tiền" và tên món dài):
+        Tên hàng Đ.Giá SL Thành
+        tiền
+        Bạch tuộc rang
+        mắm ớt 119,000 x 1 119,000
+        Tiger bạc lon nhỏ
+        250ml 21,000 x 24 504,000
+        -> Chữ "tiền" là phần rớt dòng của tiêu đề "Thành tiền", TUYỆT ĐỐI KHÔNG ghép chữ "tiền" vào tên món đầu tiên. Các dòng tên món bị ngắt đôi phải nối lại thành tên món hoàn chỉnh: "Bạch tuộc rang mắm ớt" (119,000 x 1 = 119,000) và "Tiger bạc lon nhỏ 250ml" (21,000 x 24 = 504,000).
 3. PHÂN LOẠI DANH MỤC (category):
    - Xếp vào một trong các danh mục: [${catList}].`;
 }
@@ -553,12 +562,16 @@ export async function extractBillWithGemini(params: {
   const {
     imageBase64,
     mimeType,
-    rawText,
+    rawText: inputRawText,
     defaultDate,
     apiKey,
     categories,
     existingProducts,
   } = params;
+
+  const rawText = inputRawText
+    ? normalizeSynchronizedReceiptText(inputRawText)
+    : inputRawText;
 
   const serverResp = await safeFetchJson('/api/ocr-bill', {
     method: 'POST',

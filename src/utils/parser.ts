@@ -496,7 +496,7 @@ export const DEFAULT_CATALOG_PRODUCTS = [
 ];
 
 const COMMON_NOTE_MODIFIERS_REGEX =
-  /\s+(?:[\(\-\|:]\s*)?((?:làm|ít|không|ko|thêm|nhiều|bỏ|để|chặt|nấu|chiên|nướng|hấp|xào|luộc|gói|đem|mang)\s+(?:cay|cay nhiều|cay ít|vừa cay|hành|tỏi|tiêu|ớt|đá|đường|mặn|ngọt|nhạt|chua|giòn|mềm|kỹ|tái|chín|nhỏ|to|nguyên con|riêng|về|mang về|đem về|nước mắm|muối ớt|sa tế|bơ|mỡ).*)$/i;
+  /\s+(?:[\(\-\|:]\s*)?((?:làm|ít|không|ko|thêm|nhiều|bỏ|để|chặt|gói|đem|mang)\s+(?:cay|cay nhiều|cay ít|vừa cay|hành|tỏi|tiêu|ớt|đá|đường|mặn|ngọt|nhạt|chua|giòn|mềm|kỹ|tái|chín|nhỏ|to|nguyên con|riêng|về|mang về|đem về|nước mắm|muối ớt|sa tế|bơ|mỡ).*)$/i;
 
 /**
  * Tách tên món chuẩn (đối chiếu với Menu Catalog nếu có) và phần ghi chú đi kèm trên cùng 1 dòng.
@@ -595,7 +595,7 @@ const KNOWN_VINH_QUAN_ITEM_PRICES: Record<string, number> = {
   'larue lon': 18000,
   'bia larue': 18000,
   'combo 2': 559000,
-  'bạch tuộc rang mắm ớt': 129000,
+  'bạch tuộc rang mắm ớt': 119000,
   'sườn heo nướng': 169000,
   'bê non xào sả ớt': 139000,
   'gà biển kho nghệ': 129000,
@@ -813,8 +813,10 @@ export function splitProductNameAndInlineNote(
   catalogUnitPrice?: number;
 } {
   let cleaned = (rawDishText || '')
+    .normalize('NFC')
     .replace(/^[=\-*_~><\s]+|[=\-*_~><\s]+$/g, '')
     .replace(/^(?:\d+[\.\)]\s*)/, '')
+    .replace(/^(?:thành\s*tiền|tiền)\s+(?=[A-ZÀ-Ỹa-zà-ỹ])/i, '')
     .replace(/\s+(?:giá|đơn giá|đg)\s*[:\-=]?\s*$/i, '')
     .trim();
 
@@ -968,6 +970,22 @@ function parsePriceOnlyLine(
 ): { quantity: number; unitPrice: number; subtotal: number } | null {
   const cleaned = cleanDecorativeLine(line);
   if (!cleaned) return null;
+
+  // Pattern 0: Thermal receipt price tail "119,000 x 1 119,000" or "21,000 x 24 504,000"
+  const mPriceTimesQty = cleaned.match(
+    /^(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)\s*[x×*]\s*(\d{1,4})\s*(?:lon|chai|phần|đĩa|dĩa|nồi|cái|ly|ca|suất|combo|con)?\s+(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)$/i
+  );
+  if (mPriceTimesQty) {
+    let uPrice = normalizeMoneyNumber(mPriceTimesQty[1]);
+    const qty = Math.max(1, parseInt(mPriceTimesQty[2], 10) || 1);
+    let sub = normalizeMoneyNumber(mPriceTimesQty[3]);
+    if (uPrice > 0 && uPrice < 1000) uPrice *= 1000;
+    if (sub > 0 && sub < 1000) sub *= 1000;
+    if (uPrice >= 1000) {
+      if (sub < uPrice) sub = qty * uPrice;
+      return { quantity: qty, unitPrice: uPrice, subtotal: sub };
+    }
+  }
 
   // Pattern 1: "giá 459000" / "Đơn giá: 459.000đ" / "459000đ"
   const mSinglePrice = cleaned.match(
@@ -1400,13 +1418,174 @@ function parseMultiLinePosItemBlock(
  * - Format 3 (Bill Combo >>> ... <<< và ghi chú món trên cùng 1 dòng)
  * - Mặc định hình thức thanh toán là Tiền mặt ("cash") để người dùng chọn thủ công (Tiền mặt / Chuyển khoản / Công nợ)
  */
+/**
+ * Chuẩn hóa & đồng bộ văn bản hóa đơn giữa Mẫu 1 (khổ hẹp 80mm bị rớt dòng ở "Thành\ntiền" và tên món dài như "Bạch tuộc rang\nmắm ớt", "Tiger bạc lon nhỏ\n250ml")
+ * và Mẫu 2 (khổ rộng nằm trên cùng 1 dòng), đồng thời chuẩn hóa bảng mã Unicode NFC (Tổng tiền hàng -> Tổng tiền hàng).
+ */
+export function normalizeSynchronizedReceiptText(rawText: string): string {
+  if (!rawText) return '';
+  const nfcText = rawText.normalize('NFC');
+  const rawLines = nfcText
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim());
+
+  // Pass 1: Merge wrapped table header ("Tên hàng Đ.Giá SL Thành" + "tiền")
+  // and strip any stray "tiền " / "Thành tiền " prefix stuck to the first dish
+  const pass1: string[] = [];
+  let justSawTableHeader = false;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (!line) continue;
+
+    const isHeaderStart =
+      /^(?:stt\s+)?(?:tên\s*hàng|tên\s*món|mặt\s*hàng|sản\s*phẩm)\b.*(?:đ\.?\s*giá|đơn\s*giá|sl|số\s*lượng|thành(?:\s*tiền)?)$/i.test(
+        line
+      );
+
+    if (isHeaderStart) {
+      pass1.push('Tên hàng Đ.Giá SL Thành tiền');
+      justSawTableHeader = true;
+      while (
+        i + 1 < rawLines.length &&
+        /^(?:tiền|thành\s*tiền|thành|đ\.?\s*giá|đơn\s*giá|sl|số\s*lượng)(?:\s+(?:tiền|thành\s*tiền|đ\.?\s*giá|sl))*$/i.test(
+          rawLines[i + 1].trim()
+        )
+      ) {
+        i++;
+      }
+      continue;
+    }
+
+    if (
+      justSawTableHeader &&
+      /^(?:tiền|thành\s*tiền|thành|đ\.?\s*giá|đơn\s*giá|sl|số\s*lượng)$/i.test(line)
+    ) {
+      continue;
+    }
+
+    let cleanedDishLine = line;
+    if (/^(?:thành\s*tiền|tiền)\s+[A-ZÀ-Ỹa-zà-ỹ]/i.test(cleanedDishLine)) {
+      cleanedDishLine = cleanedDishLine
+        .replace(/^(?:thành\s*tiền|tiền)\s+/i, '')
+        .trim();
+    }
+
+    pass1.push(cleanedDishLine);
+    justSawTableHeader = false;
+  }
+
+  // Pass 2: For thermal receipts (without SPxxxxxx codes), merge wrapped dish name lines
+  // with their corresponding "<continuation> <Đ.Giá> x <SL> <Thành tiền>" line so Mẫu 1 and Mẫu 2 are 100% identical
+  const hasSpCodes = pass1.some((l) => /^SP\d{3,}$/i.test(l));
+  if (hasSpCodes) {
+    return pass1.join('\n');
+  }
+
+  const isMetadataOrFooterLine = (s: string): boolean => {
+    if (!s) return true;
+    if (isPureDecorativeLine(s)) return true;
+    return (
+      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+[a-z0-9]+|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|tổng\s*tiền|tổng\s*cộng|tạm\s*tính|cộng\s*tiền|chiết\s*khấu|giảm\s*giá|khuyến\s*mãi|khách\s*cần\s*trả|khách\s*phải\s*trả|khách\s*đã\s*trả)/i.test(
+        s
+      ) ||
+      /^\d{2,4}\-\d{1,4}$/.test(s) ||
+      /^HD\d{4,}$/i.test(s)
+    );
+  };
+
+  const thermalPriceTailRegex =
+    /^(?:(.+?)\s+)?(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)\s+(?:(?:\-?\d{1,2}(?:[.,]\d+)?%\s+)?(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)\s+)?[x×*]\s*(\d{1,4})\s*(?:lon|chai|phần|đĩa|dĩa|nồi|cái|ly|ca|suất|bịch|gói|con|combo)?\s+(\d[\d.,]*\s*(?:k|đ|vnđ|d)?)$/i;
+
+  const isUnpricedDishNameFragment = (s: string): boolean => {
+    if (!s || isMetadataOrFooterLine(s)) return false;
+    if (/^>{2,}/.test(s) || /[=\-]{4,}\s*$/.test(s)) return false;
+    if (
+      /^(?:ghi\s*chú|note|yêu\s*cầu|yc|tên\s*món|món\s*ăn|số\s*lượng|sl)\s*[:\-]/i.test(
+        s
+      )
+    ) {
+      return false;
+    }
+    if (isNumericOrPercentPosLine(s)) return false;
+    if (parsePriceOnlyLine(s)) return false;
+    if (parseFullItemLine(s)) return false;
+    return /[a-zA-ZÀ-ỹ0-9]/.test(s);
+  };
+
+  const pass2: string[] = [];
+  let idx = 0;
+  while (idx < pass1.length) {
+    const cur = pass1[idx];
+    if (isUnpricedDishNameFragment(cur)) {
+      const fragments: string[] = [cur];
+      let lookahead = idx + 1;
+      while (
+        lookahead < pass1.length &&
+        fragments.length < 3 &&
+        isUnpricedDishNameFragment(pass1[lookahead])
+      ) {
+        fragments.push(pass1[lookahead]);
+        lookahead++;
+      }
+
+      if (lookahead < pass1.length) {
+        const nextLine = pass1[lookahead];
+        const mTail = nextLine.match(thermalPriceTailRegex);
+        if (mTail) {
+          const prefixText = fragments.join(' ').trim();
+          const nameTail = (mTail[1] || '').trim();
+          const priceTailOnly = nextLine
+            .slice(mTail[1] ? mTail[1].length : 0)
+            .trim();
+
+          const lowerPrefix = prefixText.toLowerCase();
+          const lowerTail = nameTail.toLowerCase();
+
+          if (!nameTail) {
+            pass2.push(`${prefixText} ${priceTailOnly}`);
+            idx = lookahead + 1;
+            continue;
+          }
+
+          if (lowerTail.startsWith(lowerPrefix)) {
+            pass2.push(nextLine);
+            idx = lookahead + 1;
+            continue;
+          }
+
+          const isSingleMeatSub =
+            /^(?:bê|bò|heo|lợn|gà)$/i.test(nameTail) &&
+            /\b(?:bò|bê|heo|lợn|gà)\b/i.test(prefixText);
+
+          if (isSingleMeatSub) {
+            pass2.push(`${prefixText} (${nameTail}) ${priceTailOnly}`);
+            idx = lookahead + 1;
+            continue;
+          }
+
+          pass2.push(`${prefixText} ${nameTail} ${priceTailOnly}`);
+          idx = lookahead + 1;
+          continue;
+        }
+      }
+    }
+
+    pass2.push(cur);
+    idx++;
+  }
+
+  return pass2.join('\n');
+}
+
 export function parseRawTextToBillJSON(
   rawText: string,
   defaultDate: string,
   existingProducts?: ProductRecord[],
   customCategories?: string[]
 ): ExtractedBillJSON {
-  const rawLines = (rawText || '')
+  const synchronizedText = normalizeSynchronizedReceiptText(rawText || '');
+  const rawLines = synchronizedText
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
@@ -1426,7 +1605,7 @@ export function parseRawTextToBillJSON(
   let explicitDiscountPercent = 0;
   let explicitTotalAmount = 0;
 
-  const fullText = rawText || '';
+  const fullText = synchronizedText;
 
   // 1. Extract Table Name (e.g., "BÀN 24 PHIẾU TÍNH TIỀN" -> "Bàn 24", or "Phòng/bàn:\nBÀN 30" -> "Bàn 30")
   for (let i = 0; i < rawLines.length; i++) {
@@ -1633,14 +1812,22 @@ export function parseRawTextToBillJSON(
   let bodyStartIdx = 0;
   for (let i = 0; i < rawLines.length; i++) {
     const cleaned = cleanDecorativeLine(rawLines[i]);
-    if (
-      /^(?:stt\s+)?(?:tên\s*hàng|tên\s*món|mặt\s*hàng|sản\s*phẩm)\b.*(?:đ\.?\s*giá|đơn\s*giá|sl|số\s*lượng|thành\s*tiền)/i.test(
-        cleaned
-      )
-    ) {
-      bodyStartIdx = i + 1;
-      break;
-    }
+      if (
+        /^(?:stt\s+)?(?:tên\s*hàng|tên\s*món|mặt\s*hàng|sản\s*phẩm)\b.*(?:đ\.?\s*giá|đơn\s*giá|sl|số\s*lượng|thành(?:\s*tiền)?)/i.test(
+          cleaned
+        )
+      ) {
+        bodyStartIdx = i + 1;
+        while (
+          bodyStartIdx < rawLines.length &&
+          /^(?:tiền|thành\s*tiền|thành|đ\.?\s*giá|đơn\s*giá|sl|số\s*lượng)$/i.test(
+            cleanDecorativeLine(rawLines[bodyStartIdx])
+          )
+        ) {
+          bodyStartIdx++;
+        }
+        break;
+      }
   }
 
   const items: ExtractedBillItem[] = [];
@@ -1701,9 +1888,9 @@ export function parseRawTextToBillJSON(
       continue;
     }
 
-    // Skip metadata / header lines (including store name, address ĐC:, phone ĐT:, order code 110-88, BÀN 24 PHIẾU TÍNH TIỀN)
+    // Skip metadata / header lines (including store name, address ĐC:, phone ĐT:, order code 110-88, BÀN 24 PHIẾU TÍNH TIỀN, or wrapped "tiền" / "Thành tiền")
     if (
-      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+\d+|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá)/i.test(
+      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+\d+|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|(?:thành\s*)?tiền$|đ\.?\s*giá$|sl$)/i.test(
         cleanedLine
       ) ||
       /^\d{2,4}\-\d{1,4}$/.test(cleanedLine) ||
@@ -1803,19 +1990,41 @@ export function parseRawTextToBillJSON(
         // If fullItem.productName already starts with prefixDish (e.g., "Rau rừng" -> "Rau rừng xào bò" or "Gà hấp" -> "Gà hấp hành nửa con"),
         // then fullItem.productName is already the complete specific dish name! Do not overwrite it with the short prefix.
         if (!lowerFull.startsWith(lowerPrefix)) {
-          const splitPrefix = splitProductNameAndInlineNote(
-            prefixDish,
-            existingProducts,
-            customCategories
-          );
-          // E.g. prefixDish = "Gỏi bò bóp thấu", fullItem.productName = "Bê" -> productName: "Gỏi bò bóp thấu", note: "Bê"
-          const mergedNote = [splitPrefix.note, fullItem.productName, fullItem.note]
-            .filter(Boolean)
-            .join(', ');
-          fullItem.productName = splitPrefix.productName || prefixDish;
-          fullItem.note = mergedNote;
-          fullItem.category =
-            splitPrefix.category || inferCategory(fullItem.productName, customCategories);
+          const isSingleMeatSub =
+            /^(?:bê|bò|heo|lợn|gà)$/i.test(fullItem.productName.trim()) &&
+            /\b(?:bò|bê|heo|lợn|gà)\b/i.test(prefixDish);
+
+          if (isSingleMeatSub) {
+            const splitPrefix = splitProductNameAndInlineNote(
+              prefixDish,
+              existingProducts,
+              customCategories
+            );
+            const mergedNote = [splitPrefix.note, fullItem.productName, fullItem.note]
+              .filter(Boolean)
+              .join(', ');
+            fullItem.productName = splitPrefix.productName || prefixDish;
+            fullItem.note = mergedNote;
+            fullItem.category =
+              splitPrefix.category || inferCategory(fullItem.productName, customCategories);
+          } else {
+            // Standard wrapped dish name (e.g. "Bạch tuộc rang" + "mắm ớt", or "Tiger bạc lon nhỏ" + "250ml")
+            const combinedName = `${prefixDish} ${fullItem.productName}`
+              .replace(/\s+/g, ' ')
+              .trim();
+            const splitCombined = splitProductNameAndInlineNote(
+              combinedName,
+              existingProducts,
+              customCategories
+            );
+            fullItem.productName = splitCombined.productName || combinedName;
+            fullItem.note = [splitCombined.note, fullItem.note]
+              .filter(Boolean)
+              .join(', ');
+            fullItem.category =
+              splitCombined.category ||
+              inferCategory(fullItem.productName, customCategories);
+          }
         }
       }
 
@@ -1938,6 +2147,29 @@ export const parseInvoiceText = parseRawTextToBillJSON;
 export const parseBulkProductsInput = parseBulkProductsByLogic;
 
 export const SAMPLE_BILL_TEMPLATES = [
+  {
+    id: 'sample_vinh_quan_ban21_sync',
+    label: 'Mẫu Bill Vịnh Quán (Bàn 21 - Đồng bộ Mẫu rớt dòng & 1 dòng)',
+    description:
+      'Tự gộp dòng "Tên hàng Đ.Giá SL Thành / tiền", "Bạch tuộc rang / mắm ớt", "Tiger bạc lon nhỏ / 250ml" — Tổng: 762.000đ',
+    rawText: `VỊNH QUÁN
+ĐC: 131 Chu Huy Mân, Đà nẵng
+ĐT: 0702.444.449
+BÀN 21 PHIẾU TÍNH TIỀN
+108-18
+Giờ vào: 28/09/2026 16:51 Giờ in: 16:56
+Tên hàng Đ.Giá SL Thành
+tiền
+Bạch tuộc rang
+mắm ớt 119,000 x 1 119,000
+Bê non xào sả ớt 139,000 x 1 139,000
+Tiger bạc lon nhỏ
+250ml 21,000 x 24 504,000
+Tổng tiền hàng: 762,000
+Chiết khấu: 0
+Tổng Cộng: 762,000
+Cảm ơn quý khách và hẹn gặp lại !!!`,
+  },
   {
     id: 'sample_vinh_quan_ban18_discount',
     label: 'Mẫu Bill Vịnh Quán (Bàn 18 - Có Món Giảm Giá 43.89%)',
