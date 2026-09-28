@@ -14,6 +14,7 @@ import {
   CheckSquare,
   Square,
   Eye,
+  Package,
 } from 'lucide-react';
 import {
   BillItemRecord,
@@ -44,6 +45,7 @@ interface CategoryAnalyticsTabProps {
   onDeleteCategory: (categoryName: string) => Promise<void>;
   onDeleteAllMenuProducts: () => void;
   onDeleteCategoryMenuProducts: (category: string) => void;
+  onOpenInventoryTab?: () => void;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
 
@@ -88,6 +90,7 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
   onDeleteCategory,
   onDeleteAllMenuProducts,
   onDeleteCategoryMenuProducts,
+  onOpenInventoryTab,
   requestConfirm,
 }) => {
   const [metricMode, setMetricMode] = useState<'quantity' | 'revenue'>('quantity');
@@ -479,6 +482,16 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onOpenInventoryTab && (
+              <button
+                type="button"
+                onClick={onOpenInventoryTab}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <Package className="w-3.5 h-3.5 shrink-0" />
+                <span>Kho Đồ Uống & Tồn Kho</span>
+              </button>
+            )}
             {onChangePeriod && (
               <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full sm:w-auto">
                 <button

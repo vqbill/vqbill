@@ -536,42 +536,64 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
             </div>
 
             {/* Extra note or Return details if any */}
-            {(extraNote || billReturns.length > 0 || billDeductions.length > 0) && (
-              <div className="mt-3 pt-2.5 border-t border-dashed border-slate-300 text-[11px] text-slate-700 space-y-1">
-                {extraNote && (
-                  <div>
-                    <span className="font-bold">Ghi chú: </span>
-                    <span>{extraNote}</span>
-                  </div>
-                )}
-                {billReturns.map((r) => (
-                  <div
-                    key={r.id}
-                    className="flex items-center justify-between text-rose-700"
-                  >
-                    <span>
-                      • Hoàn trả: {r.productName} (x{r.quantity})
-                    </span>
-                    <span className="font-semibold">
-                      -{formatReceiptMoney(r.amount)}
-                    </span>
-                  </div>
-                ))}
-                {billDeductions.map((d) => (
-                  <div
-                    key={d.id}
-                    className="flex items-center justify-between text-rose-700"
-                  >
-                    <span>
-                      • Khoản trừ: {d.productName} (x{d.quantity})
-                    </span>
-                    <span className="font-semibold">
-                      -{formatReceiptMoney(d.amount)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+            {(() => {
+              const nonReturnDeductions = billDeductions.filter(
+                (d) =>
+                  d.billCode !== 'HOAN-TRA' &&
+                  !billReturns.some(
+                    (r) =>
+                      d.id === `ded_${r.id}` ||
+                      (d.amount === r.amount &&
+                        d.productName
+                          .toLowerCase()
+                          .includes(r.productName.toLowerCase()))
+                  )
+              );
+              if (
+                !extraNote &&
+                billReturns.length === 0 &&
+                nonReturnDeductions.length === 0
+              ) {
+                return null;
+              }
+              return (
+                <div className="mt-3 pt-2.5 border-t border-dashed border-slate-300 text-[11px] text-slate-700 space-y-1">
+                  {extraNote && (
+                    <div>
+                      <span className="font-bold">Ghi chú: </span>
+                      <span>{extraNote}</span>
+                    </div>
+                  )}
+                  {billReturns.map((r) => (
+                    <div
+                      key={r.id}
+                      className="flex items-center justify-between text-rose-700"
+                    >
+                      <span>
+                        • Hoàn trả (tính chung 1 dòng Khoản trừ ngày): {r.productName} (x
+                        {r.quantity})
+                      </span>
+                      <span className="font-semibold">
+                        -{formatReceiptMoney(r.amount)}
+                      </span>
+                    </div>
+                  ))}
+                  {nonReturnDeductions.map((d) => (
+                    <div
+                      key={d.id}
+                      className="flex items-center justify-between text-rose-700"
+                    >
+                      <span>
+                        • Khoản trừ: {d.productName} (x{d.quantity})
+                      </span>
+                      <span className="font-semibold">
+                        -{formatReceiptMoney(d.amount)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </div>
 

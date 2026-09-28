@@ -39,6 +39,7 @@ import {
   UploadCloud,
   DownloadCloud,
   Eye,
+  Boxes,
 } from 'lucide-react';
 import {
   auth,
@@ -69,6 +70,7 @@ import {
   DEFAULT_ROLE_PERMISSIONS,
   getEffectiveRolePermissions,
   sanitizeTabList,
+  WorkspaceInventoryData,
 } from './types';
 import {
   formatVND,
@@ -77,6 +79,9 @@ import {
   getCurrentBusinessDate,
   getYesterdayBusinessDate,
   reconstructBillItemsFromSummary,
+  extractBillTableName,
+  extractReturnTableName,
+  formatReturnDeductionTitle,
 } from './utils/parser';
 import {
   fetchGeminiStatus,
@@ -102,6 +107,8 @@ import {
   saveCategoriesToCloud,
   saveDebtorsToCloud,
   saveRolePermissionsToCloud,
+  saveInventoryDataToCloud,
+  buildInitialInventoryData,
   renameOrReassignCategoryInCloud,
   saveStaffAccountToFirebase,
   deleteStaffAccountsFromFirebase,
@@ -124,6 +131,7 @@ import { AuthScreen } from './components/AuthScreen';
 import { RevenueColumnChart, DailyRevenuePoint } from './components/RevenueCharts';
 import { OcrScannerTab } from './components/OcrScannerTab';
 import { CategoryAnalyticsTab } from './components/CategoryAnalyticsTab';
+import { BeverageInventoryTab } from './components/BeverageInventoryTab';
 import { DebtManagerTab } from './components/DebtManagerTab';
 import { ReturnsDeductionsTab } from './components/ReturnsDeductionsTab';
 import { ProductCatalogTab } from './components/ProductCatalogTab';
@@ -177,6 +185,9 @@ export default function App() {
             ? cached.categories
             : Array.from(STANDARD_CATEGORIES),
         rolePermissions: cached.rolePermissions || DEFAULT_ROLE_PERMISSIONS,
+        inventoryData:
+          cached.inventoryData ||
+          buildInitialInventoryData(todayStr, yesterdayStr),
         products: cached.products || [],
         bills: cached.bills || [],
         billItems: cached.billItems || [],
@@ -196,6 +207,7 @@ export default function App() {
       initialized: false,
       categories: Array.from(STANDARD_CATEGORIES),
       rolePermissions: DEFAULT_ROLE_PERMISSIONS,
+      inventoryData: buildInitialInventoryData(todayStr, yesterdayStr),
       products: seed.products,
       bills: seed.bills,
       billItems: seed.billItems,
@@ -232,6 +244,9 @@ export default function App() {
   );
   const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap>(
     initialWorkspaceData.rolePermissions
+  );
+  const [inventoryData, setInventoryData] = useState<WorkspaceInventoryData>(
+    initialWorkspaceData.inventoryData
   );
   const [products, setProducts] = useState<ProductRecord[]>(
     initialWorkspaceData.products
@@ -490,6 +505,9 @@ export default function App() {
       setWorkspaceInitialized(nextInit);
       setCategories(nextCats);
       setRolePermissions(nextRoles);
+      if (remoteSnap.inventoryData) {
+        setInventoryData(remoteSnap.inventoryData);
+      }
       setProducts(nextProducts);
       setBills(nextBills);
       setBillItems(nextBillItems);
@@ -505,6 +523,7 @@ export default function App() {
         initialized: nextInit,
         categories: nextCats,
         rolePermissions: nextRoles,
+        inventoryData: remoteSnap.inventoryData || inventoryData,
         products: nextProducts,
         bills: nextBills,
         billItems: nextBillItems,
@@ -608,6 +627,10 @@ export default function App() {
               localCached.rolePermissions ||
               bestRemote.rolePermissions ||
               DEFAULT_ROLE_PERMISSIONS,
+            inventoryData:
+              localCached.inventoryData ||
+              bestRemote.inventoryData ||
+              buildInitialInventoryData(todayStr, yesterdayStr),
             products: Array.from(mergedProdsMap.values()),
             bills: Array.from(mergedBillsMap.values()),
             billItems: Array.from(mergedItemsMap.values()),
@@ -722,6 +745,7 @@ export default function App() {
       initialized: workspaceInitialized,
       categories,
       rolePermissions,
+      inventoryData,
       products,
       bills,
       billItems,
@@ -783,6 +807,7 @@ export default function App() {
     workspaceInitialized,
     categories,
     rolePermissions,
+    inventoryData,
     products,
     bills,
     billItems,
@@ -875,6 +900,7 @@ export default function App() {
       initialized: true,
       categories,
       rolePermissions,
+      inventoryData,
       products,
       bills,
       billItems,
@@ -1052,11 +1078,15 @@ export default function App() {
           try {
             const parsed = JSON.parse(data.rolePermissionsJson);
             if (parsed && typeof parsed === 'object') {
+              const { _inventoryData, ...restRoles } = parsed;
               setRolePermissions((prev) => ({
                 ...DEFAULT_ROLE_PERMISSIONS,
                 ...prev,
-                ...parsed,
+                ...restRoles,
               }));
+              if (_inventoryData && typeof _inventoryData === 'object') {
+                setInventoryData(_inventoryData as WorkspaceInventoryData);
+              }
             }
           } catch {
             // ignore
@@ -1386,9 +1416,81 @@ export default function App() {
     return effectiveBillItems.filter((it) => periodBillIds.has(it.billId));
   }, [effectiveBillItems, periodBillIds]);
 
+  // Ensure every return is represented as a single unified cashflow line in Deductions (Khoản trừ)
+  const effectiveDeductions = useMemo<DeductionRecord[]>(() => {
+    const billMap = new Map(bills.map((b) => [b.id, b]));
+    const result = [...deductions];
+
+    for (const r of returns) {
+      const expectedDedId = sanitizeId(`ded_${r.id}`);
+      const alreadyLinkedIdx = result.findIndex(
+        (d) =>
+          d.id === expectedDedId ||
+          d.id === `ded_${r.id}` ||
+          (d.billId === r.billId &&
+            d.amount === r.amount &&
+            (d.billCode === 'HOAN-TRA' ||
+              d.productName.toLowerCase().includes(r.productName.toLowerCase())))
+      );
+
+      const parentBill = billMap.get(r.billId);
+      const tableName = extractReturnTableName(r.note, parentBill);
+      const formattedTitle = formatReturnDeductionTitle(
+        tableName,
+        r.productName,
+        r.quantity
+      );
+
+      if (alreadyLinkedIdx >= 0) {
+        const existing = result[alreadyLinkedIdx];
+        if (
+          existing.productName !== formattedTitle ||
+          existing.billCode !== 'HOAN-TRA'
+        ) {
+          result[alreadyLinkedIdx] = {
+            ...existing,
+            billCode: 'HOAN-TRA',
+            productName: formattedTitle,
+          };
+        }
+      } else {
+        const ts = r.createdAtMs || Date.now();
+        result.push({
+          id: expectedDedId,
+          ownerId: r.ownerId || ownerId,
+          billId: r.billId,
+          billCode: 'HOAN-TRA',
+          billDate: r.returnDate,
+          deductionDate: r.returnDate,
+          productName: formattedTitle,
+          category: r.category || 'Hoàn trả khách',
+          quantity: r.quantity,
+          unitPrice: r.unitPrice,
+          amount: r.amount,
+          note: r.note || '',
+          createdAtMs: ts,
+          updatedAtMs: ts,
+        });
+      }
+    }
+
+    return result.sort(
+      (a, b) =>
+        b.deductionDate.localeCompare(a.deductionDate) ||
+        b.createdAtMs - a.createdAtMs
+    );
+  }, [deductions, returns, bills, ownerId]);
+
   const periodDeductions = useMemo(() => {
-    return deductions.filter((d) => isDateInPeriod(d.deductionDate));
-  }, [deductions, periodPreset, customStartDate, customEndDate, todayStr, yesterdayStr]);
+    return effectiveDeductions.filter((d) => isDateInPeriod(d.deductionDate));
+  }, [
+    effectiveDeductions,
+    periodPreset,
+    customStartDate,
+    customEndDate,
+    todayStr,
+    yesterdayStr,
+  ]);
 
   // Advanced Filtered Bills for Table Display
   const displayedBills = useMemo(() => {
@@ -1476,7 +1578,7 @@ export default function App() {
     }
 
     for (const d of periodDeductions) {
-      const key = d.billDate || d.deductionDate;
+      const key = d.deductionDate || d.billDate;
       const cur = dateMap.get(key) || {
         cash: 0,
         transfer: 0,
@@ -2259,6 +2361,10 @@ export default function App() {
     });
 
     setReturns((prev) => [res.returnRecord, ...prev]);
+    setDeductions((prev) => [
+      res.linkedDeduction,
+      ...prev.filter((d) => d.id !== res.linkedDeduction.id),
+    ]);
     setBills((prev) =>
       prev.map((b) => (b.id === res.updatedBill.id ? res.updatedBill : b))
     );
@@ -2270,10 +2376,11 @@ export default function App() {
         prev.map((p) => (p.id === res.updatedProduct!.id ? res.updatedProduct! : p))
       );
     }
+    const tableName = extractBillTableName(params.bill);
     showToast(
-      `Đã ghi nhận hoàn trả ${params.returnQty} ${params.billItem.productName} (${formatVND(
+      `Đã hoàn trả ${params.returnQty} ${params.billItem.productName} (${tableName}) và tự động ghi vào Khoản trừ ngày ${params.returnDate} (-${formatVND(
         res.returnRecord.amount
-      )}) tại tab Hoàn trả (Không tự động cộng vào Khoản trừ)!`
+      )} · tính chung 1 dòng tiền duy nhất)!`
     );
   };
 
@@ -2281,18 +2388,111 @@ export default function App() {
     if (!canDelete || deductionIds.length === 0) return;
     setWorkspaceInitialized(true);
     const idSet = new Set(deductionIds);
+
+    // Check if any deleted deduction is linked to a customer return
+    const linkedReturnIds = new Set<string>();
+    for (const dId of deductionIds) {
+      if (dId.startsWith('ded_')) {
+        linkedReturnIds.add(dId.slice(4));
+      }
+    }
+    for (const r of returns) {
+      if (idSet.has(sanitizeId(`ded_${r.id}`)) || idSet.has(`ded_${r.id}`)) {
+        linkedReturnIds.add(r.id);
+      }
+    }
+
+    if (linkedReturnIds.size > 0) {
+      const removedReturns = returns.filter((r) => linkedReturnIds.has(r.id));
+      setReturns((prev) => prev.filter((r) => !linkedReturnIds.has(r.id)));
+      setBills((prev) =>
+        prev.map((b) => {
+          const bRets = removedReturns.filter((r) => r.billId === b.id);
+          if (bRets.length === 0) return b;
+          const totalRestored = bRets.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+          return {
+            ...b,
+            deductedAmount: Math.max(0, (b.deductedAmount || 0) - totalRestored),
+          };
+        })
+      );
+      setBillItems((prev) =>
+        prev.map((it) => {
+          const itRets = removedReturns.filter(
+            (r) =>
+              r.billId === it.billId &&
+              r.productName.toLowerCase().trim() ===
+                it.productName.toLowerCase().trim()
+          );
+          if (itRets.length === 0) return it;
+          const restoredQty = itRets.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+          return {
+            ...it,
+            returnedQuantity: Math.max(0, (it.returnedQuantity || 0) - restoredQty),
+          };
+        })
+      );
+    }
+
     setDeductions((prev) => prev.filter((d) => !idSet.has(d.id)));
     await deleteDeductionsBatchFromCloud(ownerId, deductionIds);
-    showToast(`Đã xóa ${deductionIds.length} khoản trừ khỏi Firebase.`);
+    showToast(`Đã xóa ${deductionIds.length} khoản trừ khỏi hệ thống.`);
   };
 
   const handleDeleteReturnsBatch = async (returnIds: string[]) => {
     if (!canDelete || returnIds.length === 0) return;
     setWorkspaceInitialized(true);
     const idSet = new Set(returnIds);
+    const removedReturns = returns.filter((r) => idSet.has(r.id));
+    const linkedDedIds = new Set(
+      returnIds.flatMap((id) => [`ded_${id}`, sanitizeId(`ded_${id}`)])
+    );
+
     setReturns((prev) => prev.filter((r) => !idSet.has(r.id)));
+    setDeductions((prev) =>
+      prev.filter((d) => {
+        if (linkedDedIds.has(d.id)) return false;
+        return !removedReturns.some(
+          (r) =>
+            d.billId === r.billId &&
+            d.amount === r.amount &&
+            (d.billCode === 'HOAN-TRA' ||
+              d.productName.toLowerCase().includes(r.productName.toLowerCase()))
+        );
+      })
+    );
+    setBills((prev) =>
+      prev.map((b) => {
+        const bRets = removedReturns.filter((r) => r.billId === b.id);
+        if (bRets.length === 0) return b;
+        const totalRestored = bRets.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+        return {
+          ...b,
+          deductedAmount: Math.max(0, (b.deductedAmount || 0) - totalRestored),
+        };
+      })
+    );
+    setBillItems((prev) =>
+      prev.map((it) => {
+        const itRets = removedReturns.filter(
+          (r) =>
+            r.billId === it.billId &&
+            r.productName.toLowerCase().trim() ===
+              it.productName.toLowerCase().trim()
+        );
+        if (itRets.length === 0) return it;
+        const restoredQty = itRets.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+        return {
+          ...it,
+          returnedQuantity: Math.max(0, (it.returnedQuantity || 0) - restoredQty),
+        };
+      })
+    );
+
     await deleteReturnsBatchFromCloud(ownerId, returnIds);
-    showToast(`Đã xóa ${returnIds.length} bản ghi hoàn trả khỏi Firebase.`);
+    showToast(
+      `Đã xóa ${returnIds.length} bản ghi hoàn trả và khoản trừ đi kèm khỏi hệ thống.`
+    );
   };
 
   // Product Catalog Handlers
@@ -2626,6 +2826,18 @@ export default function App() {
     });
   };
 
+  const handleSaveInventoryData = async (
+    nextData: WorkspaceInventoryData,
+    toastMsg?: string
+  ) => {
+    setWorkspaceInitialized(true);
+    setInventoryData(nextData);
+    await saveInventoryDataToCloud(ownerId, nextData, rolePermissions);
+    if (toastMsg) {
+      showToast(toastMsg);
+    }
+  };
+
   // If not logged in, render AuthScreen (without any sample quick-fill buttons)
   if (!currentStaffAccount) {
     return (
@@ -2663,6 +2875,12 @@ export default function App() {
       label: 'Số lượng theo Danh mục',
       shortLabel: 'Danh mục',
       icon: <Layers className="w-4 h-4" />,
+    },
+    {
+      id: 'inventory',
+      label: 'Kho Đồ Uống & Tồn Kho',
+      shortLabel: 'Kho đồ uống',
+      icon: <Boxes className="w-4 h-4" />,
     },
     {
       id: 'debts',
@@ -3658,6 +3876,37 @@ export default function App() {
               onAddCategory={handleAddCategory}
               onRenameCategory={handleRenameCategory}
               onDeleteCategory={handleDeleteCategory}
+              onOpenInventoryTab={
+                allowedTabs.includes('inventory')
+                  ? () => handleSelectTab('inventory')
+                  : undefined
+              }
+              requestConfirm={requestConfirm}
+            />
+          )}
+
+          {/* TAB 3B: BEVERAGE & BASIC INVENTORY MANAGEMENT */}
+          {activeTab === 'inventory' && allowedTabs.includes('inventory') && (
+            <BeverageInventoryTab
+              bills={bills}
+              billItems={effectiveBillItems}
+              products={products}
+              returns={returns}
+              categories={effectiveCategories}
+              inventoryData={inventoryData}
+              todayBusinessStr={todayStr}
+              yesterdayBusinessStr={yesterdayStr}
+              canWrite={canWrite}
+              canDelete={canDelete}
+              currentUsername={currentStaffAccount.username}
+              onSaveInventoryData={handleSaveInventoryData}
+              onAddOrUpdateProduct={handleAddOrUpdateProduct}
+              onAddExpenseDeduction={(payload) =>
+                handleAddExpenseDeduction({
+                  ...payload,
+                  expenseTitle: payload.productName,
+                })
+              }
               requestConfirm={requestConfirm}
             />
           )}
@@ -3694,7 +3943,7 @@ export default function App() {
               mode="deductions"
               bills={bills}
               billItems={effectiveBillItems}
-              deductions={deductions}
+              deductions={effectiveDeductions}
               returns={returns}
               canWrite={canWrite}
               canDelete={canDelete}
@@ -3715,7 +3964,7 @@ export default function App() {
               mode="returns"
               bills={bills}
               billItems={effectiveBillItems}
-              deductions={deductions}
+              deductions={effectiveDeductions}
               returns={returns}
               canWrite={canWrite}
               canDelete={canDelete}
@@ -4013,7 +4262,7 @@ export default function App() {
               items={effectiveBillItems.filter((it) => it.billId === liveBill.id)}
               products={products}
               billReturns={returns.filter((r) => r.billId === liveBill.id)}
-              billDeductions={deductions.filter((d) => d.billId === liveBill.id)}
+              billDeductions={effectiveDeductions.filter((d) => d.billId === liveBill.id)}
               canWrite={canWrite}
               canDelete={canDelete}
               canAccessReturns={allowedTabs.includes('returns')}

@@ -26,6 +26,10 @@ import {
   RolePermissionsMap,
   DEFAULT_ROLE_PERMISSIONS,
   sanitizeTabList,
+  WorkspaceInventoryData,
+  InventoryItemConfig,
+  DailyInventoryEntry,
+  InventoryImportLog,
 } from '../types';
 import {
   sanitizeId,
@@ -37,6 +41,9 @@ import {
   DEFAULT_CATALOG_PRODUCTS,
   extractReceiptOriginalPrice,
   reconstructBillItemsFromSummary,
+  extractBillTableName,
+  formatReturnDeductionTitle,
+  formatDateDMY,
 } from '../utils/parser';
 
 export const FIXED_ADMIN_USERNAME = 'admin';
@@ -260,6 +267,7 @@ export interface WorkspaceCacheSnapshot {
   categories?: string[];
   debtors?: string[];
   rolePermissions?: RolePermissionsMap;
+  inventoryData?: WorkspaceInventoryData;
   products: ProductRecord[];
   bills: BillRecord[];
   billItems: BillItemRecord[];
@@ -427,6 +435,7 @@ export async function saveWorkspaceMetaToFirestore(params: {
   categories?: string[];
   debtors?: string[];
   rolePermissions?: RolePermissionsMap;
+  inventoryData?: WorkspaceInventoryData;
   updatedBy?: string;
 }): Promise<void> {
   const wsId = SHARED_WORKSPACE_ID;
@@ -455,13 +464,25 @@ export async function saveWorkspaceMetaToFirestore(params: {
       50000,
       '[]'
     );
+
+    let existingRoleObj: any = DEFAULT_ROLE_PERMISSIONS;
+    if (existingData?.rolePermissionsJson) {
+      try {
+        existingRoleObj = JSON.parse(existingData.rolePermissionsJson);
+      } catch {
+        existingRoleObj = DEFAULT_ROLE_PERMISSIONS;
+      }
+    }
+    const mergedRolePayload: any = {
+      ...(params.rolePermissions ?? existingRoleObj),
+    };
+    const nextInv = params.inventoryData ?? existingRoleObj?._inventoryData;
+    if (nextInv) {
+      mergedRolePayload._inventoryData = nextInv;
+    }
+
     const rolePermissionsJson = truncateStr(
-      JSON.stringify(
-        params.rolePermissions ??
-          (existingData?.rolePermissionsJson
-            ? JSON.parse(existingData.rolePermissionsJson)
-            : DEFAULT_ROLE_PERMISSIONS)
-      ),
+      JSON.stringify(mergedRolePayload),
       50000,
       '{}'
     );
@@ -531,6 +552,7 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
     let categories: string[] | undefined;
     let debtors: string[] | undefined;
     let rolePermissions: RolePermissionsMap | undefined;
+    let inventoryData: WorkspaceInventoryData | undefined;
 
     if (metaData?.categoriesJson) {
       try {
@@ -551,7 +573,13 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
     if (metaData?.rolePermissionsJson) {
       try {
         const parsed = JSON.parse(metaData.rolePermissionsJson);
-        if (parsed && typeof parsed === 'object') rolePermissions = parsed;
+        if (parsed && typeof parsed === 'object') {
+          const { _inventoryData, ...restRoles } = parsed;
+          rolePermissions = restRoles as RolePermissionsMap;
+          if (_inventoryData && typeof _inventoryData === 'object') {
+            inventoryData = _inventoryData as WorkspaceInventoryData;
+          }
+        }
       } catch {
         // ignore
       }
@@ -706,6 +734,7 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
       categories,
       debtors,
       rolePermissions,
+      inventoryData,
       products,
       bills,
       billItems,
@@ -904,6 +933,7 @@ export async function syncFullSnapshotToFirestore(
       categories: snapshot.categories,
       debtors: snapshot.debtors,
       rolePermissions: snapshot.rolePermissions,
+      inventoryData: snapshot.inventoryData,
       updatedBy,
     });
 
@@ -947,6 +977,7 @@ export async function fetchRtdbWorkspaceOnce(
       categories: Array.isArray(val.categories) ? val.categories : undefined,
       debtors: Array.isArray(val.debtors) ? val.debtors : undefined,
       rolePermissions: val.role_permissions || undefined,
+      inventoryData: val.inventory_data || undefined,
       products: val.products ? Object.values(val.products) : [],
       bills: val.bills ? Object.values(val.bills) : [],
       billItems: val.bill_items ? Object.values(val.bill_items) : [],
@@ -984,6 +1015,20 @@ export async function saveRolePermissionsToCloud(
   const cleanOwner = sanitizeId(ownerId);
   await syncToRtdbSafe(`workspaces/${cleanOwner}/role_permissions`, rolePermissions);
   await saveWorkspaceMetaToFirestore({ ownerId: cleanOwner, rolePermissions });
+}
+
+export async function saveInventoryDataToCloud(
+  ownerId: string,
+  inventoryData: WorkspaceInventoryData,
+  rolePermissions?: RolePermissionsMap
+): Promise<void> {
+  const cleanOwner = sanitizeId(ownerId);
+  await syncToRtdbSafe(`workspaces/${cleanOwner}/inventory_data`, inventoryData);
+  await saveWorkspaceMetaToFirestore({
+    ownerId: cleanOwner,
+    inventoryData,
+    rolePermissions,
+  });
 }
 
 export function isFirestoreCloudActive(): boolean {
@@ -1789,15 +1834,24 @@ export async function deleteDeductionsBatchFromCloud(
   const cleanOwnerId = sanitizeId(ownerId);
   await markWorkspaceInitializedInCloud(cleanOwnerId);
 
+  const linkedReturnIds: string[] = [];
   for (const dId of deductionIds) {
     await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/deductions/${dId}`);
+    if (dId.startsWith('ded_ret_')) {
+      const retId = dId.replace(/^ded_/, '');
+      linkedReturnIds.push(retId);
+      await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/returns/${retId}`);
+    }
   }
 
   if (!isFirestoreCloudActive()) return;
 
   try {
     for (const dId of deductionIds) {
-      await deleteDoc(doc(db, 'deductions', dId));
+      await deleteDoc(doc(db, 'deductions', dId)).catch(() => {});
+    }
+    for (const retId of linkedReturnIds) {
+      await deleteDoc(doc(db, 'returns', retId)).catch(() => {});
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, 'deductions');
@@ -1810,10 +1864,12 @@ export async function recordItemReturnToCloud(params: {
   billItem: BillItemRecord;
   returnQty: number;
   returnDate: string;
+  tableName?: string;
   note: string;
   existingProduct?: ProductRecord;
 }): Promise<{
   returnRecord: ReturnRecord;
+  linkedDeduction: DeductionRecord;
   updatedBill: BillRecord;
   updatedBillItem: BillItemRecord;
   updatedProduct?: ProductRecord;
@@ -1824,6 +1880,7 @@ export async function recordItemReturnToCloud(params: {
     billItem,
     returnQty,
     returnDate,
+    tableName,
     note,
     existingProduct,
   } = params;
@@ -1835,7 +1892,30 @@ export async function recordItemReturnToCloud(params: {
     Math.max(1, billItem.quantity - billItem.returnedQuantity)
   );
   const refundAmount = safeQty * billItem.unitPrice;
+  const effReturnDate = /^\d{4}-\d{2}-\d{2}$/.test(returnDate)
+    ? returnDate
+    : getCurrentBusinessDate();
+
+  const cleanTableName = (
+    tableName?.trim() || extractBillTableName(bill, 'Bàn lẻ')
+  ).trim();
+
+  // Nội dung khoản trừ theo đúng yêu cầu: Số bàn, tên món và số lượng hoàn trả
+  const deductionTitle = formatReturnDeductionTitle(
+    cleanTableName,
+    billItem.productName,
+    safeQty
+  );
+
+  const rawNoteBody = (note || '').trim();
+  const noteWithTable = rawNoteBody
+    ? rawNoteBody.startsWith('[')
+      ? rawNoteBody
+      : `[${cleanTableName}] ${rawNoteBody}`
+    : `[${cleanTableName}] Khách trả lại ${safeQty} ${billItem.productName} (Bill ${bill.billCode} ngày ${formatDateDMY(bill.billDate)})`;
+
   const returnId = sanitizeId(`ret_${now}_${Math.random().toString(36).slice(2, 6)}`);
+  const linkedDeductionId = sanitizeId(`ded_${returnId}`);
 
   const returnRecord: ReturnRecord = {
     id: returnId,
@@ -1843,19 +1923,31 @@ export async function recordItemReturnToCloud(params: {
     billId: bill.id,
     billCode: bill.billCode,
     billDate: bill.billDate,
-    returnDate: /^\d{4}-\d{2}-\d{2}$/.test(returnDate)
-      ? returnDate
-      : getCurrentBusinessDate(),
+    returnDate: effReturnDate,
     productName: truncateStr(billItem.productName, 150, 'Món hoàn trả'),
     category: truncateStr(billItem.category, 80, 'Khác'),
     quantity: safeQty,
     unitPrice: billItem.unitPrice,
     amount: refundAmount,
-    note: truncateStr(
-      note || `Hoàn trả ${safeQty} ${billItem.productName} từ bill ${bill.billCode}`,
-      500,
-      ''
-    ),
+    note: truncateStr(noteWithTable, 500, ''),
+    createdAtMs: now,
+    updatedAtMs: now,
+  };
+
+  // Tiền hoàn trả và khoản trừ của hoàn trả đó được ghi nhận là 1 dòng tiền duy nhất trong Khoản trừ ngày
+  const linkedDeduction: DeductionRecord = {
+    id: linkedDeductionId,
+    ownerId: cleanOwnerId,
+    billId: bill.id,
+    billCode: truncateStr(bill.billCode || 'HOAN-TRA', 64, 'HOAN-TRA'),
+    billDate: effReturnDate,
+    deductionDate: effReturnDate,
+    productName: truncateStr(deductionTitle, 150, 'Hoàn trả khách'),
+    category: 'Hoàn trả khách',
+    quantity: safeQty,
+    unitPrice: billItem.unitPrice,
+    amount: refundAmount,
+    note: truncateStr(noteWithTable, 500, ''),
     createdAtMs: now,
     updatedAtMs: now,
   };
@@ -1866,7 +1958,6 @@ export async function recordItemReturnToCloud(params: {
     updatedAtMs: now,
   };
 
-  // Hoàn trả chỉ cập nhật thông tin trên Bill và Sản phẩm, KHÔNG tự động cộng vào Khoản trừ
   const updatedBill: BillRecord = {
     ...bill,
     deductedAmount: (bill.deductedAmount || 0) + refundAmount,
@@ -1885,6 +1976,10 @@ export async function recordItemReturnToCloud(params: {
 
   await markWorkspaceInitializedInCloud(cleanOwnerId);
   await syncToRtdbSafe(`workspaces/${cleanOwnerId}/returns/${returnRecord.id}`, returnRecord);
+  await syncToRtdbSafe(
+    `workspaces/${cleanOwnerId}/deductions/${linkedDeduction.id}`,
+    linkedDeduction
+  );
   await syncToRtdbSafe(
     `workspaces/${cleanOwnerId}/bill_items/${updatedBillItem.id}`,
     updatedBillItem
@@ -1911,6 +2006,22 @@ export async function recordItemReturnToCloud(params: {
         unitPrice: returnRecord.unitPrice,
         amount: returnRecord.amount,
         note: returnRecord.note,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      await setDoc(doc(db, 'deductions', linkedDeduction.id), {
+        ownerId: getFirestoreOwnerUid(linkedDeduction.ownerId),
+        billId: linkedDeduction.billId,
+        billCode: linkedDeduction.billCode,
+        billDate: linkedDeduction.billDate,
+        deductionDate: linkedDeduction.deductionDate,
+        productName: linkedDeduction.productName,
+        category: linkedDeduction.category,
+        quantity: linkedDeduction.quantity,
+        unitPrice: linkedDeduction.unitPrice,
+        amount: linkedDeduction.amount,
+        note: linkedDeduction.note,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -1943,6 +2054,7 @@ export async function recordItemReturnToCloud(params: {
 
   return {
     returnRecord,
+    linkedDeduction,
     updatedBill,
     updatedBillItem,
     updatedProduct,
@@ -1958,17 +2070,317 @@ export async function deleteReturnsBatchFromCloud(
 
   for (const rId of returnIds) {
     await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/returns/${rId}`);
+    await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/deductions/ded_${rId}`);
   }
 
   if (!isFirestoreCloudActive()) return;
 
   try {
     for (const rId of returnIds) {
-      await deleteDoc(doc(db, 'returns', rId));
+      await deleteDoc(doc(db, 'returns', rId)).catch(() => {});
+      await deleteDoc(doc(db, 'deductions', `ded_${rId}`)).catch(() => {});
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, 'returns');
   }
+}
+
+export function buildInitialInventoryData(
+  todayInput?: string,
+  yesterdayInput?: string
+): WorkspaceInventoryData {
+  const now = Date.now();
+  const today = todayInput || getCurrentBusinessDate();
+  const yesterday =
+    yesterdayInput || new Date(now - 86400000).toISOString().slice(0, 10);
+
+  const itemConfigs: Record<string, InventoryItemConfig> = {
+    'bia tiger lùn': {
+      productName: 'Bia Tiger Lùn',
+      category: 'Bia',
+      unit: 'Lon',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 16500,
+    },
+    'bia sài gòn special': {
+      productName: 'Bia Sài Gòn Special',
+      category: 'Bia',
+      unit: 'Lon',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 13500,
+    },
+    'bia heineken silver': {
+      productName: 'Bia Heineken Silver',
+      category: 'Bia',
+      unit: 'Lon',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 19000,
+    },
+    'bia budweiser': {
+      productName: 'Bia Budweiser',
+      category: 'Bia',
+      unit: 'Lon',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 19500,
+    },
+    'bia larue': {
+      productName: 'Bia Larue',
+      category: 'Bia',
+      unit: 'Lon',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 11500,
+    },
+    'nước ngọt redbull': {
+      productName: 'Nước ngọt Redbull',
+      category: 'Nước ngọt',
+      unit: 'Lon',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 11000,
+    },
+    'coca cola': {
+      productName: 'Coca Cola',
+      category: 'Nước ngọt',
+      unit: 'Lon',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 9000,
+    },
+    'nước ngọt pepsi': {
+      productName: 'Nước ngọt Pepsi',
+      category: 'Nước ngọt',
+      unit: 'Lon',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 9000,
+    },
+    'nước suối aquafina': {
+      productName: 'Nước suối Aquafina',
+      category: 'Nước ngọt',
+      unit: 'Chai',
+      packSize: 24,
+      minStockThreshold: 24,
+      costPrice: 4500,
+    },
+    'khăn lạnh': {
+      productName: 'Khăn lạnh',
+      category: 'Nước ngọt',
+      unit: 'Cái',
+      packSize: 50,
+      minStockThreshold: 50,
+      costPrice: 1000,
+    },
+  };
+
+  const yesterdayEntries: Record<string, DailyInventoryEntry> = {
+    'bia tiger lùn': {
+      openingStock: 72,
+      importedQty: 40,
+      damagedQty: 0,
+      actualClosingStock: 72,
+      updatedAtMs: now - 86400000,
+    },
+    'bia sài gòn special': {
+      openingStock: 48,
+      importedQty: 30,
+      damagedQty: 0,
+      actualClosingStock: 48,
+      updatedAtMs: now - 86400000,
+    },
+    'bia heineken silver': {
+      openingStock: 48,
+      importedQty: 24,
+      damagedQty: 0,
+      actualClosingStock: 48,
+      updatedAtMs: now - 86400000,
+    },
+    'bia budweiser': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: 48,
+      updatedAtMs: now - 86400000,
+    },
+    'bia larue': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: 48,
+      updatedAtMs: now - 86400000,
+    },
+    'nước ngọt redbull': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: 48,
+      updatedAtMs: now - 86400000,
+    },
+    'coca cola': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: 48,
+      updatedAtMs: now - 86400000,
+    },
+    'nước ngọt pepsi': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: 48,
+      updatedAtMs: now - 86400000,
+    },
+    'nước suối aquafina': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: 48,
+      updatedAtMs: now - 86400000,
+    },
+    'khăn lạnh': {
+      openingStock: 150,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: 150,
+      updatedAtMs: now - 86400000,
+    },
+  };
+
+  const todayEntries: Record<string, DailyInventoryEntry> = {
+    'bia tiger lùn': {
+      openingStock: 72, // 3 thùng tồn đầu ca
+      importedQty: 48, // Nhập thêm 2 thùng (48 lon)
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'bia sài gòn special': {
+      openingStock: 48, // 2 thùng tồn đầu
+      importedQty: 24, // Nhập thêm 1 thùng (24 lon)
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'bia heineken silver': {
+      openingStock: 48, // 2 thùng tồn đầu
+      importedQty: 48, // Nhập thêm 2 thùng (48 lon)
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'bia budweiser': {
+      openingStock: 48, // 2 thùng tồn đầu -> bán 30 lon còn 18 lon (Cảnh báo sắp hết < 24!)
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'bia larue': {
+      openingStock: 48, // 2 thùng tồn đầu
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'nước ngọt redbull': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'coca cola': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'nước ngọt pepsi': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'nước suối aquafina': {
+      openingStock: 48,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+    'khăn lạnh': {
+      openingStock: 150,
+      importedQty: 0,
+      damagedQty: 0,
+      actualClosingStock: null,
+      updatedAtMs: now - 3600000,
+    },
+  };
+
+  const importLogs: InventoryImportLog[] = [
+    {
+      id: 'inv_log_seed_1',
+      date: today,
+      createdAtMs: now - 14400000,
+      productName: 'Bia Tiger Lùn',
+      category: 'Bia',
+      type: 'import',
+      quantity: 48,
+      packCount: 2,
+      packSize: 24,
+      unitCost: 16500,
+      totalCost: 792000,
+      supplierOrNote: 'Đại lý Bia Minh Phát giao đầu ca trưa (2 thùng)',
+      createdBy: 'quanly',
+    },
+    {
+      id: 'inv_log_seed_2',
+      date: today,
+      createdAtMs: now - 14000000,
+      productName: 'Bia Heineken Silver',
+      category: 'Bia',
+      type: 'import',
+      quantity: 48,
+      packCount: 2,
+      packSize: 24,
+      unitCost: 19000,
+      totalCost: 912000,
+      supplierOrNote: 'Đại lý Bia Minh Phát giao đầu ca trưa (2 thùng)',
+      createdBy: 'quanly',
+    },
+    {
+      id: 'inv_log_seed_3',
+      date: today,
+      createdAtMs: now - 13800000,
+      productName: 'Bia Sài Gòn Special',
+      category: 'Bia',
+      type: 'import',
+      quantity: 24,
+      packCount: 1,
+      packSize: 24,
+      unitCost: 13500,
+      totalCost: 324000,
+      supplierOrNote: 'Nhập bổ sung 1 thùng Sài Gòn Special',
+      createdBy: 'quanly',
+    },
+  ];
+
+  return {
+    trackedCategories: ['Bia', 'Nước ngọt'],
+    itemConfigs,
+    dailyEntries: {
+      [yesterday]: yesterdayEntries,
+      [today]: todayEntries,
+    },
+    importLogs,
+    updatedAtMs: now,
+  };
 }
 
 export function buildInitialSeedDataset(ownerId: string): {
@@ -2091,7 +2503,7 @@ export function buildInitialSeedDataset(ownerId: string): {
       paymentType: 'debt',
       debtorName: 'Anh Tuấn (Đội Công Trình Số 5)',
       debtStatus: 'unpaid',
-      note: 'Ghi nợ khách quen - Hẹn cuối tuần thanh toán',
+      note: 'Bàn 05 - Ghi nợ khách quen - Hẹn cuối tuần thanh toán',
       items: [
         { name: 'Bia Budweiser', qty: 30, price: 26000 },
         { name: 'Nước ngọt Pepsi', qty: 10, price: 15000 },
@@ -2139,7 +2551,7 @@ export function buildInitialSeedDataset(ownerId: string): {
       paymentType: 'debt',
       debtorName: 'Chị Lan (Văn phòng BĐS Hùng Vương)',
       debtStatus: 'unpaid',
-      note: 'Ký nợ tiếp khách đối tác Bàn VIP 2',
+      note: 'Bàn VIP 2 - Ký nợ tiếp khách đối tác',
       items: [
         { name: 'Bia Heineken Silver', qty: 24, price: 25000 },
         { name: 'Tôm sú hấp bia', qty: 3, price: 250000 },
@@ -2154,7 +2566,7 @@ export function buildInitialSeedDataset(ownerId: string): {
       paymentType: 'transfer',
       debtorName: '',
       debtStatus: 'none',
-      note: 'Chuyển khoản QR',
+      note: 'Bàn 06 - Chuyển khoản QR',
       items: [
         { name: 'Bia Tiger Lùn', qty: 50, price: 22000 },
         { name: 'Ếch chiên bơ', qty: 5, price: 125000 },
@@ -2169,7 +2581,7 @@ export function buildInitialSeedDataset(ownerId: string): {
       paymentType: 'cash',
       debtorName: '',
       debtStatus: 'none',
-      note: 'Tiền mặt ca tối',
+      note: 'Bàn 09 - Tiền mặt ca tối',
       items: [
         { name: 'Bia Sài Gòn Special', qty: 45, price: 18000 },
         { name: 'Ếch rơm', qty: 4, price: 140000 },
@@ -2250,7 +2662,7 @@ export function buildInitialSeedDataset(ownerId: string): {
     tigerProd.totalRevenue -= 6 * 22000;
   }
 
-  // Khoản trừ trong ngày (nhập thủ công: mua rau, bánh mì, nguyên liệu, bồi hoàn...)
+  // Khoản trừ trong ngày (nhập thủ công + khoản trừ hoàn trả khách tính chung 1 dòng tiền duy nhất)
   deductions.push(
     {
       id: 'ded_seed_expense_1',
@@ -2283,10 +2695,26 @@ export function buildInitialSeedDataset(ownerId: string): {
       note: 'Thanh toán tiền giao 10 bao đá bi và than củi',
       createdAtMs: now - 1800000,
       updatedAtMs: now - 1800000,
+    },
+    {
+      id: 'ded_ret_seed_today_1',
+      ownerId: cleanOwner,
+      billId: 'bill_seed_today_1',
+      billCode: 'HD-HOMNAY-01',
+      billDate: today,
+      deductionDate: today,
+      productName: 'Bàn VIP 1 & VIP 2 - Bia Tiger Lùn - SL hoàn trả: 6',
+      category: 'Hoàn trả khách',
+      quantity: 6,
+      unitPrice: 22000,
+      amount: 132000,
+      note: '[Bàn VIP 1 & VIP 2] Khách trả lại 6 lon Bia Tiger Lùn chưa khui cuối buổi',
+      createdAtMs: now - 1500000,
+      updatedAtMs: now - 1500000,
     }
   );
 
-  // Hoàn trả (khách trả bia thừa / món thừa - tách riêng với khoản trừ)
+  // Hoàn trả (khách trả bia thừa / món thừa - liên kết 1-1 với ded_ret_seed_today_1 thành 1 dòng tiền duy nhất)
   returns.push({
     id: 'ret_seed_today_1',
     ownerId: cleanOwner,
@@ -2299,7 +2727,7 @@ export function buildInitialSeedDataset(ownerId: string): {
     quantity: 6,
     unitPrice: 22000,
     amount: 132000,
-    note: 'Khách bàn VIP 1 trả lại 6 lon Bia Tiger Lùn chưa khui cuối buổi',
+    note: '[Bàn VIP 1 & VIP 2] Khách trả lại 6 lon Bia Tiger Lùn chưa khui cuối buổi',
     createdAtMs: now - 1500000,
     updatedAtMs: now - 1500000,
   });

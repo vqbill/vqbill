@@ -10,6 +10,7 @@ export type ManagementTabId =
   | 'dashboard'
   | 'ocr'
   | 'categories'
+  | 'inventory'
   | 'debts'
   | 'deductions'
   | 'returns'
@@ -48,6 +49,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
       'Thống kê số lượng bán (bao gồm cả món trong bill công nợ), hoàn trả và doanh thu theo danh mục',
   },
   {
+    id: 'inventory',
+    label: 'Kho Đồ Uống & Tồn Kho',
+    shortLabel: 'Kho đồ uống',
+    description:
+      'Quản lý tồn đầu, nhập thêm bia/nước ngọt trong ngày, tự động trừ lượng thực bán (đã trừ hoàn trả), kiểm thực tế cuối ca & cảnh báo sắp hết hàng',
+  },
+  {
     id: 'debts',
     label: 'Quản lý Công nợ',
     shortLabel: 'Công nợ',
@@ -59,14 +67,14 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     label: 'Khoản trừ (Chi trong ngày)',
     shortLabel: 'Khoản trừ',
     description:
-      'Ghi nhận các khoản tiền chi ra trong ngày (mua bánh mì, mua rau, nguyên liệu, bồi hoàn khách...) trừ vào doanh thu ngày',
+      'Xem theo ngày/hôm qua/hôm nay/tuần/tháng các khoản chi trong ngày và tiền hoàn trả khách (tính chung 1 dòng tiền duy nhất)',
   },
   {
     id: 'returns',
     label: 'Hoàn trả (Trả bia / món thừa)',
     shortLabel: 'Hoàn trả',
     description:
-      'Ghi nhận khách trả lại bia thừa, món thừa theo hóa đơn (không tự động cộng vào Khoản trừ chi tiêu ngày)',
+      'Chọn hóa đơn theo Ngày tháng - Số bàn, ghi nhận trả bia/món thừa và tự động tính vào Khoản trừ trong ngày (1 dòng tiền duy nhất)',
   },
   {
     id: 'products',
@@ -102,6 +110,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'dashboard',
       'ocr',
       'categories',
+      'inventory',
       'debts',
       'deductions',
       'returns',
@@ -119,6 +128,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'dashboard',
       'ocr',
       'categories',
+      'inventory',
       'debts',
       'deductions',
       'returns',
@@ -131,7 +141,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.CASHIER]: {
     role: UserRole.CASHIER,
-    allowedTabs: ['dashboard', 'ocr', 'debts', 'deductions', 'returns'],
+    allowedTabs: ['dashboard', 'ocr', 'inventory', 'debts', 'deductions', 'returns'],
     canWrite: true,
     canDelete: false,
     restrictProductCategories: false,
@@ -139,7 +149,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.VIEWER]: {
     role: UserRole.VIEWER,
-    allowedTabs: ['dashboard', 'categories', 'debts', 'deductions', 'returns'],
+    allowedTabs: ['dashboard', 'categories', 'inventory', 'debts', 'deductions', 'returns'],
     canWrite: false,
     canDelete: false,
     restrictProductCategories: false,
@@ -147,8 +157,8 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.INVENTORY]: {
     role: UserRole.INVENTORY,
-    allowedTabs: ['categories'],
-    canWrite: false,
+    allowedTabs: ['categories', 'inventory'],
+    canWrite: true,
     canDelete: false,
     restrictProductCategories: false,
     allowedProductCategories: [],
@@ -288,6 +298,49 @@ export interface ReturnRecord {
   updatedAtMs: number;
 }
 
+export interface InventoryItemConfig {
+  productName: string;
+  category: string;
+  unit: string;
+  packSize: number; // Số lon/chai trên 1 thùng/két (mặc định 24 cho Bia/Nước ngọt)
+  minStockThreshold: number; // Định mức cảnh báo sắp hết hàng (mặc định 24)
+  costPrice?: number; // Giá vốn nhập 1 lon/chai (tùy chọn)
+}
+
+export interface DailyInventoryEntry {
+  openingStock: number; // Tồn đầu ngày / đầu ca
+  importedQty: number; // Nhập thêm trong ngày
+  damagedQty: number; // Xuất hủy / vỡ / nội bộ
+  actualClosingStock?: number | null; // Kiểm đếm thực tế cuối ca (null nếu chưa kiểm)
+  note?: string;
+  updatedAtMs: number;
+  updatedBy?: string;
+}
+
+export interface InventoryImportLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  createdAtMs: number;
+  productName: string;
+  category: string;
+  type: 'import' | 'damaged' | 'adjust_opening';
+  quantity: number; // Tổng số lượng đơn vị lẻ (lon/chai)
+  packCount?: number; // Số thùng/két
+  packSize?: number; // Quy cách thùng
+  unitCost?: number;
+  totalCost?: number;
+  supplierOrNote: string;
+  createdBy: string;
+}
+
+export interface WorkspaceInventoryData {
+  trackedCategories: string[]; // Mặc định ['Bia', 'Nước ngọt']
+  itemConfigs: Record<string, InventoryItemConfig>; // key = lowercase productName
+  dailyEntries: Record<string, Record<string, DailyInventoryEntry>>; // date -> lowercase productName
+  importLogs: InventoryImportLog[];
+  updatedAtMs: number;
+}
+
 export interface StaffAccount {
   id: string;
   ownerId?: string;
@@ -409,7 +462,7 @@ export function getEffectiveRolePermissions(
     tabs = customTabs;
   }
 
-  // Primary admin account always retains access to 'accounts' tab so Admin cannot lock themselves out
+  // Primary admin account always retains access to 'accounts' and 'inventory' tabs so Admin cannot lock themselves out
   const isAdminAccount =
     account.username === 'admin' || account.role === UserRole.ADMIN;
 
@@ -417,6 +470,20 @@ export function getEffectiveRolePermissions(
     if (!tabs.includes('accounts')) {
       tabs = [...tabs, 'accounts'];
     }
+    if (!tabs.includes('inventory')) {
+      tabs = [...tabs, 'inventory'];
+    }
+  } else if (
+    !useCustom &&
+    (tabs.includes('categories') ||
+      account.role === UserRole.MANAGER ||
+      account.role === UserRole.CASHIER ||
+      account.role === UserRole.INVENTORY ||
+      account.role === UserRole.VIEWER) &&
+    !tabs.includes('inventory')
+  ) {
+    // Ensure existing cached roles automatically receive the new 'inventory' tab
+    tabs = [...tabs, 'inventory'];
   }
 
   if (tabs.length === 0) {

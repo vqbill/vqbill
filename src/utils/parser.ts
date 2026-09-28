@@ -39,6 +39,82 @@ export function formatDateDMY(ymd?: string): string {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
+export function extractBillTableName(
+  bill?: Partial<BillRecord> | null,
+  fallback = 'Bàn lẻ'
+): string {
+  if (!bill) return fallback;
+  const directTable = String((bill as any).tableName || '').trim();
+  if (directTable) return directTable;
+
+  const rawNote = (bill.note || '').trim();
+  if (rawNote) {
+    // 1. Check if note starts with a segment before " - " or " · " that represents a table/room
+    const firstSegment = rawNote.split(/\s*(?:\-|–|—|·|\|)\s*/)[0]?.trim() || '';
+    if (
+      firstSegment &&
+      (/(?:^|\b)(?:bàn|ban|vip|phòng|phong|sân|chòi|khu|lầu|tầng)\b/i.test(
+        firstSegment
+      ) ||
+        firstSegment.length <= 16)
+    ) {
+      return firstSegment;
+    }
+
+    // 2. Search anywhere in note for "Bàn ...", "VIP ...", "Phòng ..."
+    const tableMatch = rawNote.match(
+      /((?:bàn|ban|phòng|phong|vip|chòi|sân vườn)\s*(?:vip\s*|sân vườn\s*)?[a-zA-Z0-9]+(?:\s*(?:&|\+|và)\s*(?:bàn\s*|vip\s*)?[a-zA-Z0-9]+)*)/i
+    );
+    if (tableMatch && tableMatch[1]) {
+      const matched = tableMatch[1].trim();
+      return matched.charAt(0).toUpperCase() + matched.slice(1);
+    }
+  }
+
+  if (bill.debtorName && bill.debtorName.trim()) {
+    return `Bàn (${bill.debtorName.trim()})`;
+  }
+
+  return fallback;
+}
+
+export function extractReturnTableName(
+  returnNote?: string,
+  bill?: Partial<BillRecord> | null,
+  fallback = 'Bàn lẻ'
+): string {
+  const note = (returnNote || '').trim();
+  if (note) {
+    const bracketMatch = note.match(/^\[([^\]]+)\]/);
+    if (bracketMatch && bracketMatch[1]) {
+      return bracketMatch[1].trim();
+    }
+    const tableMatch = note.match(
+      /((?:bàn|ban|phòng|phong|vip|chòi|sân vườn)\s*(?:vip\s*|sân vườn\s*)?[a-zA-Z0-9]+(?:\s*(?:&|\+|và)\s*(?:bàn\s*|vip\s*)?[a-zA-Z0-9]+)*)/i
+    );
+    if (tableMatch && tableMatch[1]) {
+      const matched = tableMatch[1].trim();
+      return matched.charAt(0).toUpperCase() + matched.slice(1);
+    }
+  }
+  return extractBillTableName(bill, fallback);
+}
+
+/**
+ * Định dạng nội dung Khoản trừ từ Hoàn trả khách theo đúng trình tự:
+ * Số bàn, tên món và số lượng hoàn trả
+ */
+export function formatReturnDeductionTitle(
+  tableName: string,
+  productName: string,
+  quantity: number
+): string {
+  const cleanTable = (tableName || 'Bàn lẻ').trim();
+  const cleanProd = (productName || 'Món hoàn trả').trim();
+  const safeQty = Math.max(1, Math.round(Number(quantity) || 1));
+  return `${cleanTable} - ${cleanProd} - SL hoàn trả: ${safeQty}`;
+}
+
 export function formatLocalYMD(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');

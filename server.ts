@@ -31,6 +31,7 @@ interface ServerCloudWorkspace {
   categories?: string[];
   debtors?: string[];
   rolePermissions?: Record<string, any>;
+  inventoryData?: any;
   products: any[];
   bills: any[];
   billItems: any[];
@@ -60,6 +61,7 @@ function loadCloudWorkspaceFromDisk(): ServerCloudWorkspace {
             categories: Array.isArray(parsed.categories) ? parsed.categories : undefined,
             debtors: Array.isArray(parsed.debtors) ? parsed.debtors : undefined,
             rolePermissions: parsed.rolePermissions || undefined,
+            inventoryData: parsed.inventoryData || undefined,
             products: Array.isArray(parsed.products) ? parsed.products : [],
             bills: Array.isArray(parsed.bills) ? parsed.bills : [],
             billItems: Array.isArray(parsed.billItems) ? parsed.billItems : [],
@@ -561,6 +563,8 @@ app.post('/api/workspace', (req, res) => {
               : cloudWorkspace.debtors,
             rolePermissions:
               snapshot.rolePermissions || cloudWorkspace.rolePermissions,
+            inventoryData:
+              snapshot.inventoryData || cloudWorkspace.inventoryData,
             products: Array.isArray(snapshot.products) ? snapshot.products : [],
             bills: Array.isArray(snapshot.bills) ? snapshot.bills : [],
             billItems: Array.isArray(snapshot.billItems) ? snapshot.billItems : [],
@@ -643,6 +647,8 @@ app.post('/api/workspace', (req, res) => {
               mergedDebtors.length > 0 ? mergedDebtors : cloudWorkspace.debtors,
             rolePermissions:
               cloudWorkspace.rolePermissions || snapshot.rolePermissions,
+            inventoryData:
+              cloudWorkspace.inventoryData || snapshot.inventoryData,
             products: mergedProducts,
             bills: mergedBills,
             billItems: mergedBillItems,
@@ -670,6 +676,8 @@ app.post('/api/workspace', (req, res) => {
           : cloudWorkspace.debtors,
         rolePermissions:
           snapshot.rolePermissions || cloudWorkspace.rolePermissions,
+        inventoryData:
+          snapshot.inventoryData || cloudWorkspace.inventoryData,
         products: Array.isArray(snapshot.products)
           ? snapshot.products
           : cloudWorkspace.products,
