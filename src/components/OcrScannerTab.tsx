@@ -25,6 +25,7 @@ import {
   ConfirmRequestOptions,
   ProductRecord,
   GeminiKeyStatus,
+  BillRecord,
 } from '../types';
 import {
   formatVND,
@@ -61,7 +62,7 @@ interface OcrScannerTabProps {
     debtorName: string;
     note: string;
     items: ExtractedBillItem[];
-  }) => Promise<void>;
+  }) => Promise<BillRecord | void>;
   onDeleteAllMenuProducts: () => void;
   menuProductsCount: number;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
@@ -89,7 +90,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [inputMode, setInputMode] = useState<'image' | 'text'>('text');
-  const [rawText, setRawText] = useState<string>(SAMPLE_BILL_TEMPLATES[0].rawText);
+  const [rawText, setRawText] = useState<string>('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageMimeType, setImageMimeType] = useState<string>('image/jpeg');
   const [quickAiItemPrompt, setQuickAiItemPrompt] = useState<string>('');
@@ -100,47 +101,60 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [copiedJson, setCopiedJson] = useState(false);
+  const [savedBillPopup, setSavedBillPopup] = useState<{
+    billCode: string;
+    billDate: string;
+    checkInTime?: string;
+    checkOutTime?: string;
+    tableName?: string;
+    note?: string;
+    itemCount: number;
+    totalQuantity: number;
+    subtotalAmount: number;
+    discountAmount: number;
+    totalAmount: number;
+    paymentType: PaymentType;
+    debtorName?: string;
+  } | null>(null);
 
-  // Editable Bill State
-  const initialParsed = useRef<ExtractedBillJSON | null>(null);
-  if (!initialParsed.current) {
-    initialParsed.current = parseRawTextToBillJSON(
-      SAMPLE_BILL_TEMPLATES[0].rawText,
-      todayBusinessStr,
-      products,
-      categories
-    );
-  }
-
-  const [billDate, setBillDate] = useState<string>(
-    initialParsed.current.billInfo.billDate || todayBusinessStr
-  );
+  const [billDate, setBillDate] = useState<string>(todayBusinessStr);
   const [rawCalendarDate, setRawCalendarDate] = useState<string | undefined>(
-    initialParsed.current.billInfo.rawDate
+    undefined
   );
-  const [checkInTime, setCheckInTime] = useState<string>(
-    initialParsed.current.billInfo.checkInTime || ''
-  );
-  const [checkOutTime, setCheckOutTime] = useState<string>(
-    initialParsed.current.billInfo.checkOutTime || ''
-  );
-  const [tableName, setTableName] = useState<string>(
-    initialParsed.current.billInfo.tableName || ''
-  );
-  const [discountAmount, setDiscountAmount] = useState<number>(
-    initialParsed.current.billInfo.discountAmount || 0
-  );
-  const [paymentType, setPaymentType] = useState<PaymentType>(
-    initialParsed.current.billInfo.paymentType || 'cash'
-  );
-  const [debtorName, setDebtorName] = useState<string>(
-    initialParsed.current.billInfo.debtorName || ''
-  );
+  const [checkInTime, setCheckInTime] = useState<string>('');
+  const [checkOutTime, setCheckOutTime] = useState<string>('');
+  const [tableName, setTableName] = useState<string>('');
+  const [discountAmount, setDiscountAmount] = useState<number>(0);
+  const [paymentType, setPaymentType] = useState<PaymentType>('cash');
+  const [debtorName, setDebtorName] = useState<string>('');
   const [debtorSelectMode, setDebtorSelectMode] = useState<'existing' | 'new'>('new');
   const [note, setNote] = useState<string>('');
-  const [items, setItems] = useState<ExtractedBillItem[]>(
-    initialParsed.current.items
-  );
+  const [items, setItems] = useState<ExtractedBillItem[]>([]);
+
+  const clearAllBillInputs = () => {
+    const freshToday = getCurrentBusinessDate();
+    setRawText('');
+    setImagePreview(null);
+    setImageMimeType('image/jpeg');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    setBillDate(freshToday);
+    setRawCalendarDate(undefined);
+    setCheckInTime('');
+    setCheckOutTime('');
+    setTableName('');
+    setDiscountAmount(0);
+    setPaymentType('cash');
+    setDebtorName('');
+    setDebtorSelectMode('new');
+    setNote('');
+    setQuickAiItemPrompt('');
+    setItems([]);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setShowJsonPreview(false);
+  };
 
   const subtotalAmount = items.reduce(
     (sum, it) => sum + Math.round((it.quantity || 0) * (it.unitPrice || 0)),
@@ -574,7 +588,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setTimeout(() => setCopiedJson(false), 2000);
   };
 
-  const handleSaveBill = () => {
+  const handleSaveBill = async () => {
     if (!canWrite) {
       setErrorMsg('Tài khoản của bạn ở chế độ Chỉ xem, không có quyền lưu hóa đơn.');
       return;
@@ -590,47 +604,52 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     }
 
     const finalNote = [tableName.trim(), note.trim()].filter(Boolean).join(' - ');
+    const snapshotPopup = {
+      billCode: `HD-${billDate.replace(/-/g, '').slice(2)}`,
+      billDate,
+      checkInTime: checkInTime.trim() || undefined,
+      checkOutTime: checkOutTime.trim() || undefined,
+      tableName: tableName.trim() || undefined,
+      note: finalNote || undefined,
+      itemCount: validItems.length,
+      totalQuantity: validItems.reduce((s, it) => s + (Number(it.quantity) || 1), 0),
+      subtotalAmount,
+      discountAmount: safeDiscount,
+      totalAmount,
+      paymentType,
+      debtorName: paymentType === 'debt' ? debtorName.trim() : undefined,
+    };
 
-    requestConfirm({
-      title: 'Xác nhận Lưu Hóa Đơn Vào Hệ Thống',
-      message: `Bạn có chắc chắn muốn lưu hóa đơn ca ngày ${billDate}${
-        tableName.trim() ? ` (${tableName.trim()})` : ''
-      } (${validItems.length} món, Chiết khấu: ${formatVND(safeDiscount)}, Tổng cộng: ${formatVND(
-        totalAmount
-      )}, Hình thức: ${PAYMENT_LABELS[paymentType]}${
-        paymentType === 'debt' ? ` - Người nợ: ${debtorName.trim()}` : ''
-      }) vào Firebase và cộng số lượng bán theo thời gian thực không?`,
-      confirmLabel: 'Xác nhận Lưu Bill',
-      variant: 'primary',
-      onConfirm: async () => {
-        setIsSaving(true);
-        setErrorMsg(null);
-        try {
-          await onSaveExtractedBill({
-            billDate,
-            rawDate: rawCalendarDate,
-            checkInTime: checkInTime.trim() || undefined,
-            checkOutTime: checkOutTime.trim() || undefined,
-            discountAmount: safeDiscount,
-            paymentType,
-            debtorName: paymentType === 'debt' ? debtorName.trim() : '',
-            note: finalNote,
-            items: validItems,
-          });
-          setSuccessMsg(
-            `Đã lưu hóa đơn ca ngày ${billDate}${
-              tableName.trim() ? ` (${tableName.trim()})` : ''
-            } (Tổng cộng: ${formatVND(totalAmount)}, Hình thức: ${
-              PAYMENT_LABELS[paymentType]
-            }) vào Firebase và cộng số lượng sản phẩm bán trong ngày!`
-          );
-        } catch (err: any) {
-          setErrorMsg(err?.message || 'Lỗi khi lưu hóa đơn.');
-        } finally {
-          setIsSaving(false);
-        }
-      },
-    });
+    setIsSaving(true);
+    setErrorMsg(null);
+    try {
+      const savedBill = await onSaveExtractedBill({
+        billDate,
+        rawDate: rawCalendarDate,
+        checkInTime: checkInTime.trim() || undefined,
+        checkOutTime: checkOutTime.trim() || undefined,
+        discountAmount: safeDiscount,
+        paymentType,
+        debtorName: paymentType === 'debt' ? debtorName.trim() : '',
+        note: finalNote,
+        items: validItems,
+      });
+
+      // Clear all information of the bill entry section
+      clearAllBillInputs();
+
+      // Open the Save Success Popup Modal
+      setSavedBillPopup({
+        ...snapshotPopup,
+        billCode: savedBill?.billCode || snapshotPopup.billCode,
+        billDate: savedBill?.billDate || snapshotPopup.billDate,
+        totalAmount: savedBill?.totalAmount ?? snapshotPopup.totalAmount,
+      });
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Lỗi khi lưu hóa đơn.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -1282,6 +1301,13 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 </div>
               </div>
 
+              {/* Empty state when no items in draft bill */}
+              {items.length === 0 ? (
+                <div className="py-10 px-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500 dark:text-slate-400">
+                  Chưa có món nào trong hóa đơn. Hãy dán văn bản bill, tải ảnh bill, nhập nhanh món ở trên hoặc bấm <strong>+ Thêm món</strong> để bắt đầu.
+                </div>
+              ) : (
+                <>
               {/* Mobile Cards (< md) */}
               <div className="md:hidden space-y-2.5">
                 {items.map((item, idx) => {
@@ -1566,6 +1592,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   </tbody>
                 </table>
               </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -1621,7 +1649,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 <Save className="w-4 h-4 shrink-0" />
                 <span>
                   {isSaving
-                    ? 'Đang lưu vào Firebase...'
+                    ? 'Đang lưu vào hệ thống...'
                     : 'Lưu Bill & Cộng Số Lượng Thời Gian Thực'}
                 </span>
               </button>
@@ -1629,6 +1657,103 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Save Bill Success Popup Modal */}
+      {savedBillPopup && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setSavedBillPopup(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 sm:p-6 text-center space-y-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-8 h-8" />
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                  Lưu Hóa Đơn Thành Công!
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Hóa đơn đã được lưu lên hệ thống và toàn bộ thông tin phần nhập bill đã được làm mới để nhập bill tiếp theo.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-3 text-xs">
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400">Mã hóa đơn:</span>
+                  <span className="font-mono font-bold text-slate-900 dark:text-white">
+                    {savedBillPopup.billCode}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400">Ca ngày:</span>
+                  <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                    {savedBillPopup.billDate}
+                    {savedBillPopup.checkInTime || savedBillPopup.checkOutTime
+                      ? ` (${savedBillPopup.checkInTime || '--:--'} → ${
+                          savedBillPopup.checkOutTime || '--:--'
+                        })`
+                      : ''}
+                  </span>
+                </div>
+                {savedBillPopup.note && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-slate-500 dark:text-slate-400 shrink-0">
+                      Phòng / Bàn & Ghi chú:
+                    </span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200 text-right truncate">
+                      {savedBillPopup.note}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400">Hình thức:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {PAYMENT_LABELS[savedBillPopup.paymentType]}
+                    {savedBillPopup.debtorName ? ` (${savedBillPopup.debtorName})` : ''}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400">Số lượng món:</span>
+                  <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                    {savedBillPopup.itemCount} món ({savedBillPopup.totalQuantity} phần/lon)
+                  </span>
+                </div>
+                {savedBillPopup.discountAmount > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 dark:text-slate-400">Chiết khấu:</span>
+                    <span className="font-mono font-semibold text-rose-600 dark:text-rose-400">
+                      -{formatVND(savedBillPopup.discountAmount)}
+                    </span>
+                  </div>
+                )}
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">
+                    Tổng tiền hóa đơn:
+                  </span>
+                  <span className="text-base font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                    {formatVND(savedBillPopup.totalAmount)}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSavedBillPopup(null)}
+                className="w-full h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>Đóng & Nhập Bill Tiếp Theo</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

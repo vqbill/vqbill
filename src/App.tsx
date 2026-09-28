@@ -1934,7 +1934,7 @@ export default function App() {
       return prev;
     });
     if (mergedCatsToSave) {
-      await saveCategoriesToCloud(ownerId, mergedCatsToSave);
+      saveCategoriesToCloud(ownerId, mergedCatsToSave).catch(() => {});
     }
 
     if (params.paymentType === 'debt' && params.debtorName.trim()) {
@@ -1947,7 +1947,7 @@ export default function App() {
       ) {
         const nextDebtors = [...effectiveDebtors, cleanDebtor];
         setDebtors(nextDebtors);
-        await saveDebtorsToCloud(ownerId, nextDebtors);
+        saveDebtorsToCloud(ownerId, nextDebtors).catch(() => {});
       }
     }
 
@@ -1973,8 +1973,9 @@ export default function App() {
     showToast(
       `Đã lưu Bill ${res.bill.billCode} (Ca ngày ${res.bill.billDate} · ${formatVND(
         res.bill.totalAmount
-      )}) vào Firebase!`
+      )}) vào hệ thống!`
     );
+    return res.bill;
   };
 
   const handleSaveEditedBill = async (

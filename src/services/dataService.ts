@@ -1424,65 +1424,76 @@ export async function saveNewBillToCloud(params: {
     }
   }
 
-  await markWorkspaceInitializedInCloud(cleanOwnerId);
-  await syncToRtdbSafe(`workspaces/${cleanOwnerId}/bills/${billId}`, billRecord);
+  markWorkspaceInitializedInCloud(cleanOwnerId).catch(() => {});
+  syncToRtdbSafe(`workspaces/${cleanOwnerId}/bills/${billId}`, billRecord);
   for (const bi of billItemRecords) {
-    await syncToRtdbSafe(`workspaces/${cleanOwnerId}/bill_items/${bi.id}`, bi);
+    syncToRtdbSafe(`workspaces/${cleanOwnerId}/bill_items/${bi.id}`, bi);
   }
   for (const tp of touchedProducts) {
-    await syncToRtdbSafe(`workspaces/${cleanOwnerId}/products/${tp.id}`, tp);
+    syncToRtdbSafe(`workspaces/${cleanOwnerId}/products/${tp.id}`, tp);
   }
 
   if (isFirestoreCloudActive()) {
     const fsOwner = getFirestoreOwnerUid(cleanOwnerId);
-    try {
-      await setDoc(doc(db, 'bills', billId), {
-        ownerId: fsOwner,
-        billCode: billRecord.billCode,
-        billDate: billRecord.billDate,
-        rawDate: billRecord.rawDate || billRecord.billDate,
-        checkInTime: billRecord.checkInTime || '',
-        checkOutTime: billRecord.checkOutTime || '',
-        paymentType: billRecord.paymentType,
-        debtorName: billRecord.debtorName,
-        debtStatus: billRecord.debtStatus,
-        subtotalAmount: billRecord.subtotalAmount || billRecord.totalAmount,
-        discountAmount: billRecord.discountAmount || 0,
-        totalAmount: billRecord.totalAmount,
-        deductedAmount: billRecord.deductedAmount,
-        itemsSummary: billRecord.itemsSummary,
-        note: billRecord.note,
-        status: billRecord.status,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      const batch = writeBatch(db);
-      for (const bi of billItemRecords) {
-        batch.set(doc(db, 'bill_items', bi.id), {
+    const writeToFirestore = async () => {
+      try {
+        await setDoc(doc(db, 'bills', billId), {
           ownerId: fsOwner,
-          billId: bi.billId,
-          billDate: bi.billDate,
-          productName: bi.productName,
-          note: bi.note || '',
-          category: bi.category,
-          quantity: bi.quantity,
-          returnedQuantity: bi.returnedQuantity,
-          unitPrice: bi.unitPrice,
-          subtotal: bi.subtotal,
+          billCode: billRecord.billCode,
+          billDate: billRecord.billDate,
+          rawDate: billRecord.rawDate || billRecord.billDate,
+          checkInTime: billRecord.checkInTime || '',
+          checkOutTime: billRecord.checkOutTime || '',
+          paymentType: billRecord.paymentType,
+          debtorName: billRecord.debtorName,
+          debtStatus: billRecord.debtStatus,
+          subtotalAmount: billRecord.subtotalAmount || billRecord.totalAmount,
+          discountAmount: billRecord.discountAmount || 0,
+          totalAmount: billRecord.totalAmount,
+          deductedAmount: billRecord.deductedAmount,
+          itemsSummary: billRecord.itemsSummary,
+          note: billRecord.note,
+          status: billRecord.status,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
-      }
-      await batch.commit();
 
-      for (const tp of touchedProducts) {
-        const wasExisting = existingProducts.some((ep) => ep.id === tp.id);
-        await createOrUpdateProductInFirestore(cleanOwnerId, tp, wasExisting);
+        const batch = writeBatch(db);
+        for (const bi of billItemRecords) {
+          batch.set(doc(db, 'bill_items', bi.id), {
+            ownerId: fsOwner,
+            billId: bi.billId,
+            billDate: bi.billDate,
+            productName: bi.productName,
+            note: bi.note || '',
+            category: bi.category,
+            quantity: bi.quantity,
+            returnedQuantity: bi.returnedQuantity,
+            unitPrice: bi.unitPrice,
+            subtotal: bi.subtotal,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
+
+        await Promise.all(
+          touchedProducts.map((tp) => {
+            const wasExisting = existingProducts.some((ep) => ep.id === tp.id);
+            return createOrUpdateProductInFirestore(cleanOwnerId, tp, wasExisting).catch(
+              () => {}
+            );
+          })
+        );
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, `bills/${billId}`);
       }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `bills/${billId}`);
-    }
+    };
+
+    await Promise.race([
+      writeToFirestore(),
+      new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+    ]);
   }
 
   return {
