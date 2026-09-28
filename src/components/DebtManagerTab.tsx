@@ -26,6 +26,7 @@ interface DebtManagerTabProps {
   products: ProductRecord[];
   debtors?: string[];
   onAddDebtor?: (name: string) => Promise<void>;
+  onDeleteDebtor?: (name: string) => Promise<void>;
   canWrite: boolean;
   canDelete: boolean;
   onEditBill: (bill: BillRecord) => void;
@@ -50,6 +51,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   products,
   debtors = [],
   onAddDebtor,
+  onDeleteDebtor,
   canWrite,
   canDelete,
   onEditBill,
@@ -200,10 +202,13 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
       title: 'Xác nhận Xóa Hóa Đơn Công Nợ',
       message: `Bạn có chắc chắn muốn xóa vĩnh viễn khoản công nợ "${bill.billCode}" của khách "${
         bill.debtorName || 'Khách nợ'
-      }" (Trạng thái: ${stateLabel}) khỏi hệ thống Firebase không?`,
+      }" (Trạng thái: ${stateLabel}) khỏi hệ thống không?`,
       confirmLabel: 'Xóa công nợ ngay',
       variant: 'danger',
       onConfirm: async () => {
+        if (selectedBillId === bill.id) {
+          setSelectedBillId(null);
+        }
         await onDeleteBill(bill);
       },
     });
@@ -213,13 +218,47 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
     if (!allowDeleteDebt || debtBills.length === 0) return;
     requestConfirm({
       title: 'Xác nhận Xóa Tất Cả Hóa Đơn Công Nợ',
-      message: `Bạn có chắc chắn muốn xóa toàn bộ ${debtBills.length} hóa đơn công nợ đang hiển thị khỏi hệ thống Firebase không?`,
+      message: `Bạn có chắc chắn muốn xóa toàn bộ ${debtBills.length} hóa đơn công nợ đang hiển thị khỏi hệ thống không?`,
       confirmLabel: 'Xóa tất cả công nợ',
       variant: 'danger',
       onConfirm: async () => {
+        setSelectedBillId(null);
         await onDeleteAllDebtBills(debtBills);
       },
     });
+  };
+
+  const handleDeleteDebtorClick = (debtorName: string) => {
+    if (!allowDeleteDebt || !onDeleteDebtor) return;
+    const clean = debtorName.trim();
+    if (!clean) return;
+    const matchingBillsCount = bills.filter(
+      (b) => (b.debtorName || '').trim().toLowerCase() === clean.toLowerCase()
+    ).length;
+
+    requestConfirm({
+      title: 'Xác nhận Xóa Khách Nợ & Công Nợ',
+      message:
+        matchingBillsCount > 0
+          ? `Bạn có chắc chắn muốn xóa khách nợ "${clean}" cùng toàn bộ ${matchingBillsCount} hóa đơn công nợ của khách này khỏi hệ thống không?`
+          : `Bạn có chắc chắn muốn xóa khách nợ "${clean}" khỏi danh sách Quản lý Công nợ không?`,
+      confirmLabel: 'Xóa khách nợ',
+      variant: 'danger',
+      onConfirm: async () => {
+        if (selectedDebtorFilter.trim().toLowerCase() === clean.toLowerCase()) {
+          setSelectedDebtorFilter('ALL');
+        }
+        await onDeleteDebtor(clean);
+      },
+    });
+  };
+
+  const handleAddNewDebtor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = newDebtorInput.trim();
+    if (!clean || !onAddDebtor || !canWrite) return;
+    await onAddDebtor(clean);
+    setNewDebtorInput('');
   };
 
   const handleSaveInlinePrice = (item: BillItemRecord) => {
@@ -283,6 +322,110 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             Bấm vào bill để xem món & tất toán
           </p>
+        </div>
+      </div>
+
+      {/* Debtors Directory & Quick Delete/Filter Bar */}
+      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                Danh Sách Khách Nợ ({allDebtorNames.length})
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Bấm vào tên khách để lọc hóa đơn hoặc bấm biểu tượng thùng rác để xóa khách nợ & công nợ.
+              </p>
+            </div>
+          </div>
+
+          {canWrite && onAddDebtor && (
+            <form onSubmit={handleAddNewDebtor} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newDebtorInput}
+                onChange={(e) => setNewDebtorInput(e.target.value)}
+                placeholder="Nhập tên khách nợ mới..."
+                className="h-9 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+              <button
+                type="submit"
+                className="h-9 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Thêm khách</span>
+              </button>
+            </form>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSelectedDebtorFilter('ALL')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
+              selectedDebtorFilter === 'ALL'
+                ? 'bg-amber-600 text-white border-amber-600'
+                : 'bg-slate-50 dark:bg-slate-800/70 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-amber-400'
+            }`}
+          >
+            Tất cả khách nợ ({allDebtorNames.length})
+          </button>
+
+          {allDebtorNames.map((dName) => {
+            const isSelected =
+              selectedDebtorFilter !== 'ALL' &&
+              selectedDebtorFilter.trim().toLowerCase() === dName.trim().toLowerCase();
+            const dBills = bills.filter(
+              (b) =>
+                (b.debtorName || '').trim().toLowerCase() ===
+                dName.trim().toLowerCase()
+            );
+            const unpaidSum = dBills
+              .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
+              .reduce(
+                (s, b) => s + Math.max(0, b.totalAmount - (b.deductedAmount || 0)),
+                0
+              );
+
+            return (
+              <div
+                key={dName}
+                className={`inline-flex items-center rounded-xl border text-xs transition-colors ${
+                  isSelected
+                    ? 'bg-amber-50 dark:bg-amber-950/50 border-amber-500 text-amber-900 dark:text-amber-200'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedDebtorFilter(isSelected ? 'ALL' : dName)
+                  }
+                  className="px-3 py-1.5 font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>{dName}</span>
+                  <span className="text-[11px] font-mono text-amber-600 dark:text-amber-400">
+                    ({dBills.length} bill{unpaidSum > 0 ? ` · ${formatVND(unpaidSum)}` : ''})
+                  </span>
+                </button>
+                {allowDeleteDebt && onDeleteDebtor && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteDebtorClick(dName);
+                    }}
+                    title={`Xóa khách nợ ${dName}`}
+                    className="pr-2.5 pl-1 py-1.5 text-rose-500 hover:text-rose-700 dark:hover:text-rose-300 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 

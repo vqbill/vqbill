@@ -25,6 +25,7 @@ interface BillEditModalProps {
   debtors?: string[];
   onClose: () => void;
   onSaveEdit: (updatedBill: BillRecord, updatedItems: BillItemRecord[]) => Promise<void>;
+  onDeleteBill?: (bill: BillRecord) => void;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
 
@@ -36,6 +37,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   debtors = [],
   onClose,
   onSaveEdit,
+  onDeleteBill,
   requestConfirm,
 }) => {
   const [billDate, setBillDate] = useState(bill.billDate);
@@ -694,6 +696,16 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               </span>
             </div>
             <div className="flex items-center gap-2.5">
+              {onDeleteBill && (
+                <button
+                  type="button"
+                  onClick={() => onDeleteBill(bill)}
+                  className="h-10 px-3.5 text-xs font-semibold rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-rose-600 dark:text-rose-400 inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Xóa Bill</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onClose}

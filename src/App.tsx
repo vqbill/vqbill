@@ -114,6 +114,11 @@ import {
   deleteDeductionsBatchFromCloud,
   recordItemReturnToCloud,
   deleteReturnsBatchFromCloud,
+  getDeletedBillIds,
+  markBillsDeletedLocally,
+  getDeletedDebtors,
+  markDebtorsDeletedLocally,
+  unmarkDebtorDeletedLocally,
 } from './services/dataService';
 import { AuthScreen } from './components/AuthScreen';
 import { RevenueColumnChart, DailyRevenuePoint } from './components/RevenueCharts';
@@ -334,8 +339,9 @@ export default function App() {
   const activeRole = currentStaffAccount?.role || UserRole.VIEWER;
   const isAdminUser =
     activeRole === UserRole.ADMIN || allowedTabs.includes('accounts');
-  const canWrite = effectivePermissions.canWrite;
-  const canDelete = effectivePermissions.canDelete;
+  const canWrite = effectivePermissions.canWrite || isAdminUser;
+  const canDelete =
+    effectivePermissions.canDelete || effectivePermissions.canWrite || isAdminUser;
 
   // Enforce activeTab to always be within allowedTabs for the logged-in account
   useEffect(() => {
@@ -525,18 +531,27 @@ export default function App() {
       if (!mounted) return;
 
       // Determine if localCached has unsynced real bills that aren't in Firestore yet
+      const deletedBillsSet = getDeletedBillIds();
       const fsBillIds = new Set((firestoreSnap?.bills || []).map((b) => b.id));
-      const localUnsyncedBills = (localCached?.bills || []).filter(
-        (b) => !b.id.startsWith('bill_seed_') && !fsBillIds.has(b.id)
-      );
+      const srvBillIds = new Set((serverSnap?.bills || []).map((b) => b.id));
+      const localUnsyncedBills = localCached?.cloudSyncedOnce
+        ? []
+        : (localCached?.bills || []).filter(
+            (b) =>
+              !b.id.startsWith('bill_seed_') &&
+              !fsBillIds.has(b.id) &&
+              !srvBillIds.has(b.id) &&
+              !deletedBillsSet.has(b.id)
+          );
 
-      // Pick the best remote source (prefer Firestore if it has bills or is initialized)
+      // Pick the best remote source based on latest version / updatedAtMs
+      const fsVer = Number(firestoreSnap?.version) || 0;
+      const srvVer = Number(serverSnap?.version) || 0;
       const bestRemote =
-        firestoreSnap &&
-        (firestoreSnap.bills.length > 0 || !serverSnap?.initialized)
-          ? firestoreSnap
-          : serverSnap?.initialized
-          ? serverSnap
+        firestoreSnap && serverSnap?.initialized
+          ? srvVer > fsVer
+            ? serverSnap
+            : firestoreSnap
           : firestoreSnap || serverSnap;
 
       if (bestRemote && bestRemote.initialized) {
@@ -790,9 +805,13 @@ export default function App() {
           fetchFirestoreWorkspaceOnce(),
           fetchServerWorkspace(),
         ]);
+        const fsVer = Number(fsSnap?.version) || 0;
+        const srvVer = Number(srvSnap?.version) || 0;
         const bestSnap =
-          fsSnap && (fsSnap.bills.length >= (srvSnap?.bills?.length || 0))
-            ? fsSnap
+          fsSnap && srvSnap?.initialized
+            ? srvVer > fsVer
+              ? srvSnap
+              : fsSnap
             : srvSnap?.initialized
             ? srvSnap
             : fsSnap;
@@ -1020,7 +1039,10 @@ export default function App() {
           try {
             const parsed = JSON.parse(data.debtorsJson);
             if (Array.isArray(parsed)) {
-              setDebtors(parsed);
+              const delDebtors = getDeletedDebtors();
+              setDebtors(
+                parsed.filter((d) => !delDebtors.has(String(d || '').trim().toLowerCase()))
+              );
             }
           } catch {
             // ignore
@@ -1056,30 +1078,33 @@ export default function App() {
           setCloudSyncedOnce(true);
           setCloudSyncStatus('synced');
           setLastCloudSyncAt(Date.now());
-          const loaded: BillRecord[] = snap.docs.map((d) => {
-            const data = d.data();
-            return {
-              id: d.id,
-              ownerId: data.ownerId,
-              billCode: data.billCode,
-              billDate: data.billDate,
-              rawDate: data.rawDate || data.billDate,
-              checkInTime: data.checkInTime || '',
-              checkOutTime: data.checkOutTime || '',
-              paymentType: data.paymentType,
-              debtorName: data.debtorName || '',
-              debtStatus: data.debtStatus || 'none',
-              subtotalAmount: Number(data.subtotalAmount) || Number(data.totalAmount) || 0,
-              discountAmount: Number(data.discountAmount) || 0,
-              totalAmount: Number(data.totalAmount) || 0,
-              deductedAmount: Number(data.deductedAmount) || 0,
-              itemsSummary: data.itemsSummary || '',
-              note: data.note || '',
-              status: data.status || 'active',
-              createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
-              updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
-            };
-          });
+          const deletedBills = getDeletedBillIds();
+          const loaded: BillRecord[] = snap.docs
+            .filter((d) => !deletedBills.has(d.id) && !deletedBills.has(sanitizeId(d.id)))
+            .map((d) => {
+              const data = d.data();
+              return {
+                id: d.id,
+                ownerId: data.ownerId,
+                billCode: data.billCode,
+                billDate: data.billDate,
+                rawDate: data.rawDate || data.billDate,
+                checkInTime: data.checkInTime || '',
+                checkOutTime: data.checkOutTime || '',
+                paymentType: data.paymentType,
+                debtorName: data.debtorName || '',
+                debtStatus: data.debtStatus || 'none',
+                subtotalAmount: Number(data.subtotalAmount) || Number(data.totalAmount) || 0,
+                discountAmount: Number(data.discountAmount) || 0,
+                totalAmount: Number(data.totalAmount) || 0,
+                deductedAmount: Number(data.deductedAmount) || 0,
+                itemsSummary: data.itemsSummary || '',
+                note: data.note || '',
+                status: data.status || 'active',
+                createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+                updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+              };
+            });
           setBills(loaded);
         }
       },
@@ -1092,24 +1117,30 @@ export default function App() {
         if (!snap.empty || initialCloudHandshakeDoneRef.current) {
           if (snap.empty && !workspaceInitialized) return;
           markRemoteStateUpdate();
-          const loaded: BillItemRecord[] = snap.docs.map((d) => {
-            const data = d.data();
-            return {
-              id: d.id,
-              ownerId: data.ownerId,
-              billId: data.billId,
-              billDate: data.billDate,
-              productName: data.productName,
-              category: data.category,
-              note: data.note || '',
-              quantity: Number(data.quantity) || 1,
-              returnedQuantity: Number(data.returnedQuantity) || 0,
-              unitPrice: Number(data.unitPrice) || 0,
-              subtotal: Number(data.subtotal) || 0,
-              createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
-              updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
-            };
-          });
+          const deletedBills = getDeletedBillIds();
+          const loaded: BillItemRecord[] = snap.docs
+            .filter((d) => {
+              const bId = String(d.data()?.billId || '');
+              return !deletedBills.has(bId) && !deletedBills.has(sanitizeId(bId));
+            })
+            .map((d) => {
+              const data = d.data();
+              return {
+                id: d.id,
+                ownerId: data.ownerId,
+                billId: data.billId,
+                billDate: data.billDate,
+                productName: data.productName,
+                category: data.category,
+                note: data.note || '',
+                quantity: Number(data.quantity) || 1,
+                returnedQuantity: Number(data.returnedQuantity) || 0,
+                unitPrice: Number(data.unitPrice) || 0,
+                subtotal: Number(data.subtotal) || 0,
+                createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
+                updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
+              };
+            });
           setBillItems(loaded);
         }
       },
@@ -1624,12 +1655,40 @@ export default function App() {
   const handleAddDebtor = async (newDebtorName: string) => {
     const clean = newDebtorName.trim();
     if (!clean) return;
+    unmarkDebtorDeletedLocally(clean);
     setWorkspaceInitialized(true);
     if (!effectiveDebtors.some((d) => d.toLowerCase() === clean.toLowerCase())) {
       const next = [...effectiveDebtors, clean];
       setDebtors(next);
       await saveDebtorsToCloud(ownerId, next);
       showToast(`Đã thêm khách nợ "${clean}" vào Quản lý Công nợ!`);
+    }
+  };
+
+  const handleDeleteDebtor = async (debtorNameToDelete: string) => {
+    const clean = debtorNameToDelete.trim();
+    if (!clean) return;
+    setWorkspaceInitialized(true);
+    const targetLower = clean.toLowerCase();
+    markDebtorsDeletedLocally([clean]);
+
+    const nextDebtors = effectiveDebtors.filter(
+      (d) => d.trim().toLowerCase() !== targetLower
+    );
+    setDebtors(nextDebtors);
+
+    const matchingBills = bills.filter(
+      (b) => (b.debtorName || '').trim().toLowerCase() === targetLower
+    );
+
+    if (matchingBills.length > 0) {
+      await handleDeleteMultipleBills(matchingBills, nextDebtors);
+      showToast(
+        `Đã xóa khách nợ "${clean}" và ${matchingBills.length} hóa đơn công nợ liên quan!`
+      );
+    } else {
+      saveDebtorsToCloud(ownerId, nextDebtors).catch(() => {});
+      showToast(`Đã xóa khách nợ "${clean}" khỏi danh sách Công nợ!`);
     }
   };
 
@@ -1880,6 +1939,7 @@ export default function App() {
 
     if (params.paymentType === 'debt' && params.debtorName.trim()) {
       const cleanDebtor = params.debtorName.trim();
+      unmarkDebtorDeletedLocally(cleanDebtor);
       if (
         !effectiveDebtors.some(
           (d) => d.toLowerCase() === cleanDebtor.toLowerCase()
@@ -1982,23 +2042,18 @@ export default function App() {
   };
 
   const handleDeleteBillDirect = async (bill: BillRecord) => {
-    if (!canDelete) return;
-    setWorkspaceInitialized(true);
-    const bItems = billItems.filter((it) => it.billId === bill.id);
-    const bDeds = deductions.filter((d) => d.billId === bill.id);
-    const bRets = returns.filter((r) => r.billId === bill.id);
-
-    setBills((prev) => prev.filter((b) => b.id !== bill.id));
-    setBillItems((prev) => prev.filter((it) => it.billId !== bill.id));
-    setDeductions((prev) => prev.filter((d) => d.billId !== bill.id));
-    setReturns((prev) => prev.filter((r) => r.billId !== bill.id));
-
-    await deleteBillsBatchFromCloud(ownerId, [bill.id], bItems, bDeds, bRets);
-    showToast(`Đã xóa hóa đơn ${bill.billCode} khỏi Firebase.`);
+    if (!canDelete && !canWrite) {
+      showToast('Tài khoản hiện tại không có quyền xóa hóa đơn / công nợ.');
+      return;
+    }
+    await handleDeleteMultipleBills([bill]);
   };
 
   const handleConfirmDeleteBill = (bill: BillRecord) => {
-    if (!canDelete) return;
+    if (!canDelete && !canWrite) {
+      showToast('Tài khoản hiện tại không có quyền xóa hóa đơn.');
+      return;
+    }
     requestConfirm({
       title: 'Xác nhận Xóa Hóa Đơn',
       message: `Bạn có chắc chắn muốn xóa hóa đơn "${bill.billCode}" (Ngày ${
@@ -2012,19 +2067,119 @@ export default function App() {
     });
   };
 
-  const handleDeleteMultipleBills = async (billsToDelete: BillRecord[]) => {
-    if (!canDelete || billsToDelete.length === 0) return;
+  const handleDeleteMultipleBills = async (
+    billsToDelete: BillRecord[],
+    overrideNextDebtors?: string[]
+  ) => {
+    if ((!canDelete && !canWrite) || billsToDelete.length === 0) return;
     setWorkspaceInitialized(true);
-    const ids = new Set(billsToDelete.map((b) => b.id));
-    const bItems = billItems.filter((it) => ids.has(it.billId));
-    const bDeds = deductions.filter((d) => ids.has(d.billId));
 
-    setBills((prev) => prev.filter((b) => !ids.has(b.id)));
+    const ids = new Set(billsToDelete.map((b) => b.id));
+    markBillsDeletedLocally(Array.from(ids));
+
+    if (inspectingBill && ids.has(inspectingBill.id)) {
+      setInspectingBill(null);
+    }
+    if (editingBill && ids.has(editingBill.id)) {
+      setEditingBill(null);
+    }
+
+    const bItems = effectiveBillItems.filter((it) => ids.has(it.billId));
+    const bDeds = deductions.filter((d) => ids.has(d.billId));
+    const bRets = returns.filter((r) => ids.has(r.billId));
+
+    // Subtract deleted bill item quantities & revenue from products
+    const touchedProducts: ProductRecord[] = [];
+    const nextProducts = products.map((p) => {
+      const matchingItems = bItems.filter(
+        (it) =>
+          it.productName.trim().toLowerCase() ===
+          p.productName.trim().toLowerCase()
+      );
+      if (matchingItems.length === 0) return p;
+      const qtyRemoved = matchingItems.reduce((s, it) => s + (it.quantity || 0), 0);
+      const retRemoved = matchingItems.reduce(
+        (s, it) => s + (it.returnedQuantity || 0),
+        0
+      );
+      const revRemoved = matchingItems.reduce(
+        (s, it) =>
+          s +
+          Math.max(0, (it.quantity - (it.returnedQuantity || 0)) * it.unitPrice),
+        0
+      );
+      const updatedProd: ProductRecord = {
+        ...p,
+        totalSold: Math.max(0, (p.totalSold || 0) - qtyRemoved),
+        totalReturned: Math.max(0, (p.totalReturned || 0) - retRemoved),
+        totalRevenue: Math.max(0, (p.totalRevenue || 0) - revRemoved),
+        updatedAtMs: Date.now(),
+      };
+      touchedProducts.push(updatedProd);
+      return updatedProd;
+    });
+
+    const remainingBills = bills.filter((b) => !ids.has(b.id));
+
+    // Clean up debtor names from debtors list if all bills for that debtor were deleted
+    let nextDebtors = overrideNextDebtors ?? debtors;
+    if (!overrideNextDebtors) {
+      const deletedDebtorNames = Array.from(
+        new Set(
+          billsToDelete
+            .map((b) => (b.debtorName || '').trim())
+            .filter(Boolean)
+        )
+      );
+      if (deletedDebtorNames.length > 0) {
+        const remainingDebtorSet = new Set(
+          remainingBills
+            .map((b) => (b.debtorName || '').trim().toLowerCase())
+            .filter(Boolean)
+        );
+        const debtorsToRemove = deletedDebtorNames.filter(
+          (dName) => !remainingDebtorSet.has(dName.toLowerCase())
+        );
+        if (debtorsToRemove.length > 0) {
+          markDebtorsDeletedLocally(debtorsToRemove);
+          const removeLowerSet = new Set(
+            debtorsToRemove.map((d) => d.toLowerCase())
+          );
+          nextDebtors = effectiveDebtors.filter(
+            (d) => !removeLowerSet.has(d.trim().toLowerCase())
+          );
+        }
+      }
+    }
+
+    setBills(remainingBills);
     setBillItems((prev) => prev.filter((it) => !ids.has(it.billId)));
     setDeductions((prev) => prev.filter((d) => !ids.has(d.billId)));
+    setReturns((prev) => prev.filter((r) => !ids.has(r.billId)));
+    if (touchedProducts.length > 0) {
+      setProducts(nextProducts);
+    }
+    setDebtors(nextDebtors);
 
-    await deleteBillsBatchFromCloud(ownerId, Array.from(ids), bItems, bDeds);
-    showToast(`Đã xóa ${billsToDelete.length} hóa đơn khỏi Firebase.`);
+    if (billsToDelete.length === 1) {
+      showToast(`Đã xóa hóa đơn ${billsToDelete[0].billCode} khỏi hệ thống!`);
+    } else {
+      showToast(`Đã xóa ${billsToDelete.length} hóa đơn khỏi hệ thống!`);
+    }
+
+    // Perform cloud deletion with timeout protection so UI never blocks
+    await Promise.race([
+      deleteBillsBatchFromCloud(
+        ownerId,
+        Array.from(ids),
+        bItems,
+        bDeds,
+        bRets,
+        touchedProducts,
+        nextDebtors
+      ),
+      new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+    ]);
   };
 
   const handleSettleDebt = async (
@@ -3282,9 +3437,10 @@ export default function App() {
                                   <button
                                     type="button"
                                     onClick={() => handleConfirmDeleteBill(bill)}
-                                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                                    className="px-2.5 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-[11px] font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1 cursor-pointer"
                                   >
-                                    <Trash2 className="w-4 h-4" />
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Xóa</span>
                                   </button>
                                 )}
                               </div>
@@ -3416,10 +3572,11 @@ export default function App() {
                                     <button
                                       type="button"
                                       onClick={() => handleConfirmDeleteBill(bill)}
-                                      className="p-1 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer align-middle"
+                                      className="px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-[11px] font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1 cursor-pointer align-middle"
                                       title="Xóa Bill"
                                     >
-                                      <Trash2 className="w-3.5 h-3.5 inline" />
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>Xóa</span>
                                     </button>
                                   )}
                                 </td>
@@ -3442,6 +3599,7 @@ export default function App() {
               categories={effectiveCategories}
               products={products}
               existingDebtors={effectiveDebtors}
+              onDeleteDebtor={handleDeleteDebtor}
               autoAddProducts={autoAddProducts}
               onToggleAutoAddProducts={setAutoAddProducts}
               onSaveExtractedBill={handleSaveExtractedBill}
@@ -3511,6 +3669,7 @@ export default function App() {
               products={products}
               debtors={effectiveDebtors}
               onAddDebtor={handleAddDebtor}
+              onDeleteDebtor={handleDeleteDebtor}
               canWrite={canWrite}
               canDelete={canDelete}
               onEditBill={(bill) => setEditingBill(bill)}
@@ -3890,6 +4049,14 @@ export default function App() {
           debtors={effectiveDebtors}
           onClose={() => setEditingBill(null)}
           onSaveEdit={handleSaveEditedBill}
+          onDeleteBill={
+            canDelete
+              ? (b) => {
+                  setEditingBill(null);
+                  handleConfirmDeleteBill(b);
+                }
+              : undefined
+          }
           requestConfirm={requestConfirm}
         />
       )}

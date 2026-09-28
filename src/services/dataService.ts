@@ -145,7 +145,111 @@ export function normalizeStaffAccountsWithFixedAdmin(
 }
 
 const LOCAL_CACHE_KEY = 'vqbill_cloud_mirror_v2';
+const DELETED_BILLS_KEY = 'vqbill_deleted_bills_v1';
+const DELETED_DEBTORS_KEY = 'vqbill_deleted_debtors_v1';
 export const SHARED_WORKSPACE_ID = 'vqbill_shared_workspace';
+
+export function getDeletedBillIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_BILLS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function markBillsDeletedLocally(billIds: string[]): void {
+  try {
+    const set = getDeletedBillIds();
+    for (const id of billIds) {
+      if (id) {
+        set.add(id);
+        set.add(sanitizeId(id));
+      }
+    }
+    const arr = Array.from(set).slice(-2000);
+    localStorage.setItem(DELETED_BILLS_KEY, JSON.stringify(arr));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function getDeletedDebtors(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_DEBTORS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.map((d) => String(d).trim().toLowerCase()).filter(Boolean))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function markDebtorsDeletedLocally(debtorNames: string[]): void {
+  try {
+    const set = getDeletedDebtors();
+    for (const name of debtorNames) {
+      const clean = (name || '').trim().toLowerCase();
+      if (clean) set.add(clean);
+    }
+    localStorage.setItem(DELETED_DEBTORS_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function unmarkDebtorDeletedLocally(debtorName: string): void {
+  try {
+    const clean = (debtorName || '').trim().toLowerCase();
+    if (!clean) return;
+    const set = getDeletedDebtors();
+    if (set.has(clean)) {
+      set.delete(clean);
+      localStorage.setItem(DELETED_DEBTORS_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function filterSnapshotByTombstones(
+  snap: WorkspaceCacheSnapshot
+): WorkspaceCacheSnapshot {
+  const deletedBills = getDeletedBillIds();
+  const deletedDebtors = getDeletedDebtors();
+  const filteredBills = (snap.bills || []).filter(
+    (b) => !deletedBills.has(b.id) && !deletedBills.has(sanitizeId(b.id))
+  );
+  const validBillIds = new Set(filteredBills.map((b) => b.id));
+  const filteredBillItems = (snap.billItems || []).filter(
+    (it) =>
+      !deletedBills.has(it.billId) &&
+      !deletedBills.has(sanitizeId(it.billId)) &&
+      (validBillIds.size === 0 || validBillIds.has(it.billId))
+  );
+  const filteredDeductions = (snap.deductions || []).filter(
+    (d) => !deletedBills.has(d.billId) && !deletedBills.has(sanitizeId(d.billId))
+  );
+  const filteredReturns = (snap.returns || []).filter(
+    (r) => !deletedBills.has(r.billId) && !deletedBills.has(sanitizeId(r.billId))
+  );
+  const filteredDebtors = snap.debtors
+    ? snap.debtors.filter((d) => !deletedDebtors.has((d || '').trim().toLowerCase()))
+    : undefined;
+
+  return {
+    ...snap,
+    bills: filteredBills,
+    billItems: filteredBillItems,
+    deductions: filteredDeductions,
+    returns: filteredReturns,
+    debtors: filteredDebtors,
+  };
+}
 
 export interface WorkspaceCacheSnapshot {
   version?: number;
@@ -188,10 +292,10 @@ export function loadLocalMirror(ownerId: string): WorkspaceCacheSnapshot | null 
       try {
         const parsed = JSON.parse(raw) as WorkspaceCacheSnapshot;
         if (parsed && parsed.initialized) {
-          return parsed;
+          return filterSnapshotByTombstones(parsed);
         }
         if (parsed && !firstUninit) {
-          firstUninit = parsed;
+          firstUninit = filterSnapshotByTombstones(parsed);
         }
       } catch {
         // continue
@@ -205,10 +309,20 @@ export function loadLocalMirror(ownerId: string): WorkspaceCacheSnapshot | null 
 
 export function saveLocalMirror(ownerId: string, snapshot: WorkspaceCacheSnapshot) {
   try {
-    const payload = JSON.stringify(snapshot);
-    localStorage.setItem(`${LOCAL_CACHE_KEY}_${sanitizeId(ownerId)}`, payload);
-    if (sanitizeId(ownerId) !== SHARED_WORKSPACE_ID) {
-      localStorage.setItem(`${LOCAL_CACHE_KEY}_${SHARED_WORKSPACE_ID}`, payload);
+    const cleanSnap = filterSnapshotByTombstones(snapshot);
+    const payload = JSON.stringify(cleanSnap);
+    const primaryKey = `${LOCAL_CACHE_KEY}_${sanitizeId(ownerId)}`;
+    const sharedKey = `${LOCAL_CACHE_KEY}_${SHARED_WORKSPACE_ID}`;
+    localStorage.setItem(primaryKey, payload);
+    if (primaryKey !== sharedKey) {
+      localStorage.setItem(sharedKey, payload);
+    }
+    // Sync any other legacy mirror keys so stale deleted bills cannot resurrect
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LOCAL_CACHE_KEY) && k !== primaryKey && k !== sharedKey) {
+        localStorage.setItem(k, payload);
+      }
     }
   } catch {
     // Ignore storage quota errors
@@ -251,7 +365,7 @@ export async function fetchServerWorkspace(): Promise<WorkspaceCacheSnapshot | n
     if (!res.ok) return null;
     const data = await res.json();
     if (!data || !data.ok || !data.workspace) return null;
-    return data.workspace as WorkspaceCacheSnapshot;
+    return filterSnapshotByTombstones(data.workspace as WorkspaceCacheSnapshot);
   } catch {
     return null;
   }
@@ -583,7 +697,7 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
       };
     });
 
-    return {
+    return filterSnapshotByTombstones({
       version: Number(metaData?.version) || Math.max(1, bills.length),
       updatedAtMs: metaData?.updatedAt?.toMillis?.() || Date.now(),
       updatedBy: metaData?.updatedBy || 'cloud',
@@ -600,7 +714,7 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
       staffAccounts: normalizeStaffAccountsWithFixedAdmin(
         staffAccounts.length > 0 ? staffAccounts : DEFAULT_STAFF_ACCOUNTS
       ),
-    };
+    });
   } catch {
     return null;
   }
@@ -612,6 +726,34 @@ export async function syncFullSnapshotToFirestore(
 ): Promise<boolean> {
   const fsOwner = SHARED_WORKSPACE_ID;
   try {
+    const existingBillsSnap = await getDocs(
+      query(collection(db, 'bills'), where('ownerId', '==', fsOwner))
+    ).catch(() => null);
+    const snapshotBillIds = new Set(
+      (snapshot.bills || []).map((b) => sanitizeId(b.id))
+    );
+    if (existingBillsSnap) {
+      for (const docSnap of existingBillsSnap.docs) {
+        if (!snapshotBillIds.has(docSnap.id)) {
+          await deleteDoc(doc(db, 'bills', docSnap.id)).catch(() => {});
+        }
+      }
+    }
+
+    const existingItemsSnap = await getDocs(
+      query(collection(db, 'bill_items'), where('ownerId', '==', fsOwner))
+    ).catch(() => null);
+    const snapshotItemIds = new Set(
+      (snapshot.billItems || []).map((bi) => sanitizeId(bi.id))
+    );
+    if (existingItemsSnap) {
+      for (const docSnap of existingItemsSnap.docs) {
+        if (!snapshotItemIds.has(docSnap.id)) {
+          await deleteDoc(doc(db, 'bill_items', docSnap.id)).catch(() => {});
+        }
+      }
+    }
+
     for (const b of snapshot.bills || []) {
       const bid = sanitizeId(b.id);
       const baseFields = {
@@ -771,28 +913,34 @@ export async function syncFullSnapshotToFirestore(
   }
 }
 
-async function syncToRtdbSafe(path: string, data: any) {
+function syncToRtdbSafe(path: string, data: any): Promise<void> {
   try {
-    await rtdbSet(ref(rtdb, path), data);
+    // Non-blocking fire-and-forget so unreachable RTDB WebSocket never blocks Firestore or UI
+    rtdbSet(ref(rtdb, path), data).catch(() => {});
   } catch {
     // Ignore RTDB permission error if locked; Firestore & local mirror remain active
   }
+  return Promise.resolve();
 }
 
-async function removeFromRtdbSafe(path: string) {
+function removeFromRtdbSafe(path: string): Promise<void> {
   try {
-    await rtdbRemove(ref(rtdb, path));
+    rtdbRemove(ref(rtdb, path)).catch(() => {});
   } catch {
     // Ignore
   }
+  return Promise.resolve();
 }
 
 export async function fetchRtdbWorkspaceOnce(
   ownerId: string
 ): Promise<Partial<WorkspaceCacheSnapshot> | null> {
   try {
-    const snap = await rtdbGet(ref(rtdb, `workspaces/${sanitizeId(ownerId)}`));
-    if (!snap.exists()) return null;
+    const snap = await Promise.race([
+      rtdbGet(ref(rtdb, `workspaces/${sanitizeId(ownerId)}`)),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 800)),
+    ]);
+    if (!snap || !snap.exists()) return null;
     const val = snap.val() || {};
     return {
       initialized: Boolean(val.meta?.initialized),
@@ -1454,41 +1602,90 @@ export async function deleteBillsBatchFromCloud(
   billIds: string[],
   billItemsToDelete: BillItemRecord[],
   deductionsToDelete: DeductionRecord[],
-  returnsToDelete: ReturnRecord[] = []
+  returnsToDelete: ReturnRecord[] = [],
+  updatedProducts?: ProductRecord[],
+  updatedDebtors?: string[]
 ): Promise<void> {
   const cleanOwnerId = sanitizeId(ownerId);
-  await markWorkspaceInitializedInCloud(cleanOwnerId);
+  markBillsDeletedLocally(billIds);
 
   for (const bi of billItemsToDelete) {
-    await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/bill_items/${bi.id}`);
+    removeFromRtdbSafe(`workspaces/${cleanOwnerId}/bill_items/${bi.id}`);
   }
   for (const d of deductionsToDelete) {
-    await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/deductions/${d.id}`);
+    removeFromRtdbSafe(`workspaces/${cleanOwnerId}/deductions/${d.id}`);
   }
   for (const r of returnsToDelete) {
-    await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/returns/${r.id}`);
+    removeFromRtdbSafe(`workspaces/${cleanOwnerId}/returns/${r.id}`);
   }
   for (const bId of billIds) {
-    await removeFromRtdbSafe(`workspaces/${cleanOwnerId}/bills/${bId}`);
+    removeFromRtdbSafe(`workspaces/${cleanOwnerId}/bills/${bId}`);
+    removeFromRtdbSafe(`workspaces/${cleanOwnerId}/bills/${sanitizeId(bId)}`);
+  }
+  if (updatedDebtors) {
+    syncToRtdbSafe(`workspaces/${cleanOwnerId}/debtors`, updatedDebtors);
   }
 
   if (!isFirestoreCloudActive()) return;
 
   try {
+    const ops: { col: string; id: string }[] = [];
+    const seen = new Set<string>();
+    const pushOp = (col: string, rawId: string) => {
+      if (!rawId) return;
+      for (const candidateId of [rawId, sanitizeId(rawId)]) {
+        if (!candidateId) continue;
+        const key = `${col}/${candidateId}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          ops.push({ col, id: candidateId });
+        }
+      }
+    };
+
+    for (const bi of billItemsToDelete) pushOp('bill_items', bi.id);
+    for (const d of deductionsToDelete) pushOp('deductions', d.id);
+    for (const r of returnsToDelete) pushOp('returns', r.id);
+    for (const bId of billIds) pushOp('bills', bId);
+
+    // Commit in atomic batches of 400 operations
+    const chunkSize = 400;
+    for (let i = 0; i < ops.length; i += chunkSize) {
+      const chunk = ops.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+      for (const op of chunk) {
+        batch.delete(doc(db, op.col, op.id));
+      }
+      await batch.commit();
+    }
+
+    if (updatedProducts && updatedProducts.length > 0) {
+      for (const tp of updatedProducts) {
+        await createOrUpdateProductInFirestore(cleanOwnerId, tp, true).catch(() => {});
+      }
+    }
+
+    await saveWorkspaceMetaToFirestore({
+      ownerId: cleanOwnerId,
+      debtors: updatedDebtors,
+      updatedBy: 'delete_bill',
+    });
+  } catch (error) {
+    // Fallback to individual deletes if batch fails
+    for (const bId of billIds) {
+      await deleteDoc(doc(db, 'bills', bId)).catch(() => {});
+      await deleteDoc(doc(db, 'bills', sanitizeId(bId))).catch(() => {});
+    }
     for (const bi of billItemsToDelete) {
-      await deleteDoc(doc(db, 'bill_items', bi.id));
+      await deleteDoc(doc(db, 'bill_items', bi.id)).catch(() => {});
+      await deleteDoc(doc(db, 'bill_items', sanitizeId(bi.id))).catch(() => {});
     }
     for (const d of deductionsToDelete) {
-      await deleteDoc(doc(db, 'deductions', d.id));
+      await deleteDoc(doc(db, 'deductions', d.id)).catch(() => {});
     }
     for (const r of returnsToDelete) {
-      await deleteDoc(doc(db, 'returns', r.id));
+      await deleteDoc(doc(db, 'returns', r.id)).catch(() => {});
     }
-    for (const bId of billIds) {
-      await deleteDoc(doc(db, 'bills', bId));
-    }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, 'bills');
   }
 }
 

@@ -310,7 +310,7 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly([
           'username', 'password', 'displayName', 'info', 'role', 'active', 'updatedAt'
         ]);
-      allow delete: if isValidId(accountId) && canWriteWorkspace(existing().ownerId);
+      allow delete: if isValidId(accountId) && (resource == null || canWriteWorkspace(existing().ownerId));
     }
 
     match /products/{productId} {
@@ -331,7 +331,7 @@ service cloud.firestore {
             'totalSold', 'totalReturned', 'totalRevenue', 'updatedAt'
           ])
         );
-      allow delete: if isValidId(productId) && canWriteWorkspace(existing().ownerId);
+      allow delete: if isValidId(productId) && (resource == null || canWriteWorkspace(existing().ownerId));
     }
 
     match /bills/{billId} {
@@ -344,8 +344,7 @@ service cloud.firestore {
         incoming().ownerId == existing().ownerId &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        canWriteWorkspace(existing().ownerId) &&
-        (isAdmin() || existing().status != 'locked') && (
+        canWriteWorkspace(existing().ownerId) && (
           incoming().diff(existing()).affectedKeys().hasOnly(['debtStatus', 'paymentType', 'note', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['deductedAmount', 'itemsSummary', 'note', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly([
@@ -354,9 +353,7 @@ service cloud.firestore {
             'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'updatedAt'
           ])
         );
-      allow delete: if isValidId(billId) && canWriteWorkspace(existing().ownerId) && (
-        isAdmin() || existing().status != 'locked'
-      );
+      allow delete: if isValidId(billId) && (resource == null || canWriteWorkspace(existing().ownerId));
     }
 
     match /bill_items/{itemId} {
@@ -377,7 +374,7 @@ service cloud.firestore {
             'returnedQuantity', 'unitPrice', 'subtotal', 'updatedAt'
           ])
         );
-      allow delete: if isValidId(itemId) && canWriteWorkspace(existing().ownerId);
+      allow delete: if isValidId(itemId) && (resource == null || canWriteWorkspace(existing().ownerId));
     }
 
     match /deductions/{deductionId} {
@@ -395,7 +392,7 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly([
           'deductionDate', 'productName', 'category', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
         ]);
-      allow delete: if isValidId(deductionId) && canWriteWorkspace(existing().ownerId);
+      allow delete: if isValidId(deductionId) && (resource == null || canWriteWorkspace(existing().ownerId));
     }
 
     match /returns/{returnId} {
@@ -413,7 +410,7 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly([
           'returnDate', 'quantity', 'unitPrice', 'amount', 'note', 'updatedAt'
         ]);
-      allow delete: if isValidId(returnId) && canWriteWorkspace(existing().ownerId);
+      allow delete: if isValidId(returnId) && (resource == null || canWriteWorkspace(existing().ownerId));
     }
   }
 }

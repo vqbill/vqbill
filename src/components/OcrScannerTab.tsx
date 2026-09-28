@@ -43,6 +43,7 @@ interface OcrScannerTabProps {
   categories: string[];
   products: ProductRecord[];
   existingDebtors: string[];
+  onDeleteDebtor?: (name: string) => Promise<void>;
   geminiApiKey: string;
   geminiStatus: GeminiKeyStatus;
   onSaveGeminiKey: (newKey: string) => Promise<void>;
@@ -71,6 +72,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   categories,
   products,
   existingDebtors,
+  onDeleteDebtor,
   geminiApiKey,
   geminiStatus,
   onSaveGeminiKey,
@@ -1130,34 +1132,85 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   </div>
 
                   {existingDebtors.length > 0 && debtorSelectMode === 'existing' ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <select
-                        value={existingDebtors.includes(debtorName) ? debtorName : ''}
-                        onChange={(e) => {
-                          if (e.target.value === '__NEW__') {
-                            setDebtorSelectMode('new');
-                            setDebtorName('');
-                          } else {
-                            setDebtorName(e.target.value);
-                          }
-                        }}
-                        className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                      >
-                        <option value="">-- Chọn người nợ trong danh sách --</option>
-                        {existingDebtors.map((d) => (
-                          <option key={d} value={d}>
-                            {d}
-                          </option>
-                        ))}
-                        <option value="__NEW__">+ Tạo người nợ mới...</option>
-                      </select>
-                      <input
-                        type="text"
-                        value={debtorName}
-                        onChange={(e) => setDebtorName(e.target.value)}
-                        placeholder="Hoặc sửa / nhập tên người nợ..."
-                        className="w-full h-10 px-3 text-xs rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                      />
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <select
+                          value={existingDebtors.includes(debtorName) ? debtorName : ''}
+                          onChange={(e) => {
+                            if (e.target.value === '__NEW__') {
+                              setDebtorSelectMode('new');
+                              setDebtorName('');
+                            } else {
+                              setDebtorName(e.target.value);
+                            }
+                          }}
+                          className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                        >
+                          <option value="">-- Chọn người nợ trong danh sách --</option>
+                          {existingDebtors.map((d) => (
+                            <option key={d} value={d}>
+                              {d}
+                            </option>
+                          ))}
+                          <option value="__NEW__">+ Tạo người nợ mới...</option>
+                        </select>
+                        <input
+                          type="text"
+                          value={debtorName}
+                          onChange={(e) => setDebtorName(e.target.value)}
+                          placeholder="Hoặc sửa / nhập tên người nợ..."
+                          className="w-full h-10 px-3 text-xs rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                        />
+                      </div>
+
+                      {onDeleteDebtor && existingDebtors.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="text-[11px] text-amber-800 dark:text-amber-300 font-medium">
+                            Khách nợ đã lưu:
+                          </span>
+                          {existingDebtors.map((d) => (
+                            <div
+                              key={d}
+                              className={`inline-flex items-center rounded-lg border text-[11px] ${
+                                debtorName === d
+                                  ? 'bg-amber-600 text-white border-amber-600'
+                                  : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-amber-200 dark:border-amber-800'
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setDebtorName(d)}
+                                className="px-2 py-0.5 font-semibold cursor-pointer"
+                              >
+                                {d}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  requestConfirm({
+                                    title: 'Xác nhận Xóa Khách Nợ',
+                                    message: `Bạn có chắc chắn muốn xóa khách nợ "${d}" khỏi danh sách không?`,
+                                    confirmLabel: 'Xóa khách nợ',
+                                    variant: 'danger',
+                                    onConfirm: async () => {
+                                      if (debtorName === d) setDebtorName('');
+                                      await onDeleteDebtor(d);
+                                    },
+                                  });
+                                }}
+                                title={`Xóa khách nợ ${d}`}
+                                className={`pr-1.5 pl-0.5 py-0.5 cursor-pointer ${
+                                  debtorName === d
+                                    ? 'text-white/90 hover:text-white'
+                                    : 'text-rose-500 hover:text-rose-700'
+                                }`}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <input
