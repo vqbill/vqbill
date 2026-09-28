@@ -1307,6 +1307,7 @@ export async function saveNewBillToCloud(params: {
   debtorName: string;
   note: string;
   subtotalAmount?: number;
+  customBillCodePrefix?: string;
   items: ExtractedBillItem[];
   existingProducts: ProductRecord[];
   autoAddProducts: boolean;
@@ -1325,6 +1326,7 @@ export async function saveNewBillToCloud(params: {
     paymentType,
     debtorName,
     note,
+    customBillCodePrefix,
     items,
     existingProducts,
     autoAddProducts,
@@ -1345,7 +1347,8 @@ export async function saveNewBillToCloud(params: {
       : resolveBusinessBillDate(baseDate, checkInTime, checkOutTime, false);
   const effectiveBillDate = resolved.businessDate || baseDate;
 
-  const shortCode = `HD-${effectiveBillDate.replace(/-/g, '').slice(2)}-${String(now).slice(-4)}`;
+  const codePrefix = (customBillCodePrefix || 'HD').trim();
+  const shortCode = `${codePrefix}-${effectiveBillDate.replace(/-/g, '').slice(2)}-${String(now).slice(-4)}`;
 
   const validItems = items.map((it) => {
     const qty = Math.max(1, Math.round(it.quantity || 1));
@@ -1387,8 +1390,16 @@ export async function saveNewBillToCloud(params: {
     ''
   );
 
+  const isOwnerSlip =
+    codePrefix.toUpperCase().startsWith('CHU-QL') ||
+    (note || '').toUpperCase().includes('[CHỦ/QL SỬ DỤNG]');
+
   const cleanDebtor =
-    paymentType === 'debt' ? truncateStr(debtorName, 120, 'Khách nợ') : '';
+    paymentType === 'debt'
+      ? truncateStr(debtorName, 120, 'Khách nợ')
+      : isOwnerSlip
+      ? truncateStr(debtorName, 120, 'Chủ / Quản lý')
+      : '';
   const debtStatus = paymentType === 'debt' ? 'unpaid' : 'none';
 
   const billRecord: BillRecord = {

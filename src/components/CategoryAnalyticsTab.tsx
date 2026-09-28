@@ -56,6 +56,7 @@ interface ProductAgg {
   soldQty: number;
   returnedQty: number;
   netQty: number;
+  ownerUseQty: number;
   grossRevenue: number;
   netRevenue: number;
 }
@@ -180,6 +181,7 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
           soldQty: 0,
           returnedQty: 0,
           netQty: 0,
+          ownerUseQty: 0,
           grossRevenue: 0,
           netRevenue: 0,
         });
@@ -199,6 +201,7 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
       const ret = Number(item.returnedQuantity) || 0;
       const net = Math.max(0, sold - ret);
       const uPrice = Number(item.unitPrice) || 0;
+      const isFreeOwnerUse = uPrice === 0 && sold > 0;
       const grossRev = sold * uPrice;
       const netRev = net * uPrice;
 
@@ -206,6 +209,9 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
         existing.soldQty += sold;
         existing.returnedQty += ret;
         existing.netQty += net;
+        if (isFreeOwnerUse) {
+          existing.ownerUseQty += net;
+        }
         existing.grossRevenue += grossRev;
         existing.netRevenue += netRev;
         if (uPrice > 0) existing.unitPrice = uPrice;
@@ -213,10 +219,11 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
         prodMap.set(pKey, {
           productName: item.productName.trim(),
           category: catName,
-          unitPrice: uPrice,
+          unitPrice: uPrice || Number(item.originalUnitPrice) || 0,
           soldQty: sold,
           returnedQty: ret,
           netQty: net,
+          ownerUseQty: isFreeOwnerUse ? net : 0,
           grossRevenue: grossRev,
           netRevenue: netRev,
         });
@@ -1013,6 +1020,7 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
                                   <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
                                     Đơn giá: {formatVND(prod.unitPrice)} · Bán: {formatNumber(prod.soldQty)}
                                     {prod.returnedQty > 0 ? ` · Trả: -${formatNumber(prod.returnedQty)}` : ''}
+                                    {prod.ownerUseQty > 0 ? ` · Chủ/QL dùng: ${formatNumber(prod.ownerUseQty)} (0đ)` : ''}
                                   </p>
                                 </div>
                                 <div className="text-right font-mono shrink-0">
@@ -1220,7 +1228,12 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
                           className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
                         >
                           <td className="py-2.5 px-3 font-sans font-semibold text-slate-900 dark:text-white">
-                            {prod.productName}
+                            <div>{prod.productName}</div>
+                            {prod.ownerUseQty > 0 && (
+                              <div className="text-[11px] font-normal text-indigo-600 dark:text-indigo-400">
+                                Gồm {formatNumber(prod.ownerUseQty)} Chủ/QL dùng (0đ)
+                              </div>
+                            )}
                           </td>
                           {combinedSelectedData.categoriesCount > 1 && (
                             <td className="py-2.5 px-2 font-sans text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap">

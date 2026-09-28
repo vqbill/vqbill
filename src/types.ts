@@ -11,6 +11,7 @@ export type ManagementTabId =
   | 'ocr'
   | 'categories'
   | 'inventory'
+  | 'owner_use'
   | 'debts'
   | 'deductions'
   | 'returns'
@@ -54,6 +55,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     shortLabel: 'Kho đồ uống',
     description:
       'Quản lý tồn đầu, nhập thêm bia/nước ngọt trong ngày, tự động trừ lượng thực bán (đã trừ hoàn trả), kiểm thực tế cuối ca & cảnh báo sắp hết hàng',
+  },
+  {
+    id: 'owner_use',
+    label: 'Chủ / Quản lý Sử dụng (0đ)',
+    shortLabel: 'Chủ / QL dùng',
+    description:
+      'Nhập bia, nước ngọt, món ăn do Chủ quán hoặc Quản lý sử dụng — vẫn tính vào Số lượng bán & trừ Tồn kho nhưng không thành giá tiền (0đ)',
   },
   {
     id: 'debts',
@@ -111,6 +119,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'ocr',
       'categories',
       'inventory',
+      'owner_use',
       'debts',
       'deductions',
       'returns',
@@ -129,6 +138,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'ocr',
       'categories',
       'inventory',
+      'owner_use',
       'debts',
       'deductions',
       'returns',
@@ -141,7 +151,15 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.CASHIER]: {
     role: UserRole.CASHIER,
-    allowedTabs: ['dashboard', 'ocr', 'inventory', 'debts', 'deductions', 'returns'],
+    allowedTabs: [
+      'dashboard',
+      'ocr',
+      'inventory',
+      'owner_use',
+      'debts',
+      'deductions',
+      'returns',
+    ],
     canWrite: true,
     canDelete: false,
     restrictProductCategories: false,
@@ -149,7 +167,15 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.VIEWER]: {
     role: UserRole.VIEWER,
-    allowedTabs: ['dashboard', 'categories', 'inventory', 'debts', 'deductions', 'returns'],
+    allowedTabs: [
+      'dashboard',
+      'categories',
+      'inventory',
+      'owner_use',
+      'debts',
+      'deductions',
+      'returns',
+    ],
     canWrite: false,
     canDelete: false,
     restrictProductCategories: false,
@@ -157,7 +183,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.INVENTORY]: {
     role: UserRole.INVENTORY,
-    allowedTabs: ['categories', 'inventory'],
+    allowedTabs: ['categories', 'inventory', 'owner_use'],
     canWrite: true,
     canDelete: false,
     restrictProductCategories: false,
@@ -473,17 +499,24 @@ export function getEffectiveRolePermissions(
     if (!tabs.includes('inventory')) {
       tabs = [...tabs, 'inventory'];
     }
+    if (!tabs.includes('owner_use')) {
+      tabs = [...tabs, 'owner_use'];
+    }
   } else if (
     !useCustom &&
     (tabs.includes('categories') ||
       account.role === UserRole.MANAGER ||
       account.role === UserRole.CASHIER ||
       account.role === UserRole.INVENTORY ||
-      account.role === UserRole.VIEWER) &&
-    !tabs.includes('inventory')
+      account.role === UserRole.VIEWER)
   ) {
-    // Ensure existing cached roles automatically receive the new 'inventory' tab
-    tabs = [...tabs, 'inventory'];
+    // Ensure existing cached roles automatically receive the new 'inventory' and 'owner_use' tabs
+    if (!tabs.includes('inventory')) {
+      tabs = [...tabs, 'inventory'];
+    }
+    if (!tabs.includes('owner_use')) {
+      tabs = [...tabs, 'owner_use'];
+    }
   }
 
   if (tabs.length === 0) {

@@ -40,6 +40,7 @@ import {
   DownloadCloud,
   Eye,
   Boxes,
+  UserCheck,
 } from 'lucide-react';
 import {
   auth,
@@ -82,6 +83,7 @@ import {
   extractBillTableName,
   extractReturnTableName,
   formatReturnDeductionTitle,
+  isOwnerUseBill,
 } from './utils/parser';
 import {
   fetchGeminiStatus,
@@ -132,6 +134,7 @@ import { RevenueColumnChart, DailyRevenuePoint } from './components/RevenueChart
 import { OcrScannerTab } from './components/OcrScannerTab';
 import { CategoryAnalyticsTab } from './components/CategoryAnalyticsTab';
 import { BeverageInventoryTab } from './components/BeverageInventoryTab';
+import { OwnerConsumptionTab } from './components/OwnerConsumptionTab';
 import { DebtManagerTab } from './components/DebtManagerTab';
 import { ReturnsDeductionsTab } from './components/ReturnsDeductionsTab';
 import { ProductCatalogTab } from './components/ProductCatalogTab';
@@ -1115,13 +1118,13 @@ export default function App() {
               const data = d.data();
               return {
                 id: d.id,
-                ownerId: data.ownerId,
-                billCode: data.billCode,
-                billDate: data.billDate,
-                rawDate: data.rawDate || data.billDate,
+                ownerId: data.ownerId || wsId,
+                billCode: data.billCode || 'HD',
+                billDate: data.billDate || todayStr,
+                rawDate: data.rawDate || data.billDate || todayStr,
                 checkInTime: data.checkInTime || '',
                 checkOutTime: data.checkOutTime || '',
-                paymentType: data.paymentType,
+                paymentType: data.paymentType || 'cash',
                 debtorName: data.debtorName || '',
                 debtStatus: data.debtStatus || 'none',
                 subtotalAmount: Number(data.subtotalAmount) || Number(data.totalAmount) || 0,
@@ -1215,13 +1218,13 @@ export default function App() {
             const data = d.data();
             return {
               id: d.id,
-              ownerId: data.ownerId,
-              billId: data.billId,
-              billCode: data.billCode,
-              billDate: data.billDate,
-              deductionDate: data.deductionDate,
-              productName: data.productName,
-              category: data.category,
+              ownerId: data.ownerId || wsId,
+              billId: data.billId || '',
+              billCode: data.billCode || '',
+              billDate: data.billDate || data.deductionDate || todayStr,
+              deductionDate: data.deductionDate || data.billDate || todayStr,
+              productName: data.productName || '',
+              category: data.category || 'Khác',
               quantity: Number(data.quantity) || 1,
               unitPrice: Number(data.unitPrice) || 0,
               amount: Number(data.amount) || 0,
@@ -1246,13 +1249,13 @@ export default function App() {
             const data = d.data();
             return {
               id: d.id,
-              ownerId: data.ownerId,
-              billId: data.billId,
-              billCode: data.billCode,
-              billDate: data.billDate,
-              returnDate: data.returnDate || data.billDate,
-              productName: data.productName,
-              category: data.category,
+              ownerId: data.ownerId || wsId,
+              billId: data.billId || '',
+              billCode: data.billCode || '',
+              billDate: data.billDate || data.returnDate || todayStr,
+              returnDate: data.returnDate || data.billDate || todayStr,
+              productName: data.productName || '',
+              category: data.category || 'Khác',
               quantity: Number(data.quantity) || 1,
               unitPrice: Number(data.unitPrice) || 0,
               amount: Number(data.amount) || 0,
@@ -1344,23 +1347,25 @@ export default function App() {
   }, [workspaceInitialized, markRemoteStateUpdate]);
 
   // Date Range Helper
-  const isDateInPeriod = (dateStr: string): boolean => {
+  const isDateInPeriod = (dateStr?: string): boolean => {
+    const safeDate = String(dateStr || '');
     if (periodPreset === 'all') return true;
-    if (periodPreset === 'today') return dateStr === todayStr;
-    if (periodPreset === 'yesterday') return dateStr === yesterdayStr;
+    if (!safeDate) return false;
+    if (periodPreset === 'today') return safeDate === todayStr;
+    if (periodPreset === 'yesterday') return safeDate === yesterdayStr;
     if (periodPreset === 'week') {
-      const target = new Date(dateStr + 'T00:00:00').getTime();
+      const target = new Date(safeDate + 'T00:00:00').getTime();
       const now = new Date(todayStr + 'T00:00:00').getTime();
       const diffDays = (now - target) / 86400000;
       return diffDays >= -1 && diffDays <= 7;
     }
     if (periodPreset === 'month') {
-      return dateStr.slice(0, 7) === todayStr.slice(0, 7);
+      return safeDate.slice(0, 7) === todayStr.slice(0, 7);
     }
     if (periodPreset === 'custom') {
       const start = customStartDate || '2000-01-01';
       const end = customEndDate || '2099-12-31';
-      return dateStr >= start && dateStr <= end;
+      return safeDate >= start && safeDate <= end;
     }
     return true;
   };
@@ -1419,10 +1424,19 @@ export default function App() {
   // Ensure every return is represented as a single unified cashflow line in Deductions (Khoản trừ)
   const effectiveDeductions = useMemo<DeductionRecord[]>(() => {
     const billMap = new Map(bills.map((b) => [b.id, b]));
-    const result = [...deductions];
+    const result: DeductionRecord[] = deductions.map((d) => ({
+      ...d,
+      deductionDate: d.deductionDate || d.billDate || todayStr,
+      billDate: d.billDate || d.deductionDate || todayStr,
+      productName: d.productName || '',
+      billCode: d.billCode || '',
+      category: d.category || 'Khác',
+      note: d.note || '',
+    }));
 
     for (const r of returns) {
       const expectedDedId = sanitizeId(`ded_${r.id}`);
+      const rProdLower = String(r.productName || '').toLowerCase();
       const alreadyLinkedIdx = result.findIndex(
         (d) =>
           d.id === expectedDedId ||
@@ -1430,16 +1444,20 @@ export default function App() {
           (d.billId === r.billId &&
             d.amount === r.amount &&
             (d.billCode === 'HOAN-TRA' ||
-              d.productName.toLowerCase().includes(r.productName.toLowerCase())))
+              (rProdLower &&
+                String(d.productName || '')
+                  .toLowerCase()
+                  .includes(rProdLower))))
       );
 
       const parentBill = billMap.get(r.billId);
       const tableName = extractReturnTableName(r.note, parentBill);
       const formattedTitle = formatReturnDeductionTitle(
         tableName,
-        r.productName,
+        r.productName || 'Món hoàn trả',
         r.quantity
       );
+      const rDate = r.returnDate || r.billDate || todayStr;
 
       if (alreadyLinkedIdx >= 0) {
         const existing = result[alreadyLinkedIdx];
@@ -1449,6 +1467,8 @@ export default function App() {
         ) {
           result[alreadyLinkedIdx] = {
             ...existing,
+            deductionDate: existing.deductionDate || rDate,
+            billDate: existing.billDate || rDate,
             billCode: 'HOAN-TRA',
             productName: formattedTitle,
           };
@@ -1458,15 +1478,15 @@ export default function App() {
         result.push({
           id: expectedDedId,
           ownerId: r.ownerId || ownerId,
-          billId: r.billId,
+          billId: r.billId || '',
           billCode: 'HOAN-TRA',
-          billDate: r.returnDate,
-          deductionDate: r.returnDate,
+          billDate: rDate,
+          deductionDate: rDate,
           productName: formattedTitle,
           category: r.category || 'Hoàn trả khách',
-          quantity: r.quantity,
-          unitPrice: r.unitPrice,
-          amount: r.amount,
+          quantity: Number(r.quantity) || 1,
+          unitPrice: Number(r.unitPrice) || 0,
+          amount: Number(r.amount) || 0,
           note: r.note || '',
           createdAtMs: ts,
           updatedAtMs: ts,
@@ -1476,10 +1496,11 @@ export default function App() {
 
     return result.sort(
       (a, b) =>
-        b.deductionDate.localeCompare(a.deductionDate) ||
-        b.createdAtMs - a.createdAtMs
+        String(b.deductionDate || b.billDate || '').localeCompare(
+          String(a.deductionDate || a.billDate || '')
+        ) || (b.createdAtMs || 0) - (a.createdAtMs || 0)
     );
-  }, [deductions, returns, bills, ownerId]);
+  }, [deductions, returns, bills, ownerId, todayStr]);
 
   const periodDeductions = useMemo(() => {
     return effectiveDeductions.filter((d) => isDateInPeriod(d.deductionDate));
@@ -1496,10 +1517,11 @@ export default function App() {
   const displayedBills = useMemo(() => {
     return periodBills
       .filter((b) => {
-        if (paymentFilter === 'cash') return b.paymentType === 'cash';
+        if (paymentFilter === 'cash') return b.paymentType === 'cash' && !isOwnerUseBill(b);
         if (paymentFilter === 'transfer') return b.paymentType === 'transfer';
         if (paymentFilter === 'debt') return b.paymentType === 'debt';
         if (paymentFilter === 'has_return') return (b.deductedAmount || 0) > 0;
+        if ((paymentFilter as string) === 'owner_use') return isOwnerUseBill(b);
         return true;
       })
       .filter((b) => {
@@ -1512,14 +1534,18 @@ export default function App() {
         if (!searchKeyword.trim()) return true;
         const q = searchKeyword.toLowerCase();
         return (
-          b.billCode.toLowerCase().includes(q) ||
-          b.billDate.includes(q) ||
-          b.debtorName.toLowerCase().includes(q) ||
-          b.itemsSummary.toLowerCase().includes(q) ||
-          b.note.toLowerCase().includes(q)
+          String(b.billCode || '').toLowerCase().includes(q) ||
+          String(b.billDate || '').includes(q) ||
+          String(b.debtorName || '').toLowerCase().includes(q) ||
+          String(b.itemsSummary || '').toLowerCase().includes(q) ||
+          String(b.note || '').toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => b.billDate.localeCompare(a.billDate) || b.createdAtMs - a.createdAtMs);
+      .sort(
+        (a, b) =>
+          String(b.billDate || '').localeCompare(String(a.billDate || '')) ||
+          (b.createdAtMs || 0) - (a.createdAtMs || 0)
+      );
   }, [periodBills, paymentFilter, categoryFilter, searchKeyword, effectiveBillItems]);
 
   // Financial Metrics
@@ -2078,6 +2104,42 @@ export default function App() {
       )}) vào hệ thống!`
     );
     return res.bill;
+  };
+
+  const handleSaveOwnerUseBill = async (payload: {
+    billDate: string;
+    targetUser: string;
+    note: string;
+    items: ExtractedBillItem[];
+  }) => {
+    setWorkspaceInitialized(true);
+    const zeroItems: ExtractedBillItem[] = payload.items.map((it) => ({
+      ...it,
+      unitPrice: 0,
+      subtotal: 0,
+    }));
+
+    const res = await saveNewBillToCloud({
+      ownerId,
+      billDate: payload.billDate,
+      paymentType: 'cash',
+      debtorName: payload.targetUser || 'Chủ / Quản lý',
+      note: payload.note || `[CHỦ/QL SỬ DỤNG] ${payload.targetUser || 'Chủ / Quản lý'}`,
+      customBillCodePrefix: 'CHU-QL',
+      subtotalAmount: 0,
+      discountAmount: 0,
+      items: zeroItems,
+      existingProducts: products,
+      autoAddProducts,
+    });
+
+    setBills((prev) => [res.bill, ...prev]);
+    setBillItems((prev) => [...res.billItems, ...prev]);
+    setProducts(res.updatedProducts);
+    const totalQty = zeroItems.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+    showToast(
+      `Đã lưu phiếu Chủ/QL sử dụng ${res.bill.billCode} (+${totalQty} SL bán · Thành tiền: 0đ)!`
+    );
   };
 
   const handleSaveEditedBill = async (
@@ -2883,6 +2945,12 @@ export default function App() {
       icon: <Boxes className="w-4 h-4" />,
     },
     {
+      id: 'owner_use',
+      label: 'Chủ / Quản lý Sử dụng (0đ)',
+      shortLabel: 'Chủ / QL dùng',
+      icon: <UserCheck className="w-4 h-4" />,
+    },
+    {
       id: 'debts',
       label: 'Quản lý Công nợ',
       shortLabel: 'Công nợ',
@@ -3312,7 +3380,12 @@ export default function App() {
                     {formatVND(financialSummary.grossCash)}
                   </div>
                   <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                    {periodBills.filter((b) => b.paymentType === 'cash').length} hóa đơn
+                    {
+                      periodBills.filter(
+                        (b) => b.paymentType === 'cash' && !isOwnerUseBill(b)
+                      ).length
+                    }{' '}
+                    hóa đơn
                   </div>
                 </div>
 
@@ -3512,6 +3585,7 @@ export default function App() {
                         <option value="transfer">Chuyển khoản</option>
                         <option value="debt">Công nợ</option>
                         <option value="has_return">Có hoàn trả</option>
+                        <option value="owner_use">Chủ / QL dùng (0đ)</option>
                       </select>
 
                       <select
@@ -3592,8 +3666,13 @@ export default function App() {
                                   </div>
                                 )}
                                 <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mt-0.5">
-                                  {PAYMENT_LABELS[bill.paymentType]}
-                                  {bill.debtorName ? ` — Nợ: ${bill.debtorName}` : ''}
+                                  {isOwnerUseBill(bill)
+                                    ? `Chủ / QL dùng (0đ)${
+                                        bill.debtorName ? ` — ${bill.debtorName}` : ''
+                                      }`
+                                    : `${PAYMENT_LABELS[bill.paymentType]}${
+                                        bill.debtorName ? ` — Nợ: ${bill.debtorName}` : ''
+                                      }`}
                                   {(bill.discountAmount || 0) > 0
                                     ? ` · CK: -${formatVND(bill.discountAmount || 0)}`
                                     : ''}
@@ -3717,11 +3796,21 @@ export default function App() {
 
                                 <td className="py-3 px-3">
                                   <div className="font-semibold text-slate-900 dark:text-white">
-                                    {PAYMENT_LABELS[bill.paymentType]}
+                                    {isOwnerUseBill(bill)
+                                      ? 'Chủ / QL dùng (0đ)'
+                                      : PAYMENT_LABELS[bill.paymentType]}
                                   </div>
                                   {bill.debtorName && (
-                                    <div className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
-                                      Nợ: {bill.debtorName}
+                                    <div
+                                      className={`text-[11px] font-medium ${
+                                        isOwnerUseBill(bill)
+                                          ? 'text-indigo-600 dark:text-indigo-400'
+                                          : 'text-amber-600 dark:text-amber-400'
+                                      }`}
+                                    >
+                                      {isOwnerUseBill(bill)
+                                        ? `Người dùng: ${bill.debtorName}`
+                                        : `Nợ: ${bill.debtorName}`}
                                     </div>
                                   )}
                                   {bill.note && (
@@ -3907,6 +3996,22 @@ export default function App() {
                   expenseTitle: payload.productName,
                 })
               }
+              requestConfirm={requestConfirm}
+            />
+          )}
+
+          {/* TAB 3C: OWNER & MANAGER CONSUMPTION (COUNTS QUANTITY SOLD, 0 REVENUE) */}
+          {activeTab === 'owner_use' && allowedTabs.includes('owner_use') && (
+            <OwnerConsumptionTab
+              bills={bills}
+              billItems={effectiveBillItems}
+              products={products}
+              categories={effectiveCategories}
+              canWrite={canWrite}
+              canDelete={canDelete}
+              onSaveOwnerUseBill={handleSaveOwnerUseBill}
+              onInspectBill={(b) => setInspectingBill(b)}
+              onDeleteBill={handleDeleteBillDirect}
               requestConfirm={requestConfirm}
             />
           )}

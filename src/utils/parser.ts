@@ -115,6 +115,33 @@ export function formatReturnDeductionTitle(
   return `${cleanTable} - ${cleanProd} - SL hoàn trả: ${safeQty}`;
 }
 
+export function isOwnerUseBill(bill?: Partial<BillRecord> | null): boolean {
+  if (!bill) return false;
+  const code = (bill.billCode || '').toUpperCase();
+  const note = (bill.note || '').toUpperCase();
+  return (
+    code.startsWith('CHU-QL') ||
+    note.includes('[CHỦ/QL SỬ DỤNG]') ||
+    note.includes('[CHU/QL SU DUNG]')
+  );
+}
+
+export function extractOwnerUseTarget(bill?: Partial<BillRecord> | null): string {
+  if (!bill) return 'Chủ / Quản lý';
+  if (bill.debtorName && bill.debtorName.trim()) {
+    return bill.debtorName.trim();
+  }
+  const cleanNote = (bill.note || '')
+    .replace(/\[CHỦ\/QL SỬ DỤNG\]/gi, '')
+    .replace(/\[CHU\/QL SU DUNG\]/gi, '')
+    .trim();
+  if (cleanNote) {
+    const firstPart = cleanNote.split(/\s*(?:\-|–|—|·|\|)\s*/)[0]?.trim();
+    if (firstPart) return firstPart;
+  }
+  return 'Chủ / Quản lý';
+}
+
 export function formatLocalYMD(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -720,29 +747,39 @@ export function reconstructBillItemsFromSummary(
     });
   }
 
-  // Reconcile total with bill.subtotalAmount || bill.totalAmount if needed
-  const targetTotal = bill.subtotalAmount || bill.totalAmount || 0;
-  const currentTotal = draftItems.reduce(
-    (s, it) => s + it.quantity * it.unitPrice,
-    0
-  );
-  if (targetTotal > 0 && currentTotal !== targetTotal && draftItems.length > 0) {
-    const zeroPriceItems = draftItems.filter((it) => it.unitPrice === 0);
-    const diff = targetTotal - currentTotal;
-    if (zeroPriceItems.length === 1 && diff > 0) {
-      zeroPriceItems[0].unitPrice = Math.round(diff / zeroPriceItems[0].quantity);
-    } else if (zeroPriceItems.length === 0 && diff !== 0) {
-      // Adjust the highest-value item or combo item if there's a slight custom bill price difference
-      const adjustable = draftItems.find(
-        (it) =>
-          it.quantity === 1 &&
-          (it.productName.toLowerCase().includes('cá') ||
-            it.productName.toLowerCase().includes('lẩu') ||
-            it.productName.toLowerCase().includes('combo')) &&
-          it.unitPrice + diff > 0
-      );
-      if (adjustable) {
-        adjustable.unitPrice += diff;
+  const ownerUse = isOwnerUseBill(bill);
+  if (ownerUse) {
+    for (const d of draftItems) {
+      if (d.unitPrice > 0 && !d.originalUnitPrice) {
+        d.originalUnitPrice = d.unitPrice;
+      }
+      d.unitPrice = 0;
+    }
+  } else {
+    // Reconcile total with bill.subtotalAmount || bill.totalAmount if needed
+    const targetTotal = bill.subtotalAmount || bill.totalAmount || 0;
+    const currentTotal = draftItems.reduce(
+      (s, it) => s + it.quantity * it.unitPrice,
+      0
+    );
+    if (targetTotal > 0 && currentTotal !== targetTotal && draftItems.length > 0) {
+      const zeroPriceItems = draftItems.filter((it) => it.unitPrice === 0);
+      const diff = targetTotal - currentTotal;
+      if (zeroPriceItems.length === 1 && diff > 0) {
+        zeroPriceItems[0].unitPrice = Math.round(diff / zeroPriceItems[0].quantity);
+      } else if (zeroPriceItems.length === 0 && diff !== 0) {
+        // Adjust the highest-value item or combo item if there's a slight custom bill price difference
+        const adjustable = draftItems.find(
+          (it) =>
+            it.quantity === 1 &&
+            (it.productName.toLowerCase().includes('cá') ||
+              it.productName.toLowerCase().includes('lẩu') ||
+              it.productName.toLowerCase().includes('combo')) &&
+            it.unitPrice + diff > 0
+        );
+        if (adjustable) {
+          adjustable.unitPrice += diff;
+        }
       }
     }
   }

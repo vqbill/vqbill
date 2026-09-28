@@ -112,9 +112,11 @@ const EXPENSE_CATEGORIES = [
 
 function isReturnLinkedDeduction(ded: DeductionRecord): boolean {
   return (
-    ded.id.startsWith('ded_ret_') ||
-    ded.category.toLowerCase() === 'hoàn trả khách' ||
-    /\bsl hoàn trả\s*:/i.test(ded.productName)
+    String(ded.id || '').startsWith('ded_ret_') ||
+    String(ded.id || '').startsWith('ded_') ||
+    String(ded.billCode || '') === 'HOAN-TRA' ||
+    String(ded.category || '').toLowerCase() === 'hoàn trả khách' ||
+    /\bsl hoàn trả\s*:/i.test(String(ded.productName || ''))
   );
 }
 
@@ -160,7 +162,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   // 2. STATE FOR HOÀN TRẢ (CUSTOMER ITEM RETURNS)
   // ============================================================================
   const availableBillDates = useMemo(() => {
-    const set = new Set(bills.map((b) => b.billDate));
+    const set = new Set(bills.map((b) => String(b.billDate || '')).filter(Boolean));
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   }, [bills]);
 
@@ -208,7 +210,9 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
         ? bills
         : bills.filter((b) => b.billDate === selectedBillDate);
     return [...list].sort(
-      (a, b) => b.billDate.localeCompare(a.billDate) || b.createdAtMs - a.createdAtMs
+      (a, b) =>
+        String(b.billDate || '').localeCompare(String(a.billDate || '')) ||
+        (b.createdAtMs || 0) - (a.createdAtMs || 0)
     );
   }, [bills, selectedBillDate]);
 
@@ -331,18 +335,20 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
       .filter((d) => {
         if (!searchDeduction.trim()) return true;
         const q = searchDeduction.toLowerCase();
+        const dDate = String(d.deductionDate || d.billDate || '');
         return (
-          d.productName.toLowerCase().includes(q) ||
-          d.category.toLowerCase().includes(q) ||
-          d.deductionDate.includes(q) ||
-          formatDateDMY(d.deductionDate).includes(q) ||
-          d.note.toLowerCase().includes(q)
+          String(d.productName || '').toLowerCase().includes(q) ||
+          String(d.category || '').toLowerCase().includes(q) ||
+          dDate.includes(q) ||
+          formatDateDMY(dDate).includes(q) ||
+          String(d.note || '').toLowerCase().includes(q)
         );
       })
       .sort(
         (a, b) =>
-          b.deductionDate.localeCompare(a.deductionDate) ||
-          b.createdAtMs - a.createdAtMs
+          String(b.deductionDate || b.billDate || '').localeCompare(
+            String(a.deductionDate || a.billDate || '')
+          ) || (b.createdAtMs || 0) - (a.createdAtMs || 0)
       );
   }, [
     deductions,
@@ -611,19 +617,22 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
         const q = searchReturn.toLowerCase();
         const b = billMap.get(r.billId);
         const tbl = extractReturnTableName(r.note, b, 'Bàn lẻ').toLowerCase();
+        const rDate = String(r.returnDate || r.billDate || '');
         return (
-          r.productName.toLowerCase().includes(q) ||
+          String(r.productName || '').toLowerCase().includes(q) ||
           tbl.includes(q) ||
-          r.billCode.toLowerCase().includes(q) ||
-          r.billDate.includes(q) ||
-          r.returnDate.includes(q) ||
-          formatDateDMY(r.returnDate).includes(q) ||
-          r.note.toLowerCase().includes(q)
+          String(r.billCode || '').toLowerCase().includes(q) ||
+          String(r.billDate || '').includes(q) ||
+          rDate.includes(q) ||
+          formatDateDMY(rDate).includes(q) ||
+          String(r.note || '').toLowerCase().includes(q)
         );
       })
       .sort(
         (a, b) =>
-          b.returnDate.localeCompare(a.returnDate) || b.createdAtMs - a.createdAtMs
+          String(b.returnDate || b.billDate || '').localeCompare(
+            String(a.returnDate || a.billDate || '')
+          ) || (b.createdAtMs || 0) - (a.createdAtMs || 0)
       );
   }, [returns, retPeriodMode, retSingleDate, todayStr, yesterdayStr, searchReturn, billMap]);
 
