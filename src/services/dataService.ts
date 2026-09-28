@@ -1838,6 +1838,160 @@ export async function saveExpenseDeductionToCloud(params: {
   return deduction;
 }
 
+export async function updateExpenseDeductionInCloud(params: {
+  ownerId: string;
+  deduction: DeductionRecord;
+  updates: {
+    deductionDate: string;
+    expenseTitle: string;
+    category: string;
+    amount: number;
+    note: string;
+  };
+  linkedReturn?: ReturnRecord;
+}): Promise<{
+  updatedDeduction: DeductionRecord;
+  updatedReturn?: ReturnRecord;
+}> {
+  const { ownerId, deduction, updates, linkedReturn } = params;
+  const cleanOwnerId = sanitizeId(ownerId);
+  const now = Date.now();
+
+  const effDate = /^\d{4}-\d{2}-\d{2}$/.test(updates.deductionDate)
+    ? updates.deductionDate
+    : deduction.deductionDate || getCurrentBusinessDate();
+  const safeQty = Math.max(1, Math.round(deduction.quantity || 1));
+  const safeAmount = Math.max(0, Math.round(updates.amount || 0));
+  const safeUnitPrice =
+    safeQty > 1 ? Math.max(0, Math.round(safeAmount / safeQty)) : safeAmount;
+  const cleanTitle = truncateStr(
+    updates.expenseTitle,
+    150,
+    deduction.productName || 'Khoản chi trong ngày'
+  );
+  const cleanCategory = truncateStr(
+    updates.category || deduction.category || 'Chi phí vận hành trong ngày',
+    80,
+    'Chi phí vận hành trong ngày'
+  );
+  const cleanNote = truncateStr(updates.note ?? '', 500, '');
+
+  const updatedDeduction: DeductionRecord = {
+    ...deduction,
+    ownerId: cleanOwnerId,
+    billId: sanitizeId(deduction.billId || `expense_${now}`),
+    billCode: truncateStr(deduction.billCode || 'CHI-TRONG-NGAY', 64, 'CHI-TRONG-NGAY'),
+    billDate:
+      deduction.billDate && /^\d{4}-\d{2}-\d{2}$/.test(deduction.billDate)
+        ? deduction.billDate
+        : effDate,
+    deductionDate: effDate,
+    productName: cleanTitle,
+    category: cleanCategory,
+    quantity: safeQty,
+    unitPrice: safeUnitPrice,
+    amount: safeAmount,
+    note: cleanNote,
+    updatedAtMs: now,
+  };
+
+  let updatedReturn: ReturnRecord | undefined;
+  if (linkedReturn) {
+    const retQty = Math.max(1, Math.round(linkedReturn.quantity || safeQty));
+    updatedReturn = {
+      ...linkedReturn,
+      returnDate: effDate,
+      quantity: retQty,
+      unitPrice: Math.max(0, Math.round(safeAmount / retQty)),
+      amount: safeAmount,
+      note: cleanNote || linkedReturn.note,
+      updatedAtMs: now,
+    };
+  }
+
+  await markWorkspaceInitializedInCloud(cleanOwnerId);
+  await syncToRtdbSafe(
+    `workspaces/${cleanOwnerId}/deductions/${updatedDeduction.id}`,
+    updatedDeduction
+  );
+  if (updatedReturn) {
+    await syncToRtdbSafe(
+      `workspaces/${cleanOwnerId}/returns/${updatedReturn.id}`,
+      updatedReturn
+    );
+  }
+
+  if (isFirestoreCloudActive()) {
+    try {
+      const fsOwner = getFirestoreOwnerUid(cleanOwnerId);
+      await upsertFirestoreDoc(
+        'deductions',
+        updatedDeduction.id,
+        {
+          ownerId: fsOwner,
+          billId: updatedDeduction.billId,
+          billCode: updatedDeduction.billCode,
+          billDate: updatedDeduction.billDate,
+          deductionDate: updatedDeduction.deductionDate,
+          productName: updatedDeduction.productName,
+          category: updatedDeduction.category,
+          quantity: updatedDeduction.quantity,
+          unitPrice: updatedDeduction.unitPrice,
+          amount: updatedDeduction.amount,
+          note: updatedDeduction.note,
+        },
+        {
+          deductionDate: updatedDeduction.deductionDate,
+          productName: updatedDeduction.productName,
+          category: updatedDeduction.category,
+          quantity: updatedDeduction.quantity,
+          unitPrice: updatedDeduction.unitPrice,
+          amount: updatedDeduction.amount,
+          note: updatedDeduction.note,
+        }
+      );
+
+      if (updatedReturn) {
+        await upsertFirestoreDoc(
+          'returns',
+          updatedReturn.id,
+          {
+            ownerId: fsOwner,
+            billId: sanitizeId(updatedReturn.billId || updatedDeduction.billId),
+            billCode: truncateStr(updatedReturn.billCode || 'HOAN-TRA', 64, 'HOAN-TRA'),
+            billDate:
+              updatedReturn.billDate && /^\d{4}-\d{2}-\d{2}$/.test(updatedReturn.billDate)
+                ? updatedReturn.billDate
+                : effDate,
+            returnDate: updatedReturn.returnDate,
+            productName: truncateStr(updatedReturn.productName, 150, 'Món hoàn trả'),
+            category: truncateStr(updatedReturn.category || 'Hoàn trả khách', 80, 'Hoàn trả khách'),
+            quantity: updatedReturn.quantity,
+            unitPrice: updatedReturn.unitPrice,
+            amount: updatedReturn.amount,
+            note: updatedReturn.note,
+          },
+          {
+            returnDate: updatedReturn.returnDate,
+            quantity: updatedReturn.quantity,
+            unitPrice: updatedReturn.unitPrice,
+            amount: updatedReturn.amount,
+            note: updatedReturn.note,
+          }
+        );
+      }
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `deductions/${updatedDeduction.id}`
+      );
+    }
+  }
+
+  return { updatedDeduction, updatedReturn };
+}
+
 export async function deleteDeductionsBatchFromCloud(
   ownerId: string,
   deductionIds: string[]

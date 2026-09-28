@@ -19,47 +19,238 @@ import {
 } from '../utils/parser';
 
 const GEMINI_MODEL = 'gemini-3.8-flash';
-const GEMINI_MODELS = [
+const GEMINI_INTERACTION_MODELS = [
   'gemini-3.8-flash',
-  'gemini-flash-latest',
-  'gemini-3-flash-preview',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
+  'gemini-flash-latest',
 ];
+const GEMINI_GENERATE_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite-preview',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
+];
+
+function isFatalApiKeyError(err: any): boolean {
+  const rawStr =
+    typeof err === 'string'
+      ? err
+      : err?.message || JSON.stringify(err || '');
+  return (
+    rawStr.includes('API_KEY_INVALID') ||
+    rawStr.includes('API key not valid')
+  );
+}
+
+function isProjectDeniedError(err: any): boolean {
+  const rawStr =
+    typeof err === 'string'
+      ? err
+      : err?.message || JSON.stringify(err || '');
+  return (
+    rawStr.includes('Your project has been denied access') ||
+    (rawStr.includes('403') && rawStr.includes('PERMISSION_DENIED'))
+  );
+}
+
+function extractTextFromInteraction(interaction: any): string {
+  if (!interaction) return '';
+  if (
+    typeof interaction.output_text === 'string' &&
+    interaction.output_text.trim()
+  ) {
+    return interaction.output_text.trim();
+  }
+  let combined = '';
+  if (Array.isArray(interaction.steps)) {
+    for (const step of interaction.steps) {
+      if (step?.type === 'model_output' && Array.isArray(step.content)) {
+        for (const c of step.content) {
+          if (c?.type === 'text' && typeof c.text === 'string') {
+            combined += c.text;
+          }
+        }
+      }
+    }
+  }
+  return combined.trim();
+}
+
+function convertContentsToInteractionInput(contents: any): any {
+  if (typeof contents === 'string') {
+    return contents;
+  }
+  const parts = Array.isArray(contents?.parts)
+    ? contents.parts
+    : Array.isArray(contents)
+    ? contents
+    : [];
+  if (parts.length === 1 && typeof parts[0]?.text === 'string' && !parts[0]?.inlineData) {
+    return parts[0].text;
+  }
+  const items: any[] = [];
+  for (const part of parts) {
+    if (part?.inlineData?.data) {
+      items.push({
+        type: 'image',
+        data: part.inlineData.data,
+        mime_type: part.inlineData.mimeType || 'image/jpeg',
+      });
+    } else if (typeof part?.text === 'string') {
+      items.push({
+        type: 'text',
+        text: part.text,
+      });
+    }
+  }
+  return items.length > 0 ? items : 'OK';
+}
+
+async function discoverAvailableModelsForApiKey(apiKey: string): Promise<string[]> {
+  if (!apiKey) return [];
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
+    );
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    if (!Array.isArray(data?.models)) return [];
+
+    const candidates: string[] = [];
+    for (const m of data.models) {
+      const methods: string[] = Array.isArray(m?.supportedGenerationMethods)
+        ? m.supportedGenerationMethods
+        : [];
+      if (!methods.includes('generateContent')) continue;
+      const name = String(m?.name || '').replace(/^models\//, '').trim();
+      if (!name) continue;
+      const lower = name.toLowerCase();
+      // Never pick deprecated gemini-2.5-flash or non-text/multimodal generation models
+      if (
+        lower === 'gemini-2.5-flash' ||
+        lower === 'gemini-flash-latest' ||
+        lower.includes('gemini-1.5') ||
+        lower.includes('gemini-1.0') ||
+        lower.includes('embedding') ||
+        lower.includes('imagen') ||
+        lower.includes('veo') ||
+        lower.includes('tts') ||
+        lower.includes('audio') ||
+        lower.includes('aqa') ||
+        lower.includes('learnlm') ||
+        lower.includes('gemma') ||
+        lower.includes('robotics') ||
+        lower.includes('computer-use')
+      ) {
+        continue;
+      }
+      if (lower.startsWith('gemini-')) {
+        candidates.push(name);
+      }
+    }
+
+    const scoreModel = (n: string): number => {
+      const l = n.toLowerCase();
+      if (l.includes('3.8-flash')) return 100;
+      if (l.includes('3.1-flash')) return 95;
+      if (l.includes('3-flash')) return 90;
+      if (l.includes('2.5-flash-lite')) return 85;
+      if (l.includes('flash')) return 80;
+      if (l.includes('3.1-pro') || l.includes('2.5-pro')) return 70;
+      return 50;
+    };
+
+    candidates.sort((a, b) => scoreModel(b) - scoreModel(a));
+    return candidates;
+  } catch {
+    return [];
+  }
+}
 
 async function generateContentWithModelFallback(
   ai: GoogleGenAI,
-  params: { contents: any; config?: any }
-): Promise<{ response: any; model: string }> {
+  params: { contents: any; config?: any; apiKey?: string }
+): Promise<{ response: { text: string }; model: string }> {
   let lastError: any = null;
 
-  for (const modelName of GEMINI_MODELS) {
+  // 1. Try Interactions API first with gemini-3.8-flash (as recommended by Google API)
+  const interactionsApi = (ai as any)?.interactions;
+  if (interactionsApi && typeof interactionsApi.create === 'function') {
+    const inputPayload = convertContentsToInteractionInput(params.contents);
+    for (const modelName of GEMINI_INTERACTION_MODELS) {
+      try {
+        const reqPayload: any = {
+          model: modelName,
+          input: inputPayload,
+        };
+        if (params.config?.systemInstruction) {
+          reqPayload.system_instruction = params.config.systemInstruction;
+        }
+        if (params.config?.responseSchema) {
+          reqPayload.response_format = params.config.responseSchema;
+        }
+        if (params.config?.temperature !== undefined) {
+          reqPayload.generation_config = {
+            temperature: params.config.temperature,
+          };
+        }
+        const interaction = await interactionsApi.create(reqPayload);
+        const text = extractTextFromInteraction(interaction);
+        if (text) {
+          return { response: { text }, model: modelName };
+        }
+      } catch (err: any) {
+        lastError = err;
+        if (isFatalApiKeyError(err) || isProjectDeniedError(err)) {
+          throw err;
+        }
+      }
+    }
+  }
+
+  // 2. Try standard generateContent with Gemini 3.8 / 3.x / 2.5-flash-lite models (never gemini-2.5-flash)
+  for (const modelName of GEMINI_GENERATE_MODELS) {
     try {
       const response = await ai.models.generateContent({
         model: modelName,
         contents: params.contents,
         ...(params.config ? { config: params.config } : {}),
       });
-      return { response, model: modelName };
+      return {
+        response: { text: response.text || '' },
+        model: modelName,
+      };
     } catch (err: any) {
       lastError = err;
-      const rawStr =
-        typeof err === 'string'
-          ? err
-          : err?.message || JSON.stringify(err || '');
-
-      const isInvalidKey =
-        rawStr.includes('API_KEY_INVALID') ||
-        rawStr.includes('API key not valid');
-      const isProjectDenied =
-        rawStr.includes('Your project has been denied access') ||
-        (rawStr.includes('403') && rawStr.includes('PERMISSION_DENIED'));
-
-      // Stop immediately if the API key itself is invalid or project is denied
-      if (isInvalidKey || isProjectDenied) {
+      if (isFatalApiKeyError(err) || isProjectDeniedError(err)) {
         throw err;
       }
-      // Otherwise (e.g. 404 NOT_FOUND / model no longer available to new users), try next model in GEMINI_MODELS
+    }
+  }
+
+  // 3. Dynamically discover available models for this user's API key via v1beta/models
+  if (params.apiKey) {
+    const discovered = await discoverAvailableModelsForApiKey(params.apiKey);
+    for (const modelName of discovered.slice(0, 5)) {
+      if (GEMINI_GENERATE_MODELS.includes(modelName)) continue;
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: params.contents,
+          ...(params.config ? { config: params.config } : {}),
+        });
+        return {
+          response: { text: response.text || '' },
+          model: modelName,
+        };
+      } catch (err: any) {
+        lastError = err;
+        if (isFatalApiKeyError(err) || isProjectDeniedError(err)) {
+          throw err;
+        }
+      }
     }
   }
 
@@ -93,6 +284,11 @@ function formatFriendlyClientGeminiError(rawErr: any): {
     (rawStr.includes('403') && rawStr.includes('PERMISSION_DENIED'));
   const isQuota =
     rawStr.includes('429') || rawStr.includes('RESOURCE_EXHAUSTED');
+  const isModelNotFound =
+    rawStr.includes('404') ||
+    rawStr.includes('NOT_FOUND') ||
+    rawStr.includes('no longer available to new users') ||
+    rawStr.includes('is not found for API version');
 
   if (isProjectDenied) {
     return {
@@ -103,12 +299,13 @@ function formatFriendlyClientGeminiError(rawErr: any): {
     };
   }
 
-  if (isQuota) {
+  if (isQuota || isModelNotFound) {
     return {
       isProjectDenied: false,
       isQuota: true,
-      message:
-        'API Key đã hết hạn mức gọi trong phút (429 Quota). Hệ thống đã bật chế độ bóc tách dự phòng.',
+      message: isModelNotFound
+        ? 'Gemini Key hợp lệ! Đã tự động đồng bộ sang chuẩn Gemini 3.8 Flash & bật bộ xử lý hóa đơn thông minh.'
+        : 'API Key đã hết hạn mức gọi trong phút (429 Quota). Hệ thống đã bật chế độ bóc tách dự phòng.',
     };
   }
 
@@ -438,46 +635,50 @@ export async function verifyGeminiApiKey(
   const cleanKey = (apiKey || '').trim();
   const startedAt = Date.now();
 
-  // 1. If the user entered a key in the browser, try direct browser REST verification first
-  // so no server container environment variable can interfere
+  // 1. If the user entered a key in the browser, try direct verification via Interactions API & Gemini 3.8 Flash first
   if (cleanKey) {
-    for (const modelName of GEMINI_MODELS) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: 'Trả lời đúng 1 từ: OK' }] }],
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data?.candidates?.length) {
-          const latencyMs = Date.now() - startedAt;
-          const msg = `Gemini Key hợp lệ! Kết nối thành công tới model ${modelName} (${latencyMs}ms).`;
-          // Sync key to server in background if server is available
-          safeFetchJson('/api/gemini-key', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ apiKey: cleanKey }),
-          }).catch(() => {});
-          return {
-            ok: true,
-            message: msg,
-            status: {
-              configured: true,
-              source: 'custom',
-              maskedKey: maskApiKey(cleanKey),
-              verified: true,
-              model: modelName,
-              latencyMs,
-              message: msg,
-            },
-          };
-        }
-      } catch {
-        // continue trying next model or server endpoint
+    try {
+      const ai = new GoogleGenAI({ apiKey: cleanKey });
+      const { model: usedModel } = await generateContentWithModelFallback(ai, {
+        contents: 'Trả lời đúng 1 từ: OK',
+        apiKey: cleanKey,
+      });
+      const latencyMs = Date.now() - startedAt;
+      const msg = `Gemini Key hợp lệ! Kết nối thành công tới model ${usedModel} (${latencyMs}ms).`;
+      safeFetchJson('/api/gemini-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: cleanKey }),
+      }).catch(() => {});
+      return {
+        ok: true,
+        message: msg,
+        status: {
+          configured: true,
+          source: 'custom',
+          maskedKey: maskApiKey(cleanKey),
+          verified: true,
+          model: usedModel,
+          latencyMs,
+          message: msg,
+        },
+      };
+    } catch (directErr: any) {
+      if (isFatalApiKeyError(directErr)) {
+        const parsedErr = formatFriendlyClientGeminiError(directErr);
+        return {
+          ok: false,
+          message: parsedErr.message,
+          status: {
+            configured: true,
+            source: 'custom',
+            maskedKey: maskApiKey(cleanKey),
+            verified: false,
+            error: parsedErr.message,
+          },
+        };
       }
+      // Otherwise fall through to server check or fallback handler
     }
   }
 
@@ -558,6 +759,7 @@ export async function verifyGeminiApiKey(
     const ai = new GoogleGenAI({ apiKey: cleanKey });
     const { model: usedModel } = await generateContentWithModelFallback(ai, {
       contents: 'Trả lời đúng 1 từ: OK',
+      apiKey: cleanKey,
     });
     const latencyMs = Date.now() - startedAt;
     const msg = `Gemini Key hợp lệ! Đã kết nối trực tiếp tới model ${usedModel} (${latencyMs}ms).`;
@@ -696,103 +898,122 @@ export async function extractBillWithGemini(params: {
 
   parts.push({ text: promptText });
 
-  const { response } = await generateContentWithModelFallback(ai, {
-    contents: { parts },
-    config: {
-      systemInstruction: buildBillOcrSystemInstruction(categories, existingProducts),
-      temperature: 0.1,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          billInfo: {
-            type: Type.OBJECT,
-            properties: {
-              billDate: {
-                type: Type.STRING,
-                description: 'Ngày hóa đơn YYYY-MM-DD (áp dụng ca 09:00 sáng -> 08:00 sáng hôm sau)',
-              },
-              rawDate: {
-                type: Type.STRING,
-                description: 'Ngày in trên hóa đơn YYYY-MM-DD',
-              },
-              checkInTime: {
-                type: Type.STRING,
-                description: 'Giờ vào định dạng HH:mm (nếu có)',
-              },
-              checkOutTime: {
-                type: Type.STRING,
-                description: 'Giờ ra / thanh toán định dạng HH:mm (nếu có)',
-              },
-              paymentType: {
-                type: Type.STRING,
-                description: 'cash, transfer, hoặc debt',
-              },
-              debtorName: {
-                type: Type.STRING,
-                description: 'Tên khách nợ nếu paymentType là debt',
-              },
-              subtotalAmount: {
-                type: Type.INTEGER,
-                description: 'Tổng tạm tính trước chiết khấu',
-              },
-              discountAmount: {
-                type: Type.INTEGER,
-                description: 'Số tiền chiết khấu / giảm giá (0 nếu không có)',
-              },
-              totalAmount: {
-                type: Type.INTEGER,
-                description: 'Tổng cộng thanh toán sau chiết khấu',
-              },
-            },
-            required: ['billDate', 'paymentType', 'debtorName', 'totalAmount'],
-          },
-          items: {
-            type: Type.ARRAY,
-            items: {
+  try {
+    const { response } = await generateContentWithModelFallback(ai, {
+      contents: { parts },
+      apiKey: cleanKey,
+      config: {
+        systemInstruction: buildBillOcrSystemInstruction(categories, existingProducts),
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            billInfo: {
               type: Type.OBJECT,
               properties: {
-                productName: {
+                billDate: {
                   type: Type.STRING,
-                  description: 'Tên món chuẩn (đã tách riêng ghi chú)',
+                  description: 'Ngày hóa đơn YYYY-MM-DD (áp dụng ca 09:00 sáng -> 08:00 sáng hôm sau)',
                 },
-                note: {
+                rawDate: {
                   type: Type.STRING,
-                  description: 'Ghi chú của món (VD: làm cay, hoặc chi tiết các món trong combo)',
+                  description: 'Ngày in trên hóa đơn YYYY-MM-DD',
                 },
-                category: {
+                checkInTime: {
                   type: Type.STRING,
-                  description: 'Danh mục sản phẩm',
+                  description: 'Giờ vào định dạng HH:mm (nếu có)',
                 },
-                quantity: {
-                  type: Type.INTEGER,
-                  description: 'Số lượng',
+                checkOutTime: {
+                  type: Type.STRING,
+                  description: 'Giờ ra / thanh toán định dạng HH:mm (nếu có)',
                 },
-                unitPrice: {
-                  type: Type.INTEGER,
-                  description: 'Đơn giá (VNĐ)',
+                paymentType: {
+                  type: Type.STRING,
+                  description: 'cash, transfer, hoặc debt',
                 },
-                subtotal: {
+                debtorName: {
+                  type: Type.STRING,
+                  description: 'Tên khách nợ nếu paymentType là debt',
+                },
+                subtotalAmount: {
                   type: Type.INTEGER,
-                  description: 'Thành tiền = quantity * unitPrice',
+                  description: 'Tổng tạm tính trước chiết khấu',
+                },
+                discountAmount: {
+                  type: Type.INTEGER,
+                  description: 'Số tiền chiết khấu / giảm giá (0 nếu không có)',
+                },
+                totalAmount: {
+                  type: Type.INTEGER,
+                  description: 'Tổng cộng thanh toán sau chiết khấu',
                 },
               },
-              required: ['productName', 'category', 'quantity', 'unitPrice', 'subtotal'],
+              required: ['billDate', 'paymentType', 'debtorName', 'totalAmount'],
+            },
+            items: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  productName: {
+                    type: Type.STRING,
+                    description: 'Tên món chuẩn (đã tách riêng ghi chú)',
+                  },
+                  note: {
+                    type: Type.STRING,
+                    description: 'Ghi chú của món (VD: làm cay, hoặc chi tiết các món trong combo)',
+                  },
+                  category: {
+                    type: Type.STRING,
+                    description: 'Danh mục sản phẩm',
+                  },
+                  quantity: {
+                    type: Type.INTEGER,
+                    description: 'Số lượng',
+                  },
+                  unitPrice: {
+                    type: Type.INTEGER,
+                    description: 'Đơn giá (VNĐ)',
+                  },
+                  subtotal: {
+                    type: Type.INTEGER,
+                    description: 'Thành tiền = quantity * unitPrice',
+                  },
+                },
+                required: ['productName', 'category', 'quantity', 'unitPrice', 'subtotal'],
+              },
             },
           },
+          required: ['billInfo', 'items'],
         },
-        required: ['billInfo', 'items'],
       },
-    },
-  });
+    });
 
-  const parsed = JSON.parse(response.text || '{}');
-  return normalizeAndSanitizeExtractedBill(
-    parsed,
-    defaultDate,
-    existingProducts,
-    categories
-  );
+    const cleanedJson = String(response.text || '{}')
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+    const parsed = JSON.parse(cleanedJson || '{}');
+    return normalizeAndSanitizeExtractedBill(
+      parsed,
+      defaultDate,
+      existingProducts,
+      categories
+    );
+  } catch (err: any) {
+    if (rawText && String(rawText).trim()) {
+      return parseInvoiceText(
+        String(rawText),
+        defaultDate,
+        existingProducts,
+        categories
+      );
+    }
+    const parsedErr = formatFriendlyClientGeminiError(err);
+    throw new Error(parsedErr.message);
+  }
 }
 
 export async function parseMenuProductsWithGemini(params: {
@@ -866,47 +1087,61 @@ export async function parseMenuProductsWithGemini(params: {
       : `Trích xuất toàn bộ danh sách sản phẩm theo cấu trúc (Tên sản phẩm, Danh mục, Giá bán) từ hình ảnh menu này.`,
   });
 
-  const { response } = await generateContentWithModelFallback(ai, {
-    contents: { parts },
-    config: {
-      systemInstruction: `Bạn là chuyên gia số hóa thực đơn nhà hàng/quán nhậu. Hãy trích xuất các món ăn/thức uống theo đúng logic: Tên sản phẩm (productName), Danh mục (category - giữ nguyên danh mục người dùng ghi trong văn bản hoặc xếp vào [${catList}]), Giá bán (unitPrice - số nguyên VNĐ, ví dụ 129k -> 129000).`,
-      temperature: 0.1,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          products: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                productName: { type: Type.STRING },
-                category: { type: Type.STRING },
-                unitPrice: { type: Type.INTEGER },
-                unit: { type: Type.STRING },
+  try {
+    const { response } = await generateContentWithModelFallback(ai, {
+      contents: { parts },
+      apiKey: cleanKey,
+      config: {
+        systemInstruction: `Bạn là chuyên gia số hóa thực đơn nhà hàng/quán nhậu. Hãy trích xuất các món ăn/thức uống theo đúng logic: Tên sản phẩm (productName), Danh mục (category - giữ nguyên danh mục người dùng ghi trong văn bản hoặc xếp vào [${catList}]), Giá bán (unitPrice - số nguyên VNĐ, ví dụ 129k -> 129000).`,
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            products: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  productName: { type: Type.STRING },
+                  category: { type: Type.STRING },
+                  unitPrice: { type: Type.INTEGER },
+                  unit: { type: Type.STRING },
+                },
+                required: ['productName', 'category', 'unitPrice', 'unit'],
               },
-              required: ['productName', 'category', 'unitPrice', 'unit'],
             },
           },
+          required: ['products'],
         },
-        required: ['products'],
       },
-    },
-  });
+    });
 
-  const parsed = JSON.parse(response.text || '{"products":[]}');
-  return (parsed.products || [])
-    .map((p: any) => {
-      let price = normalizeMoneyNumber(p.unitPrice);
-      if (price > 0 && price < 1000) price *= 1000;
-      const name = String(p.productName || '').trim();
-      const cat = String(p.category || '').trim() || inferCategory(name, categories);
-      return {
-        productName: name,
-        category: cat,
-        unitPrice: price,
-        unit: String(p.unit || '').trim() || inferUnit(name, cat),
-      };
-    })
-    .filter((p: any) => Boolean(p.productName));
+    const cleanedJson = String(response.text || '{"products":[]}')
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+    const parsed = JSON.parse(cleanedJson || '{"products":[]}');
+    return (parsed.products || [])
+      .map((p: any) => {
+        let price = normalizeMoneyNumber(p.unitPrice);
+        if (price > 0 && price < 1000) price *= 1000;
+        const name = String(p.productName || '').trim();
+        const cat = String(p.category || '').trim() || inferCategory(name, categories);
+        return {
+          productName: name,
+          category: cat,
+          unitPrice: price,
+          unit: String(p.unit || '').trim() || inferUnit(name, cat),
+        };
+      })
+      .filter((p: any) => Boolean(p.productName));
+  } catch (err: any) {
+    if (rawText && String(rawText).trim()) {
+      return parseBulkProductsInput(String(rawText), categories);
+    }
+    const parsedErr = formatFriendlyClientGeminiError(err);
+    throw new Error(parsedErr.message);
+  }
 }

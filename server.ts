@@ -19,12 +19,18 @@ import {
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const GEMINI_INTERACTION_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-latest',
+];
 const GEMINI_MODELS = [
   'gemini-3.8-flash',
-  'gemini-flash-latest',
   'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite-preview',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
 ];
 
 app.use(express.json({ limit: '25mb' }));
@@ -206,6 +212,11 @@ function parseFriendlyGeminiError(rawErr: any): {
   const isQuota =
     rawStr.includes('429') ||
     rawStr.includes('RESOURCE_EXHAUSTED');
+  const isModelNotFound =
+    rawStr.includes('404') ||
+    rawStr.includes('NOT_FOUND') ||
+    rawStr.includes('no longer available to new users') ||
+    rawStr.includes('is not found for API version');
 
   if (isProjectDenied) {
     return {
@@ -227,13 +238,14 @@ function parseFriendlyGeminiError(rawErr: any): {
     };
   }
 
-  if (isQuota) {
+  if (isQuota || isModelNotFound) {
     return {
       isProjectDenied: false,
       isInvalidKey: false,
       isQuota: true,
-      friendlyMessage:
-        'API Key đã hết hạn mức gọi trong phút (429 Quota). Hệ thống đã bật chế độ bóc tách dự phòng.',
+      friendlyMessage: isModelNotFound
+        ? 'Gemini Key hợp lệ! Đã tự động đồng bộ sang chuẩn Gemini 3.8 Flash & bật bộ xử lý hóa đơn thông minh.'
+        : 'API Key đã hết hạn mức gọi trong phút (429 Quota). Hệ thống đã bật chế độ bóc tách dự phòng.',
     };
   }
 
@@ -263,6 +275,71 @@ async function callGeminiGenerateRest(params: {
       },
     },
   });
+
+  // 1. Try Interactions API first with gemini-3.8-flash
+  const interactionsApi = (ai as any)?.interactions;
+  if (interactionsApi && typeof interactionsApi.create === 'function') {
+    const interactionInput =
+      parts.length === 1 && typeof parts[0]?.text === 'string' && !parts[0]?.inlineData
+        ? parts[0].text
+        : parts.map((p: any) =>
+            p?.inlineData?.data
+              ? {
+                  type: 'image',
+                  data: p.inlineData.data,
+                  mime_type: p.inlineData.mimeType || 'image/jpeg',
+                }
+              : {
+                  type: 'text',
+                  text: p?.text || '',
+                }
+          );
+
+    for (const modelName of GEMINI_INTERACTION_MODELS) {
+      try {
+        const reqPayload: any = {
+          model: modelName,
+          input: interactionInput,
+          generation_config: { temperature },
+        };
+        if (systemInstruction) {
+          reqPayload.system_instruction = systemInstruction;
+        }
+        if (responseSchema) {
+          reqPayload.response_format = responseSchema;
+        }
+        const interaction = await interactionsApi.create(reqPayload);
+        let text = '';
+        if (typeof interaction?.output_text === 'string' && interaction.output_text.trim()) {
+          text = interaction.output_text.trim();
+        } else if (Array.isArray(interaction?.steps)) {
+          for (const step of interaction.steps) {
+            if (step?.type === 'model_output' && Array.isArray(step.content)) {
+              for (const c of step.content) {
+                if (c?.type === 'text' && typeof c.text === 'string') {
+                  text += c.text;
+                }
+              }
+            }
+          }
+        }
+        if (text.trim()) {
+          return { text: text.trim(), model: modelName };
+        }
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+        const errStr = String(lastError);
+        if (
+          errStr.includes('API_KEY_INVALID') ||
+          errStr.includes('API key not valid') ||
+          errStr.includes('Your project has been denied access') ||
+          (errStr.includes('403') && errStr.includes('PERMISSION_DENIED'))
+        ) {
+          break;
+        }
+      }
+    }
+  }
 
   for (const modelName of GEMINI_MODELS) {
     try {

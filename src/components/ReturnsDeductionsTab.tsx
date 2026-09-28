@@ -11,6 +11,9 @@ import {
   MapPin,
   ArrowRight,
   Filter,
+  Edit3,
+  Check,
+  X,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -42,6 +45,14 @@ interface ReturnsDeductionsTabProps {
   canDelete: boolean;
   preselectedBillId?: string | null;
   onAddExpenseDeduction: (params: {
+    deductionDate: string;
+    expenseTitle: string;
+    category: string;
+    amount: number;
+    note: string;
+  }) => Promise<void>;
+  onUpdateExpenseDeduction?: (params: {
+    deduction: DeductionRecord;
     deductionDate: string;
     expenseTitle: string;
     category: string;
@@ -130,6 +141,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   canDelete,
   preselectedBillId,
   onAddExpenseDeduction,
+  onUpdateExpenseDeduction,
   onRecordReturn,
   onDeleteDeductionsBatch,
   onDeleteReturnsBatch,
@@ -149,6 +161,14 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   const [expenseAmount, setExpenseAmount] = useState<number>(50000);
   const [expenseNote, setExpenseNote] = useState<string>('');
   const [searchDeduction, setSearchDeduction] = useState('');
+
+  // State for Editing an existing Khoản trừ (Deduction)
+  const [editingDeduction, setEditingDeduction] = useState<DeductionRecord | null>(null);
+  const [editDedDate, setEditDedDate] = useState<string>(todayStr);
+  const [editDedTitle, setEditDedTitle] = useState<string>('');
+  const [editDedCategory, setEditDedCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
+  const [editDedAmount, setEditDedAmount] = useState<number>(0);
+  const [editDedNote, setEditDedNote] = useState<string>('');
 
   // Period filter for viewing Khoản trừ (Hôm nay, Hôm qua, Theo ngày, Tuần, Tháng, Khoảng ngày, Tất cả)
   const [dedPeriodMode, setDedPeriodMode] = useState<DeductionPeriodMode>('today');
@@ -466,6 +486,75 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
         }
       },
     });
+  };
+
+  const handleStartEditDeduction = (ded: DeductionRecord) => {
+    if (!canWrite) return;
+    setStatusMsg(null);
+    setEditingDeduction(ded);
+    setEditDedDate(ded.deductionDate || ded.billDate || todayStr);
+    setEditDedTitle(ded.productName || '');
+    setEditDedCategory(
+      EXPENSE_CATEGORIES.includes(ded.category)
+        ? ded.category
+        : ded.category || EXPENSE_CATEGORIES[0]
+    );
+    setEditDedAmount(Math.max(0, Math.round(Number(ded.amount) || 0)));
+    setEditDedNote(ded.note || '');
+  };
+
+  const handleCancelEditDeduction = () => {
+    setEditingDeduction(null);
+  };
+
+  const handleSaveEditedDeduction = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!canWrite || !editingDeduction || !onUpdateExpenseDeduction) return;
+
+    const cleanTitle = editDedTitle.trim();
+    if (!cleanTitle) {
+      setStatusMsg({
+        type: 'err',
+        text: 'Vui lòng nhập nội dung khoản trừ cần chỉnh sửa.',
+      });
+      return;
+    }
+
+    const safeAmt = Math.max(0, Math.round(Number(editDedAmount) || 0));
+    if (safeAmt <= 0) {
+      setStatusMsg({
+        type: 'err',
+        text: 'Số tiền khoản trừ phải lớn hơn 0đ.',
+      });
+      return;
+    }
+
+    const targetDed = editingDeduction;
+    setIsSubmitting(true);
+    try {
+      await onUpdateExpenseDeduction({
+        deduction: targetDed,
+        deductionDate: editDedDate || todayStr,
+        expenseTitle: cleanTitle,
+        category: editDedCategory || targetDed.category || EXPENSE_CATEGORIES[0],
+        amount: safeAmt,
+        note: editDedNote.trim(),
+      });
+      setEditingDeduction(null);
+      setStatusMsg({
+        type: 'ok',
+        text: `Đã cập nhật khoản trừ "${cleanTitle}" (-${formatVND(
+          safeAmt
+        )}, ngày ${formatDateDMY(editDedDate || todayStr)}) thành công!`,
+      });
+    } catch (err: any) {
+      setStatusMsg({
+        type: 'err',
+        text: err?.message || 'Lỗi khi cập nhật khoản trừ.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleDeleteOneDeduction = (ded: DeductionRecord) => {
@@ -1096,6 +1185,114 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             </div>
           </div>
 
+          {/* Active Edit Deduction Form Banner if user clicked "Sửa" on a row */}
+          {editingDeduction && canWrite && (
+            <form
+              onSubmit={handleSaveEditedDeduction}
+              className="p-4 rounded-xl border-2 border-amber-400/80 dark:border-amber-500/70 bg-amber-50/70 dark:bg-amber-950/30 space-y-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Edit3 className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                    Chỉnh sửa Khoản trừ: <span className="text-amber-700 dark:text-amber-300">{editingDeduction.productName}</span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCancelEditDeduction}
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Đóng chỉnh sửa</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
+                <div className="lg:col-span-2">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Ngày chi
+                  </label>
+                  <input
+                    type="date"
+                    value={editDedDate}
+                    onChange={(e) => setEditDedDate(e.target.value)}
+                    className="w-full h-9 px-2.5 text-xs font-mono rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="lg:col-span-3">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Nội dung khoản trừ *
+                  </label>
+                  <input
+                    type="text"
+                    value={editDedTitle}
+                    onChange={(e) => setEditDedTitle(e.target.value)}
+                    placeholder="Nội dung khoản trừ..."
+                    className="w-full h-9 px-2.5 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="lg:col-span-2">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Nhóm khoản trừ
+                  </label>
+                  <select
+                    value={editDedCategory}
+                    onChange={(e) => setEditDedCategory(e.target.value)}
+                    className="w-full h-9 px-2 text-xs rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  >
+                    {Array.from(
+                      new Set([...EXPENSE_CATEGORIES, editDedCategory].filter(Boolean))
+                    ).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="lg:col-span-2">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Số tiền trừ (₫) *
+                  </label>
+                  <input
+                    type="number"
+                    min={1000}
+                    step={1000}
+                    value={editDedAmount}
+                    onChange={(e) => setEditDedAmount(Number(e.target.value))}
+                    className="w-full h-9 px-2.5 text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900"
+                  />
+                </div>
+
+                <div className="lg:col-span-3 flex flex-col justify-end">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Ghi chú
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={editDedNote}
+                      onChange={(e) => setEditDedNote(e.target.value)}
+                      placeholder="Ghi chú..."
+                      className="flex-1 h-9 px-2.5 text-xs rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="h-9 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs inline-flex items-center gap-1 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Lưu</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </form>
+          )}
+
           {filteredDeductions.length === 0 ? (
             <div className="py-10 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
               Không có khoản trừ nào trong kỳ <strong>{dedPeriodLabel}</strong>. Bạn có thể bấm chọn <strong>Hôm qua</strong>, <strong>Tuần</strong>, <strong>Tháng</strong> hoặc <strong>Tất cả</strong> ở thanh lọc phía trên để xem các ngày khác.
@@ -1112,12 +1309,99 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                     <th className="py-2.5 px-3">Nhóm khoản trừ</th>
                     <th className="py-2.5 px-3 text-right">Số tiền trừ</th>
                     <th className="py-2.5 px-3">Ghi chú</th>
-                    {canDelete && <th className="py-2.5 px-3 text-right">Xóa</th>}
+                    {(canWrite || canDelete) && (
+                      <th className="py-2.5 px-3 text-right">Thao tác</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                   {filteredDeductions.map((ded) => {
                     const fromReturn = isReturnLinkedDeduction(ded);
+                    const isRowEditing = editingDeduction?.id === ded.id;
+
+                    if (isRowEditing && canWrite) {
+                      return (
+                        <tr
+                          key={ded.id}
+                          className="bg-amber-50/80 dark:bg-amber-950/30"
+                        >
+                          <td className="py-2 px-2.5">
+                            <input
+                              type="date"
+                              value={editDedDate}
+                              onChange={(e) => setEditDedDate(e.target.value)}
+                              className="w-32 h-8 px-2 text-xs font-mono rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5">
+                            <input
+                              type="text"
+                              value={editDedTitle}
+                              onChange={(e) => setEditDedTitle(e.target.value)}
+                              className="w-full min-w-[180px] h-8 px-2.5 text-xs font-semibold rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5">
+                            <select
+                              value={editDedCategory}
+                              onChange={(e) => setEditDedCategory(e.target.value)}
+                              className="w-full min-w-[140px] h-8 px-2 text-xs rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            >
+                              {Array.from(
+                                new Set([...EXPENSE_CATEGORIES, editDedCategory].filter(Boolean))
+                              ).map((c) => (
+                                <option key={c} value={c}>
+                                  {c}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="py-2 px-2.5 text-right">
+                            <input
+                              type="number"
+                              min={1000}
+                              step={1000}
+                              value={editDedAmount}
+                              onChange={(e) => setEditDedAmount(Number(e.target.value))}
+                              className="w-28 h-8 px-2 text-right text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5">
+                            <input
+                              type="text"
+                              value={editDedNote}
+                              onChange={(e) => setEditDedNote(e.target.value)}
+                              placeholder="Ghi chú..."
+                              className="w-full min-w-[130px] h-8 px-2 text-xs rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5 text-right whitespace-nowrap">
+                            <div className="inline-flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                disabled={isSubmitting}
+                                onClick={() => handleSaveEditedDeduction()}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                                title="Lưu thay đổi"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Lưu</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleCancelEditDeduction}
+                                className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 text-[11px] font-semibold text-slate-600 dark:text-slate-300 inline-flex items-center gap-1 cursor-pointer"
+                                title="Hủy"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                                <span>Hủy</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
                     return (
                       <tr
                         key={ded.id}
@@ -1148,16 +1432,32 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                         <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
                           {ded.note}
                         </td>
-                        {canDelete && (
-                          <td className="py-2.5 px-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteOneDeduction(ded)}
-                              className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
-                              title="Xóa khoản trừ"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 inline" />
-                            </button>
+                        {(canWrite || canDelete) && (
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                            <div className="inline-flex items-center justify-end gap-1.5">
+                              {canWrite && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditDeduction(ded)}
+                                  className="px-2 py-1 rounded-lg border border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-[11px] font-semibold text-amber-700 dark:text-amber-300 inline-flex items-center gap-1 cursor-pointer"
+                                  title="Chỉnh sửa khoản trừ"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Sửa</span>
+                                </button>
+                              )}
+                              {canDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteOneDeduction(ded)}
+                                  className="px-2 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-[11px] font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1 cursor-pointer"
+                                  title="Xóa khoản trừ"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Xóa</span>
+                                </button>
+                              )}
+                            </div>
                           </td>
                         )}
                       </tr>

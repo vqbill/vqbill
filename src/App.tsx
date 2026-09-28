@@ -120,6 +120,7 @@ import {
   updateBillAndItemsInCloud,
   deleteBillsBatchFromCloud,
   saveExpenseDeductionToCloud,
+  updateExpenseDeductionInCloud,
   deleteDeductionsBatchFromCloud,
   recordItemReturnToCloud,
   deleteReturnsBatchFromCloud,
@@ -1461,9 +1462,12 @@ export default function App() {
 
       if (alreadyLinkedIdx >= 0) {
         const existing = result[alreadyLinkedIdx];
+        const wasManuallyEdited =
+          (existing.updatedAtMs || 0) > (r.createdAtMs || 0) + 1000;
         if (
-          existing.productName !== formattedTitle ||
-          existing.billCode !== 'HOAN-TRA'
+          !wasManuallyEdited &&
+          (existing.productName !== formattedTitle ||
+            existing.billCode !== 'HOAN-TRA')
         ) {
           result[alreadyLinkedIdx] = {
             ...existing,
@@ -2395,6 +2399,58 @@ export default function App() {
       `Đã lưu khoản trừ "${params.expenseTitle}" (-${formatVND(
         params.amount
       )}) vào ngày ${params.deductionDate}!`
+    );
+  };
+
+  const handleUpdateExpenseDeduction = async (params: {
+    deduction: DeductionRecord;
+    deductionDate: string;
+    expenseTitle: string;
+    category: string;
+    amount: number;
+    note: string;
+  }) => {
+    setWorkspaceInitialized(true);
+    const linkedReturn = returns.find(
+      (r) =>
+        sanitizeId(`ded_${r.id}`) === params.deduction.id ||
+        `ded_${r.id}` === params.deduction.id
+    );
+    const res = await updateExpenseDeductionInCloud({
+      ownerId,
+      deduction: params.deduction,
+      updates: {
+        deductionDate: params.deductionDate,
+        expenseTitle: params.expenseTitle,
+        category: params.category,
+        amount: params.amount,
+        note: params.note,
+      },
+      linkedReturn,
+    });
+
+    setDeductions((prev) => {
+      const exists = prev.some((d) => d.id === res.updatedDeduction.id);
+      if (exists) {
+        return prev.map((d) =>
+          d.id === res.updatedDeduction.id ? res.updatedDeduction : d
+        );
+      }
+      return [res.updatedDeduction, ...prev];
+    });
+
+    if (res.updatedReturn) {
+      setReturns((prev) =>
+        prev.map((r) =>
+          r.id === res.updatedReturn!.id ? res.updatedReturn! : r
+        )
+      );
+    }
+
+    showToast(
+      `Đã cập nhật khoản trừ "${params.expenseTitle}" (-${formatVND(
+        params.amount
+      )}, ngày ${params.deductionDate})!`
     );
   };
 
@@ -4054,6 +4110,7 @@ export default function App() {
               canDelete={canDelete}
               preselectedBillId={preselectedReturnBillId}
               onAddExpenseDeduction={handleAddExpenseDeduction}
+              onUpdateExpenseDeduction={handleUpdateExpenseDeduction}
               onRecordReturn={handleRecordReturn}
               onDeleteDeductionsBatch={handleDeleteDeductionsBatch}
               onDeleteReturnsBatch={handleDeleteReturnsBatch}
@@ -4075,6 +4132,7 @@ export default function App() {
               canDelete={canDelete}
               preselectedBillId={preselectedReturnBillId}
               onAddExpenseDeduction={handleAddExpenseDeduction}
+              onUpdateExpenseDeduction={handleUpdateExpenseDeduction}
               onRecordReturn={handleRecordReturn}
               onDeleteDeductionsBatch={handleDeleteDeductionsBatch}
               onDeleteReturnsBatch={handleDeleteReturnsBatch}
