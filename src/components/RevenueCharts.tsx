@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { formatVND, formatNumber } from '../utils/parser';
+import { formatVND, formatNumber, getPrivacyMaskMode } from '../utils/parser';
 
 export interface DailyRevenuePoint {
   date: string;
@@ -146,7 +146,9 @@ export const RevenueColumnChart: React.FC<RevenueColumnChartProps> = ({ data }) 
                 >
                   {/* Value label on top */}
                   <div className="mb-1.5 text-[10px] sm:text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                    {formatNumber(Math.round(point.netDayTotal / 1000))}k
+                    {getPrivacyMaskMode()
+                      ? '***k'
+                      : `${formatNumber(Math.round(point.netDayTotal / 1000))}k`}
                   </div>
 
                   {/* Columns Group */}

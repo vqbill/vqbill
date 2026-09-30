@@ -7,6 +7,7 @@ export enum UserRole {
 }
 
 export type ManagementTabId =
+  | 'home'
   | 'dashboard'
   | 'ocr'
   | 'categories'
@@ -28,6 +29,13 @@ export interface ManagementTabMeta {
 }
 
 export const MANAGEMENT_TABS: ManagementTabMeta[] = [
+  {
+    id: 'home',
+    label: 'Trang chủ (Sảnh điều hướng)',
+    shortLabel: 'Trang chủ',
+    description:
+      'Sảnh chờ ca làm việc, bảng lối tắt thao tác nhanh (Nhập Bill, Khoản trừ, Hoàn trả, Kiểm kho) và ẩn/hiện số tiền nhạy cảm',
+  },
   {
     id: 'dashboard',
     label: 'Tổng quan & Doanh thu',
@@ -115,6 +123,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   [UserRole.ADMIN]: {
     role: UserRole.ADMIN,
     allowedTabs: [
+      'home',
       'dashboard',
       'ocr',
       'categories',
@@ -134,6 +143,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   [UserRole.MANAGER]: {
     role: UserRole.MANAGER,
     allowedTabs: [
+      'home',
       'dashboard',
       'ocr',
       'categories',
@@ -152,6 +162,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   [UserRole.CASHIER]: {
     role: UserRole.CASHIER,
     allowedTabs: [
+      'home',
       'dashboard',
       'ocr',
       'inventory',
@@ -168,6 +179,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   [UserRole.VIEWER]: {
     role: UserRole.VIEWER,
     allowedTabs: [
+      'home',
       'dashboard',
       'categories',
       'inventory',
@@ -183,7 +195,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.INVENTORY]: {
     role: UserRole.INVENTORY,
-    allowedTabs: ['categories', 'inventory', 'owner_use'],
+    allowedTabs: ['home', 'categories', 'inventory', 'owner_use'],
     canWrite: true,
     canDelete: false,
     restrictProductCategories: false,
@@ -530,8 +542,12 @@ export function getEffectiveRolePermissions(
     }
   }
 
+  if (!tabs.includes('home')) {
+    tabs = ['home', ...tabs];
+  }
+
   if (tabs.length === 0) {
-    tabs = ['dashboard'];
+    tabs = ['home', 'dashboard'];
   }
 
   // Sort tabs in canonical navigation order

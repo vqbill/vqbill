@@ -17,7 +17,33 @@ export function truncateStr(str: string, maxLen: number, fallback = ''): string 
   return val.slice(0, maxLen);
 }
 
-export function formatVND(amount: number): string {
+let privacyMaskEnabled: boolean = (() => {
+  try {
+    return typeof window !== 'undefined' && localStorage.getItem('vqbill_privacy_hide_money') === '1';
+  } catch {
+    return false;
+  }
+})();
+
+export function getPrivacyMaskMode(): boolean {
+  return privacyMaskEnabled;
+}
+
+export function setPrivacyMaskMode(enabled: boolean): void {
+  privacyMaskEnabled = Boolean(enabled);
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('vqbill_privacy_hide_money', privacyMaskEnabled ? '1' : '0');
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function formatVND(amount: number, forceShow = false): string {
+  if (privacyMaskEnabled && !forceShow) {
+    return '****** ₫';
+  }
   const num = Math.round(Number(amount) || 0);
   return num.toLocaleString('vi-VN') + ' ₫';
 }

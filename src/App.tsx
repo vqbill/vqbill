@@ -39,6 +39,8 @@ import {
   UploadCloud,
   DownloadCloud,
   Eye,
+  EyeOff,
+  Home,
   Boxes,
   UserCheck,
 } from 'lucide-react';
@@ -76,6 +78,8 @@ import {
 } from './types';
 import {
   formatVND,
+  getPrivacyMaskMode,
+  setPrivacyMaskMode,
   sanitizeId,
   truncateStr,
   getCurrentBusinessDate,
@@ -133,6 +137,8 @@ import {
   dedupeRecordsById,
 } from './services/dataService';
 import { AuthScreen } from './components/AuthScreen';
+import { HomeLaunchpadTab } from './components/HomeLaunchpadTab';
+import { LunarCalendarFloatingWidget } from './components/LunarCalendarFloatingWidget';
 import { RevenueColumnChart, DailyRevenuePoint } from './components/RevenueCharts';
 import { OcrScannerTab } from './components/OcrScannerTab';
 import { CategoryAnalyticsTab } from './components/CategoryAnalyticsTab';
@@ -305,9 +311,93 @@ export default function App() {
     setConfirmConfig(opts);
   };
 
-  // Active Navigation Tab
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  // Active Navigation Tab with URL Path & Refresh (F5) Persistence
+  const TAB_TO_PATH: Record<ActiveTab, string> = useMemo(
+    () => ({
+      home: '/trang-chu',
+      dashboard: '/tong-quan',
+      ocr: '/nhap-bill',
+      categories: '/danh-muc',
+      inventory: '/kho-do-uong',
+      owner_use: '/chu-quan-su-dung',
+      debts: '/cong-no',
+      deductions: '/khoan-tru',
+      returns: '/hoan-tra',
+      products: '/thuc-don',
+      accounts: '/tai-khoan',
+    }),
+    []
+  );
+
+  const resolveTabFromLocation = useCallback((): ActiveTab => {
+    const validTabs: ActiveTab[] = [
+      'home',
+      'dashboard',
+      'ocr',
+      'categories',
+      'inventory',
+      'owner_use',
+      'debts',
+      'deductions',
+      'returns',
+      'products',
+      'accounts',
+    ];
+    try {
+      const cleanPath = window.location.pathname.replace(/\/+$/, '') || '/';
+      for (const [tabId, pathStr] of Object.entries(TAB_TO_PATH)) {
+        if (cleanPath === pathStr || cleanPath === `/${tabId}`) {
+          return tabId as ActiveTab;
+        }
+      }
+      const hashVal = window.location.hash.replace(/^#\/?/, '').trim();
+      if (validTabs.includes(hashVal as ActiveTab)) {
+        return hashVal as ActiveTab;
+      }
+      const savedTab = localStorage.getItem('vqbill_active_tab');
+      if (savedTab && validTabs.includes(savedTab as ActiveTab)) {
+        return savedTab as ActiveTab;
+      }
+    } catch {
+      // ignore
+    }
+    return 'home';
+  }, [TAB_TO_PATH]);
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => resolveTabFromLocation());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [hideMoney, setHideMoney] = useState<boolean>(() => getPrivacyMaskMode());
+
+  const handleToggleHideMoney = useCallback(() => {
+    setHideMoney((prev) => {
+      const next = !prev;
+      setPrivacyMaskMode(next);
+      return next;
+    });
+  }, []);
+
+  // Sync activeTab to URL path and localStorage so F5/Refresh stays on the current tab
+  useEffect(() => {
+    try {
+      localStorage.setItem('vqbill_active_tab', activeTab);
+      const targetPath = TAB_TO_PATH[activeTab] || '/trang-chu';
+      if (window.location.pathname !== targetPath) {
+        window.history.pushState({ tab: activeTab }, '', targetPath);
+      }
+    } catch {
+      // ignore
+    }
+  }, [activeTab, TAB_TO_PATH]);
+
+  // Listen to browser Back / Forward buttons
+  useEffect(() => {
+    const onPopState = () => {
+      const nextTab = resolveTabFromLocation();
+      setActiveTab(nextTab);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [resolveTabFromLocation]);
 
   // Settings
   const [autoAddProducts, setAutoAddProducts] = useState<boolean>(true);
@@ -3230,14 +3320,17 @@ export default function App() {
   // If not logged in, render AuthScreen (without any sample quick-fill buttons)
   if (!currentStaffAccount) {
     return (
-      <AuthScreen
-        staffAccounts={staffAccounts}
-        onLoginSuccess={handleStaffLoginSuccess}
-        onGoogleLogin={handleGoogleSignIn}
-        darkMode={darkMode}
-        onToggleDarkMode={() => setDarkMode((d) => !d)}
-        authError={authError}
-      />
+      <>
+        <AuthScreen
+          staffAccounts={staffAccounts}
+          onLoginSuccess={handleStaffLoginSuccess}
+          onGoogleLogin={handleGoogleSignIn}
+          darkMode={darkMode}
+          onToggleDarkMode={() => setDarkMode((d) => !d)}
+          authError={authError}
+        />
+        <LunarCalendarFloatingWidget />
+      </>
     );
   }
 
@@ -3247,6 +3340,12 @@ export default function App() {
     shortLabel: string;
     icon: React.ReactNode;
   }[] = [
+    {
+      id: 'home',
+      label: 'Trang chủ (Sảnh điều hướng)',
+      shortLabel: 'Trang chủ',
+      icon: <Home className="w-4 h-4" />,
+    },
     {
       id: 'dashboard',
       label: 'Tổng quan & Doanh thu',
@@ -3327,10 +3426,10 @@ export default function App() {
             {mobileMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
           </button>
           <a
-            href="#top"
+            href="/trang-chu"
             onClick={(e) => {
               e.preventDefault();
-              handleSelectTab(allowedTabs[0] || 'dashboard');
+              handleSelectTab('home');
             }}
             className="flex items-center gap-2 text-base sm:text-lg font-extrabold tracking-tight text-slate-900 dark:text-white whitespace-nowrap"
           >
@@ -3362,6 +3461,33 @@ export default function App() {
 
         {/* Primary Actions */}
         <div className="flex items-center gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            onClick={handleToggleHideMoney}
+            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+              hideMoney
+                ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
+            }`}
+            title={
+              hideMoney
+                ? 'Đang bật Chế độ riêng tư (****** ₫) — Bấm để hiện số tiền'
+                : 'Bấm để ẩn toàn bộ số tiền nhạy cảm (****** ₫)'
+            }
+          >
+            {hideMoney ? (
+              <>
+                <EyeOff className="w-3.5 h-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span className="hidden md:inline">Đang ẩn: ****** ₫</span>
+              </>
+            ) : (
+              <>
+                <Eye className="w-3.5 h-3.5 shrink-0 text-slate-500" />
+                <span className="hidden md:inline">Ẩn số tiền</span>
+              </>
+            )}
+          </button>
+
           <button
             type="button"
             onClick={() => setShowCloudSyncModal(true)}
@@ -3514,8 +3640,28 @@ export default function App() {
 
             {/* Quick Summary Sidebar Box */}
             <div className="p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2 text-xs">
-              <div className="font-bold text-slate-800 dark:text-slate-200">
-                Tóm tắt kỳ đang xem
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-800 dark:text-slate-200">
+                  Tóm tắt kỳ đang xem
+                </span>
+                <button
+                  type="button"
+                  onClick={handleToggleHideMoney}
+                  className="text-[11px] font-semibold text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400 inline-flex items-center gap-1 cursor-pointer"
+                  title="Ẩn/Hiện số tiền nhạy cảm"
+                >
+                  {hideMoney ? (
+                    <>
+                      <Eye className="w-3 h-3" />
+                      <span>Hiện</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3" />
+                      <span>Ẩn</span>
+                    </>
+                  )}
+                </button>
               </div>
               <div className="flex items-center justify-between font-mono">
                 <span className="text-slate-500">Số Bill:</span>
@@ -3598,7 +3744,10 @@ export default function App() {
         </aside>
 
         {/* Main Content Viewport */}
-        <main className="flex-1 min-w-0 p-3 sm:p-5 lg:p-6 max-w-[1360px] mx-auto w-full space-y-4 sm:space-y-6">
+        <main
+          key={hideMoney ? 'privacy-masked' : 'privacy-visible'}
+          className="flex-1 min-w-0 p-3 sm:p-5 lg:p-6 max-w-[1360px] mx-auto w-full space-y-4 sm:space-y-6"
+        >
           {/* Toast Notification */}
           {toastBanner && (
             <div className="p-3.5 rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 flex items-center justify-between text-xs font-medium text-emerald-800 dark:text-emerald-200 shadow-xs">
@@ -3693,6 +3842,23 @@ export default function App() {
                 </div>
               </div>
             )}
+
+          {/* TAB 0: HOME LAUNCHPAD (SẢNH ĐIỀU HƯỚNG CA LÀM VIỆC) */}
+          {activeTab === 'home' && (
+            <HomeLaunchpadTab
+              todayStr={todayStr}
+              currentStaffAccount={currentStaffAccount}
+              allowedTabs={allowedTabs}
+              bills={bills}
+              deductions={effectiveDeductions}
+              returns={returns}
+              products={products}
+              hideMoney={hideMoney}
+              onToggleHideMoney={handleToggleHideMoney}
+              onSelectTab={handleSelectTab}
+              onInspectBill={(b) => setInspectingBill(b)}
+            />
+          )}
 
           {/* TAB 1: DASHBOARD & FINANCIAL LEDGER */}
           {activeTab === 'dashboard' && allowedTabs.includes('dashboard') && (
@@ -4756,6 +4922,9 @@ export default function App() {
         config={confirmConfig}
         onClose={() => setConfirmConfig(null)}
       />
+
+      {/* Fixed Bottom-Right Solar & Lunar Calendar Widget */}
+      <LunarCalendarFloatingWidget />
     </div>
   );
 }
