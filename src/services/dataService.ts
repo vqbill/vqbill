@@ -223,25 +223,42 @@ export function unmarkDebtorDeletedLocally(debtorName: string): void {
   }
 }
 
+export function dedupeRecordsById<T extends { id: string; updatedAtMs?: number }>(
+  list?: T[]
+): T[] {
+  if (!Array.isArray(list)) return [];
+  const map = new Map<string, T>();
+  for (const item of list) {
+    if (!item || !item.id) continue;
+    const key = sanitizeId(item.id) || item.id;
+    const existing = map.get(key);
+    if (!existing || (item.updatedAtMs || 0) >= (existing.updatedAtMs || 0)) {
+      map.set(key, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
 function filterSnapshotByTombstones(
   snap: WorkspaceCacheSnapshot
 ): WorkspaceCacheSnapshot {
   const deletedBills = getDeletedBillIds();
   const deletedDebtors = getDeletedDebtors();
-  const filteredBills = (snap.bills || []).filter(
+  const filteredBills = dedupeRecordsById(snap.bills || []).filter(
     (b) => !deletedBills.has(b.id) && !deletedBills.has(sanitizeId(b.id))
   );
   const validBillIds = new Set(filteredBills.map((b) => b.id));
-  const filteredBillItems = (snap.billItems || []).filter(
+  const filteredBillItems = dedupeRecordsById(snap.billItems || []).filter(
     (it) =>
       !deletedBills.has(it.billId) &&
       !deletedBills.has(sanitizeId(it.billId)) &&
       (validBillIds.size === 0 || validBillIds.has(it.billId))
   );
-  const filteredDeductions = (snap.deductions || []).filter(
+  const filteredProducts = dedupeRecordsById(snap.products || []);
+  const filteredDeductions = dedupeRecordsById(snap.deductions || []).filter(
     (d) => !deletedBills.has(d.billId) && !deletedBills.has(sanitizeId(d.billId))
   );
-  const filteredReturns = (snap.returns || []).filter(
+  const filteredReturns = dedupeRecordsById(snap.returns || []).filter(
     (r) => !deletedBills.has(r.billId) && !deletedBills.has(sanitizeId(r.billId))
   );
   const filteredDebtors = snap.debtors
@@ -250,6 +267,7 @@ function filterSnapshotByTombstones(
 
   return {
     ...snap,
+    products: filteredProducts,
     bills: filteredBills,
     billItems: filteredBillItems,
     deductions: filteredDeductions,
@@ -1245,6 +1263,7 @@ export async function renameOrReassignCategoryInCloud(params: {
   affectedProducts: ProductRecord[];
   affectedBillItems: BillItemRecord[];
   affectedDeductions: DeductionRecord[];
+  affectedReturns?: ReturnRecord[];
 }): Promise<void> {
   const {
     ownerId,
@@ -1252,6 +1271,7 @@ export async function renameOrReassignCategoryInCloud(params: {
     affectedProducts,
     affectedBillItems,
     affectedDeductions,
+    affectedReturns = [],
   } = params;
   const cleanOwner = sanitizeId(ownerId);
   await saveCategoriesToCloud(cleanOwner, categories);
@@ -1265,6 +1285,9 @@ export async function renameOrReassignCategoryInCloud(params: {
   for (const d of affectedDeductions) {
     await syncToRtdbSafe(`workspaces/${cleanOwner}/deductions/${sanitizeId(d.id)}`, d);
   }
+  for (const r of affectedReturns) {
+    await syncToRtdbSafe(`workspaces/${cleanOwner}/returns/${sanitizeId(r.id)}`, r);
+  }
 
   if (!isFirestoreCloudActive()) return;
 
@@ -1276,7 +1299,7 @@ export async function renameOrReassignCategoryInCloud(params: {
         unitPrice: Math.max(0, Math.round(p.unitPrice || 0)),
         unit: truncateStr(p.unit, 40, 'Phần'),
         updatedAt: serverTimestamp(),
-      });
+      }).catch(() => {});
     }
     for (const bi of affectedBillItems) {
       await updateDoc(doc(db, 'bill_items', sanitizeId(bi.id)), {
@@ -1288,7 +1311,19 @@ export async function renameOrReassignCategoryInCloud(params: {
         unitPrice: Math.max(0, Math.round(bi.unitPrice)),
         subtotal: Math.max(0, Math.round(bi.subtotal)),
         updatedAt: serverTimestamp(),
-      });
+      }).catch(() => {});
+    }
+    for (const d of affectedDeductions) {
+      await updateDoc(doc(db, 'deductions', sanitizeId(d.id)), {
+        deductionDate: d.deductionDate || d.billDate,
+        productName: truncateStr(d.productName, 150, 'Khoản chi'),
+        category: truncateStr(d.category, 80, 'Khác'),
+        quantity: Math.max(1, Math.round(d.quantity || 1)),
+        unitPrice: Math.max(0, Math.round(d.unitPrice || 0)),
+        amount: Math.max(0, Math.round(d.amount || 0)),
+        note: truncateStr(d.note || '', 500, ''),
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, 'categories_reassign');
@@ -1776,17 +1811,27 @@ export async function saveExpenseDeductionToCloud(params: {
     quantity = 1,
     unitPrice,
     amount,
-    billCode = 'CHI-TRONG-NGAY',
+    billCode = 'CHI-TRONG-NGAY-V2',
     billDate,
     note,
   } = params;
 
   const cleanOwnerId = sanitizeId(ownerId);
   const now = Date.now();
-  const safeQty = Math.max(1, Math.round(quantity || 1));
-  const safeAmount = Math.max(0, Math.round(amount || 0));
+  const safeQty = Math.max(1, Math.round(Number(quantity) || 1));
+  const safeAmount = Math.max(
+    0,
+    Math.round(
+      Number(amount) ||
+        (unitPrice !== undefined ? safeQty * Number(unitPrice) : 0)
+    )
+  );
   const safeUnitPrice =
-    unitPrice !== undefined ? Math.max(0, Math.round(unitPrice)) : safeAmount;
+    unitPrice !== undefined && Number(unitPrice) > 0
+      ? Math.max(0, Math.round(Number(unitPrice)))
+      : safeQty > 1
+      ? Math.max(0, Math.round(safeAmount / safeQty))
+      : safeAmount;
   const effDate = /^\d{4}-\d{2}-\d{2}$/.test(deductionDate)
     ? deductionDate
     : getCurrentBusinessDate();
@@ -1845,6 +1890,8 @@ export async function updateExpenseDeductionInCloud(params: {
     deductionDate: string;
     expenseTitle: string;
     category: string;
+    quantity?: number;
+    unitPrice?: number;
     amount: number;
     note: string;
   };
@@ -1860,10 +1907,19 @@ export async function updateExpenseDeductionInCloud(params: {
   const effDate = /^\d{4}-\d{2}-\d{2}$/.test(updates.deductionDate)
     ? updates.deductionDate
     : deduction.deductionDate || getCurrentBusinessDate();
-  const safeQty = Math.max(1, Math.round(deduction.quantity || 1));
+  const safeQty = Math.max(
+    1,
+    Math.round(
+      updates.quantity !== undefined ? updates.quantity : deduction.quantity || 1
+    )
+  );
   const safeAmount = Math.max(0, Math.round(updates.amount || 0));
   const safeUnitPrice =
-    safeQty > 1 ? Math.max(0, Math.round(safeAmount / safeQty)) : safeAmount;
+    updates.unitPrice !== undefined && Number(updates.unitPrice) > 0
+      ? Math.max(0, Math.round(Number(updates.unitPrice)))
+      : safeQty > 1
+      ? Math.max(0, Math.round(safeAmount / safeQty))
+      : safeAmount;
   const cleanTitle = truncateStr(
     updates.expenseTitle,
     150,
@@ -1875,12 +1931,16 @@ export async function updateExpenseDeductionInCloud(params: {
     'Chi phí vận hành trong ngày'
   );
   const cleanNote = truncateStr(updates.note ?? '', 500, '');
+  const rawBillCode = String(deduction.billCode || 'CHI-TRONG-NGAY');
+  const nextBillCode = rawBillCode.endsWith('-V2')
+    ? rawBillCode
+    : `${rawBillCode}-V2`;
 
   const updatedDeduction: DeductionRecord = {
     ...deduction,
     ownerId: cleanOwnerId,
     billId: sanitizeId(deduction.billId || `expense_${now}`),
-    billCode: truncateStr(deduction.billCode || 'CHI-TRONG-NGAY', 64, 'CHI-TRONG-NGAY'),
+    billCode: truncateStr(nextBillCode, 64, 'CHI-TRONG-NGAY-V2'),
     billDate:
       deduction.billDate && /^\d{4}-\d{2}-\d{2}$/.test(deduction.billDate)
         ? deduction.billDate
@@ -2065,7 +2125,7 @@ export async function recordItemReturnToCloud(params: {
     tableName?.trim() || extractBillTableName(bill, 'Bàn lẻ')
   ).trim();
 
-  // Nội dung khoản trừ theo đúng yêu cầu: Số bàn, tên món và số lượng hoàn trả
+  // Nội dung khoản trừ hoàn bia/món theo đúng định dạng: Số bàn - Tên món - SL hoàn trả
   const deductionTitle = formatReturnDeductionTitle(
     cleanTableName,
     billItem.productName,
@@ -2099,7 +2159,7 @@ export async function recordItemReturnToCloud(params: {
     updatedAtMs: now,
   };
 
-  // Tiền hoàn trả và khoản trừ của hoàn trả đó được ghi nhận là 1 dòng tiền duy nhất trong Khoản trừ ngày
+  // Đồng bộ tự động sang Khoản trừ trong ngày (tính chung 1 dòng tiền duy nhất)
   const linkedDeduction: DeductionRecord = {
     id: linkedDeductionId,
     ownerId: cleanOwnerId,
@@ -2107,8 +2167,8 @@ export async function recordItemReturnToCloud(params: {
     billCode: truncateStr(bill.billCode || 'HOAN-TRA', 64, 'HOAN-TRA'),
     billDate: effReturnDate,
     deductionDate: effReturnDate,
-    productName: truncateStr(deductionTitle, 150, 'Hoàn trả khách'),
-    category: 'Hoàn trả khách',
+    productName: truncateStr(deductionTitle, 150, 'Hoàn bia / món thừa'),
+    category: 'Hoàn bia / món thừa',
     quantity: safeQty,
     unitPrice: billItem.unitPrice,
     amount: refundAmount,
@@ -2827,7 +2887,7 @@ export function buildInitialSeedDataset(ownerId: string): {
     tigerProd.totalRevenue -= 6 * 22000;
   }
 
-  // Khoản trừ trong ngày (nhập thủ công + khoản trừ hoàn trả khách tính chung 1 dòng tiền duy nhất)
+  // Khoản trừ trong ngày (gồm các khoản chi tiêu trực tiếp tại quán + khoản hoàn bia/món thừa tính chung 1 dòng tiền duy nhất)
   deductions.push(
     {
       id: 'ded_seed_expense_1',
@@ -2837,7 +2897,7 @@ export function buildInitialSeedDataset(ownerId: string): {
       billDate: today,
       deductionDate: today,
       productName: 'Mua bánh mì, rau sống & gia vị bếp',
-      category: 'Nguyên liệu bếp',
+      category: 'Mua bánh mì / Rau / Gia vị',
       quantity: 1,
       unitPrice: 185000,
       amount: 185000,
@@ -2853,7 +2913,7 @@ export function buildInitialSeedDataset(ownerId: string): {
       billDate: today,
       deductionDate: today,
       productName: 'Trả tiền đá viên & than hoa nướng',
-      category: 'Vật tư - Nguyên liệu',
+      category: 'Vật tư / Đá / Gas',
       quantity: 1,
       unitPrice: 150000,
       amount: 150000,
@@ -2869,9 +2929,9 @@ export function buildInitialSeedDataset(ownerId: string): {
       billDate: today,
       deductionDate: today,
       productName: 'Bàn VIP 1 & VIP 2 - Bia Tiger Lùn - SL hoàn trả: 6',
-      category: 'Hoàn trả khách',
-      quantity: 6,
-      unitPrice: 22000,
+      category: 'Hoàn bia / món thừa',
+      quantity: 1,
+      unitPrice: 132000,
       amount: 132000,
       note: '[Bàn VIP 1 & VIP 2] Khách trả lại 6 lon Bia Tiger Lùn chưa khui cuối buổi',
       createdAtMs: now - 1500000,

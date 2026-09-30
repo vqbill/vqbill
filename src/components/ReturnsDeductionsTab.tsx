@@ -14,6 +14,8 @@ import {
   Edit3,
   Check,
   X,
+  FolderPlus,
+  Tag,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -22,6 +24,7 @@ import {
   ReturnRecord,
   PAYMENT_LABELS,
   ConfirmRequestOptions,
+  DEFAULT_DEDUCTION_CATEGORIES,
 } from '../types';
 import {
   formatVND,
@@ -44,10 +47,15 @@ interface ReturnsDeductionsTabProps {
   canWrite: boolean;
   canDelete: boolean;
   preselectedBillId?: string | null;
+  deductionCategories?: string[];
+  onAddDeductionCategory?: (categoryName: string) => Promise<void>;
+  onDeleteDeductionCategory?: (categoryName: string) => Promise<void>;
   onAddExpenseDeduction: (params: {
     deductionDate: string;
     expenseTitle: string;
     category: string;
+    quantity?: number;
+    unitPrice?: number;
     amount: number;
     note: string;
   }) => Promise<void>;
@@ -56,6 +64,8 @@ interface ReturnsDeductionsTabProps {
     deductionDate: string;
     expenseTitle: string;
     category: string;
+    quantity?: number;
+    unitPrice?: number;
     amount: number;
     note: string;
   }) => Promise<void>;
@@ -90,45 +100,50 @@ const EXPENSE_PRESETS = [
     defaultAmount: 50000,
   },
   {
-    title: 'Mua rau & gia vị bếp',
+    title: 'Mua rau sống & gia vị bếp',
     category: 'Mua bánh mì / Rau / Gia vị',
     defaultAmount: 120000,
   },
   {
-    title: 'Trả tiền nguyên liệu tươi sống',
+    title: 'Mua nguyên liệu tươi sống',
     category: 'Nguyên liệu / Thực phẩm',
     defaultAmount: 500000,
   },
   {
-    title: 'Mua đá cây / đá bi / gas',
+    title: 'Mua đá viên / đá cây / gas',
     category: 'Vật tư / Đá / Gas',
-    defaultAmount: 100000,
+    defaultAmount: 150000,
   },
   {
-    title: 'Tiền bồi hoàn cho khách',
-    category: 'Bồi hoàn / Hoàn trả khách',
+    title: 'Mua khăn lạnh / bao bì / vật tư',
+    category: 'Vật tư / Tạp phẩm quán',
     defaultAmount: 100000,
   },
 ];
 
-const EXPENSE_CATEGORIES = [
-  'Mua bánh mì / Rau / Gia vị',
-  'Nguyên liệu / Thực phẩm',
-  'Hoàn trả khách',
-  'Bồi hoàn / Hoàn trả khách',
-  'Vật tư / Đá / Gas',
-  'Chi phí vận hành trong ngày',
-  'Khác',
-];
+const EXPENSE_CATEGORIES = DEFAULT_DEDUCTION_CATEGORIES;
 
 function isReturnLinkedDeduction(ded: DeductionRecord): boolean {
+  const idStr = String(ded.id || '');
+  const codeStr = String(ded.billCode || '');
+  const catLower = String(ded.category || '').toLowerCase();
+  const prodStr = String(ded.productName || '');
+  // CRITICAL: Only match actual return-linked deductions (ded_ret_*), NEVER generic ded_* direct expenses!
   return (
-    String(ded.id || '').startsWith('ded_ret_') ||
-    String(ded.id || '').startsWith('ded_') ||
-    String(ded.billCode || '') === 'HOAN-TRA' ||
-    String(ded.category || '').toLowerCase() === 'hoàn trả khách' ||
-    /\bsl hoàn trả\s*:/i.test(String(ded.productName || ''))
+    idStr.startsWith('ded_ret_') ||
+    codeStr === 'HOAN-TRA' ||
+    /\bsl hoàn trả\s*:/i.test(prodStr) ||
+    catLower.includes('hoàn bia') ||
+    catLower.includes('hoàn trả')
   );
+}
+
+function normalizeExpenseCategory(ded: DeductionRecord): string {
+  if (isReturnLinkedDeduction(ded)) {
+    return 'Hoàn bia / món thừa';
+  }
+  const clean = String(ded.category || '').trim();
+  return clean || EXPENSE_CATEGORIES[0];
 }
 
 export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
@@ -140,6 +155,9 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   canWrite,
   canDelete,
   preselectedBillId,
+  deductionCategories = [],
+  onAddDeductionCategory,
+  onDeleteDeductionCategory,
   onAddExpenseDeduction,
   onUpdateExpenseDeduction,
   onRecordReturn,
@@ -152,23 +170,113 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   const todayStr = getCurrentBusinessDate();
   const yesterdayStr = getYesterdayBusinessDate();
 
+  // Effective deduction categories combining default + custom saved + any category used in deductions
+  const effectiveDeductionCategories = useMemo(() => {
+    const result: string[] = [];
+    const seen = new Set<string>();
+    const addCat = (c?: string) => {
+      const clean = String(c || '').trim();
+      if (!clean) return;
+      const lower = clean.toLowerCase();
+      if (!seen.has(lower)) {
+        seen.add(lower);
+        result.push(clean);
+      }
+    };
+    DEFAULT_DEDUCTION_CATEGORIES.forEach(addCat);
+    deductionCategories.forEach(addCat);
+    deductions.forEach((d) => addCat(d.category));
+    return result;
+  }, [deductionCategories, deductions]);
+
   // ============================================================================
   // 1. STATE FOR KHOẢN TRỪ (DEDUCTIONS) + PERIOD / DATE FILTERING
   // ============================================================================
   const [deductionDate, setDeductionDate] = useState<string>(todayStr);
   const [expenseTitle, setExpenseTitle] = useState<string>('');
-  const [expenseCategory, setExpenseCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
+  const [expenseCategory, setExpenseCategory] = useState<string>(
+    DEFAULT_DEDUCTION_CATEGORIES[0]
+  );
+  const [expenseQuantity, setExpenseQuantity] = useState<number>(1);
+  const [expenseUnitPrice, setExpenseUnitPrice] = useState<number>(50000);
   const [expenseAmount, setExpenseAmount] = useState<number>(50000);
   const [expenseNote, setExpenseNote] = useState<string>('');
   const [searchDeduction, setSearchDeduction] = useState('');
+  const [newDedCategoryName, setNewDedCategoryName] = useState('');
+  const [showDedCategoryManager, setShowDedCategoryManager] = useState(false);
+  const [dedCategoryFilter, setDedCategoryFilter] = useState<string>('all');
 
   // State for Editing an existing Khoản trừ (Deduction)
   const [editingDeduction, setEditingDeduction] = useState<DeductionRecord | null>(null);
   const [editDedDate, setEditDedDate] = useState<string>(todayStr);
   const [editDedTitle, setEditDedTitle] = useState<string>('');
   const [editDedCategory, setEditDedCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
+  const [editDedQty, setEditDedQty] = useState<number>(1);
+  const [editDedUnitPrice, setEditDedUnitPrice] = useState<number>(0);
   const [editDedAmount, setEditDedAmount] = useState<number>(0);
   const [editDedNote, setEditDedNote] = useState<string>('');
+
+  // Bidirectional auto-calculation handlers for New Expense Deduction
+  const handleExpenseQuantityChange = (rawVal: string) => {
+    const parsed = Number(rawVal);
+    const nextQty = Number.isFinite(parsed) ? parsed : 0;
+    setExpenseQuantity(nextQty);
+    const effQty = nextQty > 0 ? nextQty : 1;
+    const curUnit = Number(expenseUnitPrice) || 0;
+    const curTotal = Number(expenseAmount) || 0;
+    if (curUnit > 0) {
+      setExpenseAmount(Math.round(effQty * curUnit));
+    } else if (curTotal > 0) {
+      setExpenseUnitPrice(Math.round(curTotal / effQty));
+    }
+  };
+
+  const handleExpenseUnitPriceChange = (rawVal: string) => {
+    const parsed = Number(rawVal);
+    const nextUnit = Number.isFinite(parsed) ? parsed : 0;
+    setExpenseUnitPrice(nextUnit);
+    const effQty = expenseQuantity > 0 ? expenseQuantity : 1;
+    setExpenseAmount(Math.round(effQty * nextUnit));
+  };
+
+  const handleExpenseTotalAmountChange = (rawVal: string) => {
+    const parsed = Number(rawVal);
+    const nextTotal = Number.isFinite(parsed) ? parsed : 0;
+    setExpenseAmount(nextTotal);
+    const effQty = expenseQuantity > 0 ? expenseQuantity : 1;
+    setExpenseUnitPrice(Math.round(nextTotal / effQty));
+  };
+
+  // Bidirectional auto-calculation handlers for Editing Expense Deduction
+  const handleEditDedQtyChange = (rawVal: string) => {
+    const parsed = Number(rawVal);
+    const nextQty = Number.isFinite(parsed) ? parsed : 0;
+    setEditDedQty(nextQty);
+    const effQty = nextQty > 0 ? nextQty : 1;
+    const curUnit = Number(editDedUnitPrice) || 0;
+    const curTotal = Number(editDedAmount) || 0;
+    if (curUnit > 0) {
+      setEditDedAmount(Math.round(effQty * curUnit));
+    } else if (curTotal > 0) {
+      setEditDedUnitPrice(Math.round(curTotal / effQty));
+    }
+  };
+
+  const handleEditDedUnitPriceChange = (rawVal: string) => {
+    const parsed = Number(rawVal);
+    const nextUnit = Number.isFinite(parsed) ? parsed : 0;
+    setEditDedUnitPrice(nextUnit);
+    const effQty = editDedQty > 0 ? editDedQty : 1;
+    setEditDedAmount(Math.round(effQty * nextUnit));
+  };
+
+  const handleEditDedTotalAmountChange = (rawVal: string) => {
+    const parsed = Number(rawVal);
+    const nextTotal = Number.isFinite(parsed) ? parsed : 0;
+    setEditDedAmount(nextTotal);
+    const effQty = editDedQty > 0 ? editDedQty : 1;
+    setEditDedUnitPrice(Math.round(nextTotal / effQty));
+  };
 
   // Period filter for viewing Khoản trừ (Hôm nay, Hôm qua, Theo ngày, Tuần, Tháng, Khoảng ngày, Tất cả)
   const [dedPeriodMode, setDedPeriodMode] = useState<DeductionPeriodMode>('today');
@@ -353,6 +461,13 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
         return true;
       })
       .filter((d) => {
+        if (dedCategoryFilter === 'all') return true;
+        return (
+          normalizeExpenseCategory(d).toLowerCase() ===
+          dedCategoryFilter.toLowerCase()
+        );
+      })
+      .filter((d) => {
         if (!searchDeduction.trim()) return true;
         const q = searchDeduction.toLowerCase();
         const dDate = String(d.deductionDate || d.billDate || '');
@@ -378,6 +493,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     dedCustomStart,
     dedCustomEnd,
     dedTypeFilter,
+    dedCategoryFilter,
     searchDeduction,
   ]);
 
@@ -430,20 +546,28 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
       return;
     }
 
-    const safeAmt = Math.max(0, Math.round(Number(expenseAmount) || 0));
+    const safeQty = Math.max(1, Math.round(Number(expenseQuantity) || 1));
+    const safeUnitPrice = Math.max(0, Math.round(Number(expenseUnitPrice) || 0));
+    const safeAmt = Math.max(
+      0,
+      Math.round(Number(expenseAmount) || safeQty * safeUnitPrice)
+    );
+    const finalUnitPrice =
+      safeUnitPrice > 0 ? safeUnitPrice : Math.round(safeAmt / safeQty);
+
     if (safeAmt <= 0) {
       setStatusMsg({
         type: 'err',
-        text: 'Vui lòng nhập số tiền khoản trừ lớn hơn 0đ.',
+        text: 'Vui lòng nhập số tiền chi / tổng tiền chi lớn hơn 0đ.',
       });
       return;
     }
 
     requestConfirm({
       title: 'Xác nhận Ghi Nhận Khoản Trừ (Chi Tiêu Ngày)',
-      message: `Bạn có chắc chắn muốn lưu khoản trừ "${cleanTitle}" (-${formatVND(
-        safeAmt
-      )}, ngày ${formatDateDMY(
+      message: `Bạn có chắc chắn muốn lưu khoản trừ "${cleanTitle}" (SL: ${safeQty} × ${formatVND(
+        finalUnitPrice
+      )} = -${formatVND(safeAmt)}, ngày ${formatDateDMY(
         deductionDate
       )}) vào hệ thống? Khoản này sẽ được trừ trực tiếp vào Doanh thu tổng ngày (Tiền mặt + Chuyển khoản - Khoản trừ).`,
       confirmLabel: 'Lưu Khoản Trừ',
@@ -455,6 +579,8 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             deductionDate,
             expenseTitle: cleanTitle,
             category: expenseCategory,
+            quantity: safeQty,
+            unitPrice: finalUnitPrice,
             amount: safeAmt,
             note: expenseNote.trim() || cleanTitle,
           });
@@ -470,11 +596,14 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           }
           setStatusMsg({
             type: 'ok',
-            text: `Đã lưu khoản trừ "${cleanTitle}" (-${formatVND(
-              safeAmt
-            )}) vào ngày ${formatDateDMY(deductionDate)}!`,
+            text: `Đã lưu khoản trừ "${cleanTitle}" (SL: ${safeQty} × ${formatVND(
+              finalUnitPrice
+            )} = -${formatVND(safeAmt)}) vào ngày ${formatDateDMY(deductionDate)}!`,
           });
           setExpenseTitle('');
+          setExpenseQuantity(1);
+          setExpenseUnitPrice(50000);
+          setExpenseAmount(50000);
           setExpenseNote('');
         } catch (err: any) {
           setStatusMsg({
@@ -494,13 +623,64 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     setEditingDeduction(ded);
     setEditDedDate(ded.deductionDate || ded.billDate || todayStr);
     setEditDedTitle(ded.productName || '');
+    const normCat = normalizeExpenseCategory(ded);
     setEditDedCategory(
-      EXPENSE_CATEGORIES.includes(ded.category)
-        ? ded.category
-        : ded.category || EXPENSE_CATEGORIES[0]
+      effectiveDeductionCategories.includes(normCat)
+        ? normCat
+        : normCat || effectiveDeductionCategories[0]
     );
-    setEditDedAmount(Math.max(0, Math.round(Number(ded.amount) || 0)));
+    const q = Math.max(1, Math.round(Number(ded.quantity) || 1));
+    const tot = Math.max(0, Math.round(Number(ded.amount) || 0));
+    const uPrice =
+      Number(ded.unitPrice) > 0
+        ? Math.max(0, Math.round(Number(ded.unitPrice)))
+        : Math.round(tot / q);
+    setEditDedQty(q);
+    setEditDedUnitPrice(uPrice);
+    setEditDedAmount(tot);
     setEditDedNote(ded.note || '');
+  };
+
+  const handleCreateDeductionCategory = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!canWrite) return;
+    const clean = newDedCategoryName.trim();
+    if (!clean) {
+      setStatusMsg({
+        type: 'err',
+        text: 'Vui lòng nhập tên nhóm khoản trừ mới.',
+      });
+      return;
+    }
+    if (
+      effectiveDeductionCategories.some(
+        (c) => c.toLowerCase() === clean.toLowerCase()
+      )
+    ) {
+      setExpenseCategory(
+        effectiveDeductionCategories.find(
+          (c) => c.toLowerCase() === clean.toLowerCase()
+        ) || clean
+      );
+      setNewDedCategoryName('');
+      setStatusMsg({
+        type: 'ok',
+        text: `Nhóm khoản trừ "${clean}" đã có sẵn và được chọn.`,
+      });
+      return;
+    }
+    if (onAddDeductionCategory) {
+      await onAddDeductionCategory(clean);
+    }
+    setExpenseCategory(clean);
+    if (editingDeduction) {
+      setEditDedCategory(clean);
+    }
+    setNewDedCategoryName('');
+    setStatusMsg({
+      type: 'ok',
+      text: `Đã tạo thêm nhóm khoản trừ mới: "${clean}"!`,
+    });
   };
 
   const handleCancelEditDeduction = () => {
@@ -520,11 +700,19 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
       return;
     }
 
-    const safeAmt = Math.max(0, Math.round(Number(editDedAmount) || 0));
+    const safeQty = Math.max(1, Math.round(Number(editDedQty) || 1));
+    const safeUnitPrice = Math.max(0, Math.round(Number(editDedUnitPrice) || 0));
+    const safeAmt = Math.max(
+      0,
+      Math.round(Number(editDedAmount) || safeQty * safeUnitPrice)
+    );
+    const finalUnitPrice =
+      safeUnitPrice > 0 ? safeUnitPrice : Math.round(safeAmt / safeQty);
+
     if (safeAmt <= 0) {
       setStatusMsg({
         type: 'err',
-        text: 'Số tiền khoản trừ phải lớn hơn 0đ.',
+        text: 'Tổng tiền chi của khoản trừ phải lớn hơn 0đ.',
       });
       return;
     }
@@ -537,13 +725,17 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
         deductionDate: editDedDate || todayStr,
         expenseTitle: cleanTitle,
         category: editDedCategory || targetDed.category || EXPENSE_CATEGORIES[0],
+        quantity: safeQty,
+        unitPrice: finalUnitPrice,
         amount: safeAmt,
         note: editDedNote.trim(),
       });
       setEditingDeduction(null);
       setStatusMsg({
         type: 'ok',
-        text: `Đã cập nhật khoản trừ "${cleanTitle}" (-${formatVND(
+        text: `Đã cập nhật khoản trừ "${cleanTitle}" (SL: ${safeQty} × ${formatVND(
+          finalUnitPrice
+        )} = -${formatVND(
           safeAmt
         )}, ngày ${formatDateDMY(editDedDate || todayStr)}) thành công!`,
       });
@@ -562,14 +754,16 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     const isFromReturn = isReturnLinkedDeduction(ded);
     requestConfirm({
       title: isFromReturn
-        ? 'Xác nhận Xóa Khoản Trừ Hoàn Trả Khách'
-        : 'Xác nhận Xóa Khoản Trừ',
+        ? 'Xác nhận Xóa Khoản Trừ Hoàn Bia / Món Thừa'
+        : 'Xác nhận Xóa Khoản Trừ (Chi Tiêu Ngày)',
       message: isFromReturn
         ? `Khoản trừ "${ded.productName}" (-${formatVND(
             ded.amount
-          )}) được tạo từ giao dịch Hoàn trả khách (1 dòng tiền duy nhất). Khi xóa khoản trừ này, bản ghi Hoàn trả tương ứng cũng sẽ được xóa và hoàn tác số lượng trên Bill. Bạn có chắc chắn muốn xóa?`
+          )}) được đồng bộ từ mục Hoàn trả (1 dòng tiền duy nhất). Khi xóa khoản trừ này, bản ghi Hoàn trả tương ứng cũng sẽ được xóa và hoàn tác số lượng trên Bill. Bạn có chắc chắn muốn xóa?`
         : `Bạn có chắc chắn muốn xóa khoản trừ "${ded.productName}" (-${formatVND(
             ded.amount
+          )}, ngày ${formatDateDMY(
+            ded.deductionDate || ded.billDate
           )}) khỏi lịch sử trên Firebase không?`,
       confirmLabel: 'Xóa khoản trừ',
       variant: 'danger',
@@ -645,15 +839,15 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     );
 
     requestConfirm({
-      title: 'Xác nhận Hoàn Trả & Ghi Nhận Khoản Trừ Trong Ngày',
-      message: `Ghi nhận hoàn trả tại "${cleanTable}": ${safeQty} × "${
+      title: 'Xác nhận Hoàn Trả Bia / Món & Ghi Vào Khoản Trừ Ngày',
+      message: `Ghi nhận tại "${cleanTable}": Khách trả lại ${safeQty} × "${
         activeBillItem.productName
-      }" (Tiền trả lại khách: ${formatVND(refundAmt)}, ngày ${formatDateDMY(
+      }" (-${formatVND(refundAmt)}, ngày ${formatDateDMY(
         returnDate
-      )}).\n\nHệ thống sẽ tự động tính luôn vào Khoản trừ trong ngày với nội dung: "${dedTitle}" (-${formatVND(
+      )}).\n\nHệ thống sẽ tự động đưa vào Khoản trừ trong ngày với nội dung: "${dedTitle}" (-${formatVND(
         refundAmt
-      )}). Tiền hoàn trả và khoản trừ này được tính là 1 dòng tiền duy nhất.`,
-      confirmLabel: 'Xác nhận Hoàn trả & Trừ doanh thu ngày',
+      )} — tính là 1 dòng tiền duy nhất) và hoàn lại ${safeQty} vào Tồn kho.`,
+      confirmLabel: 'Xác nhận Hoàn trả & Tính vào Khoản trừ',
       variant: 'warning',
       onConfirm: async () => {
         setIsSubmitting(true);
@@ -670,11 +864,11 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           });
           setStatusMsg({
             type: 'ok',
-            text: `Đã hoàn trả & ghi vào Khoản trừ ngày ${formatDateDMY(
+            text: `Đã ghi nhận hoàn trả & tự động tính vào Khoản trừ ngày ${formatDateDMY(
               returnDate
             )}: "${dedTitle}" (-${formatVND(
               refundAmt
-            )} — tính chung 1 dòng tiền duy nhất)!`,
+            )} — 1 dòng tiền duy nhất)!`,
           });
           setReturnNote('');
         } catch (err: any) {
@@ -775,13 +969,113 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             <div>
               <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-rose-600 dark:text-rose-400" />
-                <span>Quản Lý Khoản Trừ (Chi Tiêu Trong Ngày & Hoàn Trả Khách)</span>
+                <span>Quản Lý Khoản Trừ (Chi Tiêu Trong Ngày & Khoản Hoàn Bia / Món Thừa)</span>
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                Ghi nhận các khoản tiền chi ra trong ngày (<strong>mua bánh mì, mua rau, nguyên liệu...</strong>) và <strong>tiền hoàn trả cho khách</strong> (tự động đồng bộ từ mục Hoàn trả theo định dạng <strong>Số bàn - Tên món - SL hoàn trả</strong>, tính là <strong>1 dòng tiền duy nhất</strong>). Công thức: <strong>Doanh thu tổng ngày = Tiền mặt + Chuyển khoản - Khoản trừ</strong>.
+                Ghi nhận và chỉnh sửa các khoản tiền chi ra trong ngày (<strong>mua bánh mì, mua rau sống, nguyên liệu bếp, đá viên, gas...</strong>) cùng <strong>các khoản hoàn bia / món thừa từ Bill</strong> (tự động đồng bộ từ mục Hoàn trả theo định dạng <strong>Số bàn - Tên món - SL hoàn trả</strong>, tính là <strong>1 dòng tiền duy nhất</strong>). Công thức: <strong>Doanh thu tổng ngày = Tiền mặt + Chuyển khoản - Khoản trừ</strong>.
               </p>
             </div>
+
+            {canWrite && (
+              <button
+                type="button"
+                onClick={() => setShowDedCategoryManager((v) => !v)}
+                className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/40 text-xs font-semibold text-rose-700 dark:text-rose-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap self-start shrink-0"
+              >
+                <FolderPlus className="w-4 h-4" />
+                <span>
+                  {showDedCategoryManager
+                    ? 'Đóng tạo nhóm khoản trừ'
+                    : `+ Tạo thêm nhóm khoản trừ (${effectiveDeductionCategories.length})`}
+                </span>
+              </button>
+            )}
           </div>
+
+          {/* Create / Manage Custom Deduction Categories Panel */}
+          {canWrite && showDedCategoryManager && (
+            <div className="p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/30 dark:bg-rose-950/20 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <Tag className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                  <div>
+                    <div className="text-xs font-bold text-slate-900 dark:text-white">
+                      Tạo Thêm & Quản Lý Nhóm Khoản Trừ ({effectiveDeductionCategories.length} nhóm)
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Tạo nhóm khoản trừ mới (VD: Tiền lương ca, Điện nước, Mua hải sản, Sửa chữa...) để phân loại chi tiêu rõ ràng.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <input
+                    type="text"
+                    value={newDedCategoryName}
+                    onChange={(e) => setNewDedCategoryName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleCreateDeductionCategory();
+                      }
+                    }}
+                    placeholder="Nhập tên nhóm khoản trừ mới..."
+                    className="flex-1 sm:w-60 h-9 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleCreateDeductionCategory()}
+                    className="h-9 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Thêm nhóm</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                {effectiveDeductionCategories.map((cat) => {
+                  const isDefault = DEFAULT_DEDUCTION_CATEGORIES.some(
+                    (d) => d.toLowerCase() === cat.toLowerCase()
+                  );
+                  const isSelected = expenseCategory === cat;
+                  return (
+                    <div
+                      key={cat}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors ${
+                        isSelected
+                          ? 'border-rose-500 bg-rose-600 text-white font-semibold'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setExpenseCategory(cat)}
+                        className="cursor-pointer"
+                        title="Chọn nhóm khoản trừ này"
+                      >
+                        {cat}
+                      </button>
+                      {!isDefault && onDeleteDeductionCategory && canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteDeductionCategory(cat)}
+                          className={`p-0.5 rounded hover:bg-rose-500/20 cursor-pointer ${
+                            isSelected
+                              ? 'text-white'
+                              : 'text-rose-500 hover:text-rose-700'
+                          }`}
+                          title={`Xóa nhóm "${cat}"`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {statusMsg && (
             <div
@@ -813,6 +1107,8 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   onClick={() => {
                     setExpenseTitle(preset.title);
                     setExpenseCategory(preset.category);
+                    setExpenseQuantity(1);
+                    setExpenseUnitPrice(preset.defaultAmount);
                     setExpenseAmount(preset.defaultAmount);
                   }}
                   className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-rose-500 dark:hover:border-rose-500 bg-slate-50 dark:bg-slate-800/50 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
@@ -835,11 +1131,11 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                 type="date"
                 value={deductionDate}
                 onChange={(e) => setDeductionDate(e.target.value)}
-                className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                className="w-full h-10 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
             </div>
 
-            <div className="lg:col-span-3">
+            <div className="lg:col-span-2">
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                 Nội dung khoản chi *
               </label>
@@ -847,21 +1143,32 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                 type="text"
                 value={expenseTitle}
                 onChange={(e) => setExpenseTitle(e.target.value)}
-                placeholder="VD: Mua bánh mì, mua rau, trả nguyên liệu..."
+                placeholder="VD: Mua 5 cây thuốc mèo nhỏ, mua rau..."
                 className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
             </div>
 
             <div className="lg:col-span-2">
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Nhóm khoản trừ
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Nhóm khoản trừ
+                </label>
+                {canWrite && (
+                  <button
+                    type="button"
+                    onClick={() => setShowDedCategoryManager((v) => !v)}
+                    className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
+                  >
+                    + Tạo nhóm
+                  </button>
+                )}
+              </div>
               <select
                 value={expenseCategory}
                 onChange={(e) => setExpenseCategory(e.target.value)}
                 className="w-full h-10 px-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               >
-                {EXPENSE_CATEGORIES.map((c) => (
+                {effectiveDeductionCategories.map((c) => (
                   <option key={c} value={c}>
                     {c}
                   </option>
@@ -869,32 +1176,84 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
               </select>
             </div>
 
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-1">
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Số tiền chi (₫) *
+                Số lượng
               </label>
               <input
                 type="number"
-                min={1000}
-                step={1000}
-                value={expenseAmount}
-                onChange={(e) => setExpenseAmount(Number(e.target.value))}
-                className="w-full h-10 px-3 text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                min={1}
+                step={1}
+                value={expenseQuantity || ''}
+                onChange={(e) => handleExpenseQuantityChange(e.target.value)}
+                onBlur={() => {
+                  if (!expenseQuantity || expenseQuantity < 1) {
+                    handleExpenseQuantityChange('1');
+                  }
+                }}
+                placeholder="1"
+                className="w-full h-10 px-2.5 text-xs font-mono font-bold text-center text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
               />
             </div>
 
-            <div className="lg:col-span-3 flex flex-col justify-end">
+            <div className="lg:col-span-2">
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Ghi chú thêm
+                Số tiền chi (Đơn giá ₫) *
               </label>
-              <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={expenseUnitPrice}
+                onChange={(e) => handleExpenseUnitPriceChange(e.target.value)}
+                placeholder="VD: 100000"
+                className="w-full h-10 px-3 text-xs font-mono font-semibold text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+            </div>
+
+            <div className="lg:col-span-3">
+              <label className="block text-xs font-medium text-rose-700 dark:text-rose-300 mb-1">
+                Tổng tiền chi (SL × Số tiền chi) *
+              </label>
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={expenseAmount}
+                onChange={(e) => handleExpenseTotalAmountChange(e.target.value)}
+                placeholder="VD: 500000"
+                className="w-full h-10 px-3 text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50/40 dark:bg-rose-950/20"
+              />
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-12 flex flex-col sm:flex-row sm:items-end gap-2.5 pt-1">
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Ghi chú thêm
+                </label>
                 <input
                   type="text"
                   value={expenseNote}
                   onChange={(e) => setExpenseNote(e.target.value)}
-                  placeholder="Ghi chú (tùy chọn)..."
-                  className="flex-1 h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  placeholder="Ghi chú thêm (tùy chọn)..."
+                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
                 />
+              </div>
+              <div className="flex items-center justify-between sm:justify-end gap-3">
+                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                  SL:{' '}
+                  <strong className="text-slate-800 dark:text-slate-200">
+                    {Math.max(1, Math.round(Number(expenseQuantity) || 1))}
+                  </strong>{' '}
+                  ×{' '}
+                  <strong className="text-slate-800 dark:text-slate-200">
+                    {formatVND(Number(expenseUnitPrice) || 0)}
+                  </strong>{' '}
+                  ={' '}
+                  <strong className="text-rose-600 dark:text-rose-400 font-bold">
+                    -{formatVND(Number(expenseAmount) || 0)}
+                  </strong>
+                </div>
                 <button
                   type="submit"
                   disabled={isSubmitting || !canWrite}
@@ -1092,31 +1451,31 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                 -{formatVND(deductionBreakdown.totalAmount)}
               </div>
               <div className="mt-0.5 text-[11px] text-slate-500">
-                {filteredDeductions.length} khoản trừ trong kỳ
+                {filteredDeductions.length} khoản trừ trong kỳ (Chi trực tiếp + Hoàn bia/món)
               </div>
             </div>
 
-            <div className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
+            <div className="p-3.5 rounded-xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20">
               <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-                Chi Tiêu Trực Tiếp (Mua hàng / Bếp)
+                Chi Tiêu Trực Tiếp (Mua hàng / Bếp / Vật tư)
               </div>
-              <div className="mt-1 text-base sm:text-lg font-bold font-mono text-slate-900 dark:text-white">
+              <div className="mt-1 text-base sm:text-lg font-bold font-mono text-emerald-700 dark:text-emerald-400">
                 -{formatVND(deductionBreakdown.directAmount)}
               </div>
               <div className="mt-0.5 text-[11px] text-slate-500">
-                {deductionBreakdown.directCount} khoản chi trực tiếp
+                {deductionBreakdown.directCount} khoản chi mua nguyên liệu, đá, vật tư...
               </div>
             </div>
 
             <div className="p-3.5 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-indigo-50/40 dark:bg-indigo-950/20">
               <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-                Hoàn Trả Khách (1 Dòng Tiền Duy Nhất)
+                Khoản Trừ Hoàn Bia / Món Thừa (Từ Bill)
               </div>
               <div className="mt-1 text-base sm:text-lg font-bold font-mono text-indigo-600 dark:text-indigo-400">
                 -{formatVND(deductionBreakdown.returnLinkedAmount)}
               </div>
               <div className="mt-0.5 text-[11px] text-slate-500">
-                {deductionBreakdown.returnLinkedCount} khoản từ mục Hoàn trả (Số bàn - Tên món - SL)
+                {deductionBreakdown.returnLinkedCount} khoản hoàn bia/món (Số bàn - Tên món - SL)
               </div>
             </div>
           </div>
@@ -1134,18 +1493,18 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                     : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                 }`}
               >
-                Tất cả loại ({filteredDeductions.length})
+                Tất cả khoản trừ ({filteredDeductions.length})
               </button>
               <button
                 type="button"
                 onClick={() => setDedTypeFilter('direct')}
                 className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
                   dedTypeFilter === 'direct'
-                    ? 'bg-rose-600 text-white'
+                    ? 'bg-emerald-600 text-white'
                     : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                 }`}
               >
-                Chỉ Chi tiêu trực tiếp
+                Chi tiêu trực tiếp ({deductionBreakdown.directCount})
               </button>
               <button
                 type="button"
@@ -1156,8 +1515,21 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                     : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                 }`}
               >
-                Chỉ Khoản trừ từ Hoàn trả khách
+                Hoàn bia / món thừa ({deductionBreakdown.returnLinkedCount})
               </button>
+
+              <select
+                value={dedCategoryFilter}
+                onChange={(e) => setDedCategoryFilter(e.target.value)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer"
+              >
+                <option value="all">Mọi nhóm khoản trừ</option>
+                {effectiveDeductionCategories.map((c) => (
+                  <option key={c} value={c}>
+                    Nhóm: {c}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -1244,7 +1616,11 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                     className="w-full h-9 px-2 text-xs rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                   >
                     {Array.from(
-                      new Set([...EXPENSE_CATEGORIES, editDedCategory].filter(Boolean))
+                      new Set(
+                        [...effectiveDeductionCategories, editDedCategory].filter(
+                          Boolean
+                        )
+                      )
                     ).map((c) => (
                       <option key={c} value={c}>
                         {c}
@@ -1253,41 +1629,74 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   </select>
                 </div>
 
-                <div className="lg:col-span-2">
+                <div className="lg:col-span-1">
                   <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Số tiền trừ (₫) *
+                    Số lượng
                   </label>
                   <input
                     type="number"
-                    min={1000}
-                    step={1000}
+                    min={1}
+                    step={1}
+                    value={editDedQty || ''}
+                    onChange={(e) => handleEditDedQtyChange(e.target.value)}
+                    onBlur={() => {
+                      if (!editDedQty || editDedQty < 1) {
+                        handleEditDedQtyChange('1');
+                      }
+                    }}
+                    className="w-full h-9 px-2 text-xs font-mono font-bold text-center rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="lg:col-span-2">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Số tiền chi (₫) *
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={editDedUnitPrice}
+                    onChange={(e) => handleEditDedUnitPriceChange(e.target.value)}
+                    className="w-full h-9 px-2.5 text-xs font-mono font-semibold text-slate-900 dark:text-white rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900"
+                  />
+                </div>
+
+                <div className="lg:col-span-2">
+                  <label className="block text-[11px] font-semibold text-rose-700 dark:text-rose-300 mb-1">
+                    Tổng tiền chi (₫) *
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
                     value={editDedAmount}
-                    onChange={(e) => setEditDedAmount(Number(e.target.value))}
+                    onChange={(e) => handleEditDedTotalAmountChange(e.target.value)}
                     className="w-full h-9 px-2.5 text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900"
                   />
                 </div>
 
-                <div className="lg:col-span-3 flex flex-col justify-end">
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Ghi chú
-                  </label>
-                  <div className="flex items-center gap-1.5">
+                <div className="sm:col-span-2 lg:col-span-12 flex flex-col sm:flex-row sm:items-end gap-2">
+                  <div className="flex-1">
+                    <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Ghi chú
+                    </label>
                     <input
                       type="text"
                       value={editDedNote}
                       onChange={(e) => setEditDedNote(e.target.value)}
                       placeholder="Ghi chú..."
-                      className="flex-1 h-9 px-2.5 text-xs rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      className="w-full h-9 px-2.5 text-xs rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                     />
-                    <button
-                      type="submit"
-                      disabled={isSubmitting}
-                      className="h-9 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs inline-flex items-center gap-1 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Lưu</span>
-                    </button>
                   </div>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="h-9 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs inline-flex items-center gap-1 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Lưu Thay Đổi</span>
+                  </button>
                 </div>
               </div>
             </form>
@@ -1304,10 +1713,12 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                     <th className="py-2.5 px-3">Ngày tháng</th>
                     <th className="py-2.5 px-3">
-                      Nội dung Khoản trừ (Số bàn - Tên món - SL hoàn trả / Khoản chi)
+                      Nội dung Khoản trừ (Khoản chi trong ngày / Số bàn - Tên món - SL hoàn trả)
                     </th>
                     <th className="py-2.5 px-3">Nhóm khoản trừ</th>
-                    <th className="py-2.5 px-3 text-right">Số tiền trừ</th>
+                    <th className="py-2.5 px-2.5 text-center">Số lượng</th>
+                    <th className="py-2.5 px-3 text-right">Số tiền chi</th>
+                    <th className="py-2.5 px-3 text-right">Tổng tiền chi</th>
                     <th className="py-2.5 px-3">Ghi chú</th>
                     {(canWrite || canDelete) && (
                       <th className="py-2.5 px-3 text-right">Thao tác</th>
@@ -1318,6 +1729,12 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   {filteredDeductions.map((ded) => {
                     const fromReturn = isReturnLinkedDeduction(ded);
                     const isRowEditing = editingDeduction?.id === ded.id;
+                    const displayQty = Math.max(1, Math.round(Number(ded.quantity) || 1));
+                    const displayTotal = Math.max(0, Math.round(Number(ded.amount) || 0));
+                    const displayUnitPrice =
+                      Number(ded.unitPrice) > 0
+                        ? Math.max(0, Math.round(Number(ded.unitPrice)))
+                        : Math.round(displayTotal / displayQty);
 
                     if (isRowEditing && canWrite) {
                       return (
@@ -1338,17 +1755,22 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                               type="text"
                               value={editDedTitle}
                               onChange={(e) => setEditDedTitle(e.target.value)}
-                              className="w-full min-w-[180px] h-8 px-2.5 text-xs font-semibold rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                              className="w-full min-w-[160px] h-8 px-2.5 text-xs font-semibold rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                             />
                           </td>
                           <td className="py-2 px-2.5">
                             <select
                               value={editDedCategory}
                               onChange={(e) => setEditDedCategory(e.target.value)}
-                              className="w-full min-w-[140px] h-8 px-2 text-xs rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                              className="w-full min-w-[130px] h-8 px-2 text-xs rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                             >
                               {Array.from(
-                                new Set([...EXPENSE_CATEGORIES, editDedCategory].filter(Boolean))
+                                new Set(
+                                  [
+                                    ...effectiveDeductionCategories,
+                                    editDedCategory,
+                                  ].filter(Boolean)
+                                )
                               ).map((c) => (
                                 <option key={c} value={c}>
                                   {c}
@@ -1356,13 +1778,33 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                               ))}
                             </select>
                           </td>
+                          <td className="py-2 px-2 text-center">
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              value={editDedQty || ''}
+                              onChange={(e) => handleEditDedQtyChange(e.target.value)}
+                              className="w-16 h-8 px-1.5 text-center text-xs font-mono font-bold rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
                           <td className="py-2 px-2.5 text-right">
                             <input
                               type="number"
-                              min={1000}
-                              step={1000}
+                              min={0}
+                              step="any"
+                              value={editDedUnitPrice}
+                              onChange={(e) => handleEditDedUnitPriceChange(e.target.value)}
+                              className="w-24 h-8 px-2 text-right text-xs font-mono font-semibold text-slate-900 dark:text-white rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5 text-right">
+                            <input
+                              type="number"
+                              min={0}
+                              step="any"
                               value={editDedAmount}
-                              onChange={(e) => setEditDedAmount(Number(e.target.value))}
+                              onChange={(e) => handleEditDedTotalAmountChange(e.target.value)}
                               className="w-28 h-8 px-2 text-right text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900"
                             />
                           </td>
@@ -1372,7 +1814,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                               value={editDedNote}
                               onChange={(e) => setEditDedNote(e.target.value)}
                               placeholder="Ghi chú..."
-                              className="w-full min-w-[130px] h-8 px-2 text-xs rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                              className="w-full min-w-[120px] h-8 px-2 text-xs rounded-lg border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                             />
                           </td>
                           <td className="py-2 px-2.5 text-right whitespace-nowrap">
@@ -1418,16 +1860,22 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                             <span>{ded.productName}</span>
                             {fromReturn && (
                               <span className="px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 text-[10px] font-semibold">
-                                Hoàn trả khách (1 dòng tiền)
+                                Hoàn bia / món thừa (1 dòng tiền)
                               </span>
                             )}
                           </div>
                         </td>
                         <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                          {ded.category}
+                          {normalizeExpenseCategory(ded)}
+                        </td>
+                        <td className="py-2.5 px-2.5 text-center font-mono font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                          {formatNumber(displayQty)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                          {formatVND(displayUnitPrice)}
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">
-                          -{formatVND(ded.amount)}
+                          -{formatVND(displayTotal)}
                         </td>
                         <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
                           {ded.note}
@@ -1485,7 +1933,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
               <span>Quản Lý Hoàn Trả (Khách Trả Bia Thừa / Món Thừa)</span>
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-              Chọn hóa đơn theo trình tự <strong>Ngày tháng — Số bàn — Mã Bill</strong>. Khi xác nhận hoàn trả, <strong>tiền trả lại cho khách sẽ tự động tính luôn vào Khoản trừ trong ngày</strong> với nội dung <strong>Số bàn - Tên món - Số lượng hoàn trả</strong>. Tiền hoàn trả và khoản trừ của hoàn trả đó được tính là <strong>1 dòng tiền duy nhất</strong>.
+              Chọn hóa đơn theo trình tự <strong>Ngày tháng — Số bàn — Mã Bill</strong>. Khi xác nhận hoàn trả bia thừa / món dư, hệ thống sẽ <strong>tự động tính luôn vào Khoản trừ trong ngày</strong> với nội dung <strong>Số bàn - Tên món - SL hoàn trả</strong> (tính chung <strong>1 dòng tiền duy nhất</strong>) và hoàn lại số lượng vào Tồn kho đồ uống.
             </p>
           </div>
 
@@ -1795,7 +2243,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
               <div className="flex items-center justify-between text-xs font-mono">
                 <span className="text-slate-500">
-                  Tiền hoàn trả (= Khoản trừ trong ngày):
+                  Tiền hoàn trả (= Tính vào Khoản trừ ngày):
                 </span>
                 <span className="text-base font-bold text-rose-600 dark:text-rose-400">
                   -{formatVND((activeBillItem?.unitPrice || 0) * (returnQty || 0))}

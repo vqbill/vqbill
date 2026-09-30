@@ -195,9 +195,14 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
       Array.isArray(inventoryData?.trackedCategories) &&
       inventoryData.trackedCategories.length > 0
     ) {
-      setSelectedCategories(inventoryData.trackedCategories);
+      setSelectedCategories((prev) => {
+        const merged = Array.from(
+          new Set([...prev, ...inventoryData.trackedCategories])
+        ).filter((c) => allCategories.some((ac) => ac.toLowerCase() === c.toLowerCase()));
+        return merged.length > 0 ? merged : inventoryData.trackedCategories;
+      });
     }
-  }, [inventoryData?.trackedCategories]);
+  }, [inventoryData?.trackedCategories, allCategories]);
 
   const handleToggleCategory = (cat: string) => {
     setSelectedCategories((prev) => {
@@ -347,6 +352,7 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
   );
 
   // Build all inventory rows for selectedCategories on selectedDate
+  // STRICT RULE: Only products that exist in Upload Sản phẩm / Menu (`products` / `productCatalogMap`) are allowed in Inventory!
   const allInventoryRows = useMemo<ComputedInventoryRow[]>(() => {
     const selectedCatSet = new Set(
       selectedCategories.map((c) => c.trim().toLowerCase())
@@ -356,35 +362,9 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
 
     const candidateKeys = new Set<string>();
 
-    // 1. Products from catalog in selected categories
+    // Strictly include ONLY products present in Upload sản phẩm / Menu (`productCatalogMap`)
     for (const [pKey, prod] of productCatalogMap.entries()) {
       if (selectedCatSet.has(prod.category.toLowerCase())) {
-        candidateKeys.add(pKey);
-      }
-    }
-
-    // 2. Configured items in selected categories
-    for (const [pKey, cfg] of Object.entries(configMap)) {
-      if (selectedCatSet.has((cfg.category || '').toLowerCase())) {
-        candidateKeys.add(pKey);
-      }
-    }
-
-    // 3. Sold items today in selected categories
-    for (const [pKey, sale] of salesForSelectedDate.entries()) {
-      if (selectedCatSet.has((sale.category || '').toLowerCase())) {
-        candidateKeys.add(pKey);
-      }
-    }
-
-    // 4. Daily entry items on selectedDate in selected categories
-    for (const pKey of Object.keys(dailyMap)) {
-      const cat =
-        productCatalogMap.get(pKey)?.category ||
-        configMap[pKey]?.category ||
-        salesForSelectedDate.get(pKey)?.category ||
-        'Bia';
-      if (selectedCatSet.has(cat.toLowerCase())) {
         candidateKeys.add(pKey);
       }
     }
@@ -393,20 +373,17 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
 
     for (const pKey of candidateKeys) {
       const catProd = productCatalogMap.get(pKey);
+      // Never allow an item in inventory if it is not in Upload sản phẩm / Menu
+      if (!catProd) continue;
+
       const cfg = configMap[pKey];
       const sale = salesForSelectedDate.get(pKey);
       const entry = dailyMap[pKey];
 
-      const productName =
-        catProd?.productName ||
-        cfg?.productName ||
-        sale?.productName ||
-        pKey;
-      const category =
-        catProd?.category || cfg?.category || sale?.category || 'Bia';
-      const unit =
-        catProd?.unit || cfg?.unit || inferUnit(productName, category);
-      const unitPrice = catProd?.unitPrice || sale?.unitPrice || 0;
+      const productName = catProd.productName;
+      const category = catProd.category;
+      const unit = catProd.unit || cfg?.unit || inferUnit(productName, category);
+      const unitPrice = catProd.unitPrice || sale?.unitPrice || 0;
 
       const isKetchupOrTowel = productName.toLowerCase().includes('khăn lạnh');
       const defaultPack =
@@ -1062,12 +1039,28 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
     setEditingConfigRow(null);
   };
 
-  // Logs for selected date
+  // Logs for selected date (strictly only for products present in Upload sản phẩm / Menu)
   const logsForSelectedDate = useMemo(() => {
     return (inventoryData.importLogs || [])
-      .filter((l) => l.date === selectedDate)
+      .filter((l) => {
+        if (l.date !== selectedDate) return false;
+        const pKey = (l.productName || '').trim().toLowerCase();
+        return productCatalogMap.has(pKey);
+      })
+      .map((l) => {
+        const pKey = (l.productName || '').trim().toLowerCase();
+        const catProd = productCatalogMap.get(pKey);
+        if (catProd && (catProd.category !== l.category || catProd.productName !== l.productName)) {
+          return {
+            ...l,
+            productName: catProd.productName,
+            category: catProd.category,
+          };
+        }
+        return l;
+      })
       .sort((a, b) => b.createdAtMs - a.createdAtMs);
-  }, [inventoryData.importLogs, selectedDate]);
+  }, [inventoryData.importLogs, selectedDate, productCatalogMap]);
 
   // Group filtered rows by category
   const groupedByCategory = useMemo(() => {

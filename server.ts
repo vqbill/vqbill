@@ -58,6 +58,23 @@ const DATA_DIR = path.join(process.cwd(), '.data');
 const PRIMARY_DB_FILE = path.join(DATA_DIR, 'vqbill_cloud_db.json');
 const FALLBACK_DB_FILE = path.join(os.tmpdir(), 'vqbill_cloud_db.json');
 
+function dedupeListById<T extends { id?: string; updatedAtMs?: number }>(
+  list?: T[]
+): T[] {
+  if (!Array.isArray(list)) return [];
+  const map = new Map<string, T>();
+  for (const item of list) {
+    if (!item || !item.id) continue;
+    const key = String(item.id).trim();
+    if (!key) continue;
+    const existing = map.get(key);
+    if (!existing || (item.updatedAtMs || 0) >= (existing.updatedAtMs || 0)) {
+      map.set(key, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
 function loadCloudWorkspaceFromDisk(): ServerCloudWorkspace {
   const candidates = [PRIMARY_DB_FILE, FALLBACK_DB_FILE];
   for (const filePath of candidates) {
@@ -75,13 +92,13 @@ function loadCloudWorkspaceFromDisk(): ServerCloudWorkspace {
             debtors: Array.isArray(parsed.debtors) ? parsed.debtors : undefined,
             rolePermissions: parsed.rolePermissions || undefined,
             inventoryData: parsed.inventoryData || undefined,
-            products: Array.isArray(parsed.products) ? parsed.products : [],
-            bills: Array.isArray(parsed.bills) ? parsed.bills : [],
-            billItems: Array.isArray(parsed.billItems) ? parsed.billItems : [],
-            deductions: Array.isArray(parsed.deductions) ? parsed.deductions : [],
-            returns: Array.isArray(parsed.returns) ? parsed.returns : [],
+            products: dedupeListById(parsed.products),
+            bills: dedupeListById(parsed.bills),
+            billItems: dedupeListById(parsed.billItems),
+            deductions: dedupeListById(parsed.deductions),
+            returns: dedupeListById(parsed.returns),
             staffAccounts: Array.isArray(parsed.staffAccounts)
-              ? parsed.staffAccounts
+              ? dedupeListById(parsed.staffAccounts)
               : undefined,
             geminiApiKey:
               typeof parsed.geminiApiKey === 'string' ? parsed.geminiApiKey : '',
@@ -701,13 +718,13 @@ app.post('/api/workspace', (req, res) => {
               snapshot.rolePermissions || cloudWorkspace.rolePermissions,
             inventoryData:
               snapshot.inventoryData || cloudWorkspace.inventoryData,
-            products: Array.isArray(snapshot.products) ? snapshot.products : [],
-            bills: Array.isArray(snapshot.bills) ? snapshot.bills : [],
-            billItems: Array.isArray(snapshot.billItems) ? snapshot.billItems : [],
-            deductions: Array.isArray(snapshot.deductions) ? snapshot.deductions : [],
-            returns: Array.isArray(snapshot.returns) ? snapshot.returns : [],
+            products: dedupeListById(snapshot.products),
+            bills: dedupeListById(snapshot.bills),
+            billItems: dedupeListById(snapshot.billItems),
+            deductions: dedupeListById(snapshot.deductions),
+            returns: dedupeListById(snapshot.returns),
             staffAccounts: Array.isArray(snapshot.staffAccounts)
-              ? snapshot.staffAccounts
+              ? dedupeListById(snapshot.staffAccounts)
               : cloudWorkspace.staffAccounts,
           };
           saveCloudWorkspaceToDisk(cloudWorkspace);
@@ -815,22 +832,22 @@ app.post('/api/workspace', (req, res) => {
         inventoryData:
           snapshot.inventoryData || cloudWorkspace.inventoryData,
         products: Array.isArray(snapshot.products)
-          ? snapshot.products
+          ? dedupeListById(snapshot.products)
           : cloudWorkspace.products,
         bills: Array.isArray(snapshot.bills)
-          ? snapshot.bills
+          ? dedupeListById(snapshot.bills)
           : cloudWorkspace.bills,
         billItems: Array.isArray(snapshot.billItems)
-          ? snapshot.billItems
+          ? dedupeListById(snapshot.billItems)
           : cloudWorkspace.billItems,
         deductions: Array.isArray(snapshot.deductions)
-          ? snapshot.deductions
+          ? dedupeListById(snapshot.deductions)
           : cloudWorkspace.deductions,
         returns: Array.isArray(snapshot.returns)
-          ? snapshot.returns
+          ? dedupeListById(snapshot.returns)
           : cloudWorkspace.returns,
         staffAccounts: Array.isArray(snapshot.staffAccounts)
-          ? snapshot.staffAccounts
+          ? dedupeListById(snapshot.staffAccounts)
           : cloudWorkspace.staffAccounts,
       };
       saveCloudWorkspaceToDisk(cloudWorkspace);

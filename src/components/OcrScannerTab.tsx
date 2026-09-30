@@ -931,7 +931,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         {/* Right Area: Interactive Bill Review & Save */}
         <div className="xl:col-span-7 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs flex flex-col justify-between space-y-5">
           <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200 dark:border-slate-800">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
               <div>
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
                   Kiểm tra & Chỉnh sửa Hóa Đơn trước khi lưu
@@ -940,13 +940,26 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   Ca bán hàng tính từ <strong>09:00 sáng ngày D đến 08:00 sáng ngày D+1</strong>.
                 </p>
               </div>
-              <div className="sm:text-right flex sm:block items-center justify-between pt-1 sm:pt-0">
-                <span className="text-xs text-slate-500 dark:text-slate-400 block">
-                  Tổng cộng thanh toán
-                </span>
-                <span className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
-                  {formatVND(totalAmount)}
-                </span>
+              <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 pt-1 sm:pt-0">
+                <div className="sm:text-right">
+                  <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                    Tổng cộng thanh toán
+                  </span>
+                  <span className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                    {formatVND(totalAmount)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={isSaving || !canWrite}
+                  onClick={handleSaveBill}
+                  className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs shrink-0"
+                >
+                  <Save className="w-4 h-4 shrink-0" />
+                  <span>
+                    {isSaving ? 'Đang lưu...' : 'Lưu Bill'}
+                  </span>
+                </button>
               </div>
             </div>
 

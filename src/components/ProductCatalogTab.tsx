@@ -50,6 +50,9 @@ interface ProductCatalogTabProps {
     category: string;
     unitPrice: number;
     unit: string;
+    totalSold?: number;
+    totalReturned?: number;
+    totalRevenue?: number;
   }) => Promise<void>;
   onBulkUpsertProducts?: (items: BulkParsedProduct[]) => Promise<{
     addedProductsCount: number;
@@ -95,6 +98,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
   const [unit, setUnit] = useState<string>('Lon');
 
   const [editingProduct, setEditingProduct] = useState<ProductRecord | null>(null);
+  const [isCustomEditCategory, setIsCustomEditCategory] = useState<boolean>(false);
 
   const [bulkText, setBulkText] = useState(
     `Gà biển kho nghệ, Gà, 129000\nCombo 2, Lẩu / Món chính, 459000\nBia Tiger Lùn, Bia, 22000\nẾch sapo, Ếch, 135000`
@@ -358,34 +362,42 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
     });
   };
 
-  const handleSaveEditedProduct = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveEditedProduct = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!canWrite || !editingProduct) return;
     const cleanName = editingProduct.productName.trim();
-    if (!cleanName) return;
+    if (!cleanName) {
+      setFeedback({
+        type: 'err',
+        text: 'Vui lòng nhập tên sản phẩm.',
+      });
+      return;
+    }
+    const cleanCat = (editingProduct.category || 'Khác').trim() || 'Khác';
+    const cleanUnit = (editingProduct.unit || 'Phần').trim() || 'Phần';
+    const cleanPrice = Math.max(0, Math.round(Number(editingProduct.unitPrice) || 0));
+    const cleanSold = Math.max(0, Math.round(Number(editingProduct.totalSold) || 0));
+    const cleanRet = Math.max(0, Math.round(Number(editingProduct.totalReturned) || 0));
+    const cleanRev = Math.max(0, Math.round(Number(editingProduct.totalRevenue) || 0));
 
-    requestConfirm({
-      title: 'Xác nhận Cập Nhật Sản Phẩm Mặc Định',
-      message: `Bạn có chắc chắn muốn lưu thay đổi cho sản phẩm "${cleanName}" (Danh mục: ${
-        editingProduct.category
-      }, Giá bán mặc định: ${formatVND(editingProduct.unitPrice)}) lên Firebase không?`,
-      confirmLabel: 'Lưu cập nhật',
-      variant: 'warning',
-      onConfirm: async () => {
-        await onAddOrUpdateProduct({
-          id: editingProduct.id,
-          productName: cleanName,
-          category: editingProduct.category,
-          unitPrice: Math.max(0, Math.round(editingProduct.unitPrice || 0)),
-          unit: editingProduct.unit.trim() || 'Phần',
-        });
-        setFeedback({
-          type: 'ok',
-          text: `Đã cập nhật sản phẩm "${cleanName}" (Danh mục: ${editingProduct.category}) và tự động đồng bộ qua Số lượng theo danh mục.`,
-        });
-        setEditingProduct(null);
-      },
+    await onAddOrUpdateProduct({
+      id: editingProduct.id,
+      productName: cleanName,
+      category: cleanCat,
+      unitPrice: cleanPrice,
+      unit: cleanUnit,
+      totalSold: cleanSold,
+      totalReturned: cleanRet,
+      totalRevenue: cleanRev,
     });
+    setFeedback({
+      type: 'ok',
+      text: `Đã cập nhật toàn bộ thông tin món "${cleanName}" (Danh mục: ${cleanCat}, ĐVT: ${cleanUnit}, Giá: ${formatVND(
+        cleanPrice
+      )}) và đồng bộ danh mục trên toàn hệ thống!`,
+    });
+    setEditingProduct(null);
+    setIsCustomEditCategory(false);
   };
 
   const handleInlineCategoryChange = async (
@@ -393,16 +405,24 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
     newCategory: string
   ) => {
     if (!canWrite || !newCategory || newCategory === prod.category) return;
+    if (newCategory === '__NEW_CATEGORY__') {
+      setEditingProduct({ ...prod });
+      setIsCustomEditCategory(true);
+      return;
+    }
     await onAddOrUpdateProduct({
       id: prod.id,
       productName: prod.productName,
       category: newCategory,
       unitPrice: prod.unitPrice,
       unit: prod.unit,
+      totalSold: prod.totalSold,
+      totalReturned: prod.totalReturned,
+      totalRevenue: prod.totalRevenue,
     });
     setFeedback({
       type: 'ok',
-      text: `Đã chuyển món "${prod.productName}" sang danh mục "${newCategory}" và tự động đồng bộ qua Số lượng theo danh mục.`,
+      text: `Đã chuyển món "${prod.productName}" sang danh mục "${newCategory}" và tự động đồng bộ danh mục mới trên toàn bộ hệ thống!`,
     });
   };
 
@@ -768,15 +788,26 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
 
       {/* Edit Product Drawer if active */}
       {editingProduct && canWrite && (
-        <div className="p-4 sm:p-5 border-2 border-emerald-500/60 rounded-2xl bg-emerald-50/20 dark:bg-emerald-950/20 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-              Chỉnh sửa sản phẩm mặc định: {editingProduct.productName}
-            </h3>
+        <div className="p-4 sm:p-5 border-2 border-emerald-500/70 rounded-2xl bg-emerald-50/30 dark:bg-emerald-950/25 space-y-4 shadow-xs">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>
+                  Chỉnh sửa toàn bộ thông tin món: {editingProduct.productName}
+                </span>
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                Khi đổi tên hoặc đổi danh mục mới, hệ thống sẽ tự động đồng bộ trên toàn bộ Hóa đơn, Số lượng theo danh mục, Kho đồ uống và Báo cáo.
+              </p>
+            </div>
             <button
               type="button"
-              onClick={() => setEditingProduct(null)}
-              className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              onClick={() => {
+                setEditingProduct(null);
+                setIsCustomEditCategory(false);
+              }}
+              className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -784,45 +815,101 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
 
           <form
             onSubmit={handleSaveEditedProduct}
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end"
           >
-            <div className="sm:col-span-2">
+            <div className="sm:col-span-2 lg:col-span-3">
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Tên sản phẩm
+                Tên sản phẩm *
               </label>
               <input
                 type="text"
                 required
                 value={editingProduct.productName}
                 onChange={(e) =>
-                  setEditingProduct({ ...editingProduct, productName: e.target.value })
+                  setEditingProduct({
+                    ...editingProduct,
+                    productName: e.target.value,
+                  })
                 }
-                className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Danh mục
-              </label>
-              <select
-                value={editingProduct.category}
-                onChange={(e) =>
-                  setEditingProduct({ ...editingProduct, category: e.target.value })
-                }
-                className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
-              >
-                {Array.from(
-                  new Set([...effectiveCategories, editingProduct.category])
-                ).map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+            <div className="lg:col-span-3">
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Danh mục *
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsCustomEditCategory((v) => !v)}
+                  className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                >
+                  {isCustomEditCategory ? 'Chọn danh mục có sẵn' : '+ Nhập danh mục mới'}
+                </button>
+              </div>
+              {isCustomEditCategory ? (
+                <input
+                  type="text"
+                  required
+                  value={editingProduct.category}
+                  onChange={(e) =>
+                    setEditingProduct({
+                      ...editingProduct,
+                      category: e.target.value,
+                    })
+                  }
+                  placeholder="Nhập tên danh mục mới..."
+                  className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                />
+              ) : (
+                <select
+                  value={editingProduct.category}
+                  onChange={(e) => {
+                    if (e.target.value === '__NEW_CATEGORY__') {
+                      setIsCustomEditCategory(true);
+                      return;
+                    }
+                    setEditingProduct({
+                      ...editingProduct,
+                      category: e.target.value,
+                    });
+                  }}
+                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                >
+                  {Array.from(
+                    new Set([...effectiveCategories, editingProduct.category])
+                  )
+                    .filter(Boolean)
+                    .map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  <option value="__NEW_CATEGORY__">+ Nhập danh mục mới...</option>
+                </select>
+              )}
             </div>
 
-            <div>
+            <div className="lg:col-span-2">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Đơn vị tính (ĐVT)
+              </label>
+              <input
+                type="text"
+                value={editingProduct.unit}
+                onChange={(e) =>
+                  setEditingProduct({
+                    ...editingProduct,
+                    unit: e.target.value,
+                  })
+                }
+                placeholder="VD: Lon, Chai, Phần..."
+                className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+              />
+            </div>
+
+            <div className="lg:col-span-2">
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                 Giá bán mặc định (₫)
               </label>
@@ -837,22 +924,80 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                     unitPrice: Number(e.target.value),
                   })
                 }
-                className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                className="w-full h-10 px-3 text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
               />
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="lg:col-span-2">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Lũy kế đã bán
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editingProduct.totalSold}
+                onChange={(e) =>
+                  setEditingProduct({
+                    ...editingProduct,
+                    totalSold: Number(e.target.value),
+                  })
+                }
+                className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+              />
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                SL đã hoàn trả
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editingProduct.totalReturned}
+                onChange={(e) =>
+                  setEditingProduct({
+                    ...editingProduct,
+                    totalReturned: Number(e.target.value),
+                  })
+                }
+                className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+              />
+            </div>
+
+            <div className="lg:col-span-3">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Doanh thu lũy kế (₫)
+              </label>
+              <input
+                type="number"
+                min={0}
+                step={1000}
+                value={editingProduct.totalRevenue}
+                onChange={(e) =>
+                  setEditingProduct({
+                    ...editingProduct,
+                    totalRevenue: Number(e.target.value),
+                  })
+                }
+                className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+              />
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-7 flex items-center justify-end gap-2">
               <button
                 type="submit"
-                className="flex-1 h-10 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
               >
                 <Save className="w-3.5 h-3.5" />
-                <span>Lưu sửa</span>
+                <span>Lưu toàn bộ thông tin món</span>
               </button>
               <button
                 type="button"
-                onClick={() => setEditingProduct(null)}
-                className="h-10 px-3 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-medium cursor-pointer"
+                onClick={() => {
+                  setEditingProduct(null);
+                  setIsCustomEditCategory(false);
+                }}
+                className="h-10 px-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium cursor-pointer"
               >
                 Hủy
               </button>
@@ -1227,7 +1372,171 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                  {filteredProducts.map((prod) => (
+                  {filteredProducts.map((prod) => {
+                    const isRowEditing = editingProduct?.id === prod.id && canWrite;
+                    if (isRowEditing && editingProduct) {
+                      return (
+                        <tr
+                          key={prod.id}
+                          className="bg-emerald-50/60 dark:bg-emerald-950/30"
+                        >
+                          <td className="py-2 px-2.5">
+                            <input
+                              type="text"
+                              value={editingProduct.productName}
+                              onChange={(e) =>
+                                setEditingProduct({
+                                  ...editingProduct,
+                                  productName: e.target.value,
+                                })
+                              }
+                              className="w-full min-w-[140px] h-8 px-2 text-xs font-semibold rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5">
+                            {isCustomEditCategory ? (
+                              <input
+                                type="text"
+                                value={editingProduct.category}
+                                onChange={(e) =>
+                                  setEditingProduct({
+                                    ...editingProduct,
+                                    category: e.target.value,
+                                  })
+                                }
+                                placeholder="Tên danh mục mới..."
+                                className="w-full min-w-[120px] h-8 px-2 text-xs font-semibold rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                              />
+                            ) : (
+                              <select
+                                value={editingProduct.category}
+                                onChange={(e) => {
+                                  if (e.target.value === '__NEW_CATEGORY__') {
+                                    setIsCustomEditCategory(true);
+                                    return;
+                                  }
+                                  setEditingProduct({
+                                    ...editingProduct,
+                                    category: e.target.value,
+                                  });
+                                }}
+                                className="w-full min-w-[120px] h-8 px-2 text-xs rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                              >
+                                {Array.from(
+                                  new Set([
+                                    ...effectiveCategories,
+                                    editingProduct.category,
+                                  ])
+                                )
+                                  .filter(Boolean)
+                                  .map((c) => (
+                                    <option key={c} value={c}>
+                                      {c}
+                                    </option>
+                                  ))}
+                                <option value="__NEW_CATEGORY__">
+                                  + Danh mục mới...
+                                </option>
+                              </select>
+                            )}
+                          </td>
+                          <td className="py-2 px-2.5">
+                            <input
+                              type="text"
+                              value={editingProduct.unit}
+                              onChange={(e) =>
+                                setEditingProduct({
+                                  ...editingProduct,
+                                  unit: e.target.value,
+                                })
+                              }
+                              className="w-20 h-8 px-2 text-xs rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5 text-right">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1000}
+                              value={editingProduct.unitPrice}
+                              onChange={(e) =>
+                                setEditingProduct({
+                                  ...editingProduct,
+                                  unitPrice: Number(e.target.value),
+                                })
+                              }
+                              className="w-24 h-8 px-2 text-right text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 rounded-lg border border-emerald-500 bg-white dark:bg-slate-900"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5 text-right">
+                            <input
+                              type="number"
+                              min={0}
+                              value={editingProduct.totalSold}
+                              onChange={(e) =>
+                                setEditingProduct({
+                                  ...editingProduct,
+                                  totalSold: Number(e.target.value),
+                                })
+                              }
+                              className="w-20 h-8 px-2 text-right text-xs font-mono rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5 text-right">
+                            <input
+                              type="number"
+                              min={0}
+                              value={editingProduct.totalReturned}
+                              onChange={(e) =>
+                                setEditingProduct({
+                                  ...editingProduct,
+                                  totalReturned: Number(e.target.value),
+                                })
+                              }
+                              className="w-20 h-8 px-2 text-right text-xs font-mono rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5 text-right">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1000}
+                              value={editingProduct.totalRevenue}
+                              onChange={(e) =>
+                                setEditingProduct({
+                                  ...editingProduct,
+                                  totalRevenue: Number(e.target.value),
+                                })
+                              }
+                              className="w-28 h-8 px-2 text-right text-xs font-mono font-bold rounded-lg border border-emerald-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5 text-right whitespace-nowrap space-x-1">
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditedProduct()}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold cursor-pointer"
+                            >
+                              <Save className="w-3 h-3" />
+                              <span>Lưu</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingProduct(null);
+                                setIsCustomEditCategory(false);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] font-medium text-slate-600 dark:text-slate-300 cursor-pointer"
+                            >
+                              <X className="w-3 h-3" />
+                              <span>Hủy</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return (
                     <tr key={prod.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                       <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
                         {prod.productName}
@@ -1248,6 +1557,7 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                                 {c}
                               </option>
                             ))}
+                            <option value="__NEW_CATEGORY__">+ Danh mục mới...</option>
                           </select>
                         ) : (
                           prod.category
@@ -1270,7 +1580,10 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                         <td className="py-2.5 px-3 text-right whitespace-nowrap space-x-1.5">
                           <button
                             type="button"
-                            onClick={() => setEditingProduct({ ...prod })}
+                            onClick={() => {
+                              setEditingProduct({ ...prod });
+                              setIsCustomEditCategory(false);
+                            }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
                           >
                             <Edit3 className="w-3 h-3 text-emerald-600" />
@@ -1288,7 +1601,8 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
                         </td>
                       )}
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

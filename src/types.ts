@@ -75,14 +75,14 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     label: 'Khoản trừ (Chi trong ngày)',
     shortLabel: 'Khoản trừ',
     description:
-      'Xem theo ngày/hôm qua/hôm nay/tuần/tháng các khoản chi trong ngày và tiền hoàn trả khách (tính chung 1 dòng tiền duy nhất)',
+      'Quản lý và chỉnh sửa các khoản chi tiêu trong ngày (mua bánh mì, rau, đá, nguyên liệu...) cùng các khoản hoàn bia / món thừa tự động đồng bộ sang Khoản trừ',
   },
   {
     id: 'returns',
     label: 'Hoàn trả (Trả bia / món thừa)',
     shortLabel: 'Hoàn trả',
     description:
-      'Chọn hóa đơn theo Ngày tháng - Số bàn, ghi nhận trả bia/món thừa và tự động tính vào Khoản trừ trong ngày (1 dòng tiền duy nhất)',
+      'Chọn hóa đơn theo Ngày tháng - Số bàn để ghi nhận trả bia/món thừa, tự động tính vào Khoản trừ trong ngày (1 dòng tiền duy nhất) và hoàn lại tồn kho',
   },
   {
     id: 'products',
@@ -359,8 +359,19 @@ export interface InventoryImportLog {
   createdBy: string;
 }
 
+export const DEFAULT_DEDUCTION_CATEGORIES = [
+  'Mua bánh mì / Rau / Gia vị',
+  'Nguyên liệu / Thực phẩm',
+  'Vật tư / Đá / Gas',
+  'Vật tư / Tạp phẩm quán',
+  'Chi phí vận hành trong ngày',
+  'Hoàn bia / món thừa',
+  'Khác',
+] as const;
+
 export interface WorkspaceInventoryData {
   trackedCategories: string[]; // Mặc định ['Bia', 'Nước ngọt']
+  deductionCategories?: string[]; // Danh sách nhóm khoản trừ tùy chỉnh & mặc định
   itemConfigs: Record<string, InventoryItemConfig>; // key = lowercase productName
   dailyEntries: Record<string, Record<string, DailyInventoryEntry>>; // date -> lowercase productName
   importLogs: InventoryImportLog[];

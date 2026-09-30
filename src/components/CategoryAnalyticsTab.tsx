@@ -144,12 +144,28 @@ export const CategoryAnalyticsTab: React.FC<CategoryAnalyticsTabProps> = ({
   const [selectedCategories, setSelectedCategories] = useState<string[]>(() =>
     allCategories.length > 0 ? allCategories : []
   );
+  const knownCategoriesRef = React.useRef<Set<string>>(new Set(allCategories));
 
-  // Keep selectedCategories valid when allCategories changes
+  // Keep selectedCategories valid when allCategories changes AND auto-select any newly added/changed category
   useEffect(() => {
+    const newlyAdded: string[] = [];
+    for (const c of allCategories) {
+      if (!knownCategoriesRef.current.has(c)) {
+        knownCategoriesRef.current.add(c);
+        newlyAdded.push(c);
+      }
+    }
+    // Remove deleted categories from knownCategoriesRef so if re-added later they get selected
+    for (const oldC of Array.from(knownCategoriesRef.current)) {
+      if (!allCategories.includes(oldC)) {
+        knownCategoriesRef.current.delete(oldC);
+      }
+    }
+
     setSelectedCategories((prev) => {
       const validPrev = prev.filter((c) => allCategories.includes(c));
-      if (validPrev.length > 0) return validPrev;
+      const merged = Array.from(new Set([...validPrev, ...newlyAdded]));
+      if (merged.length > 0) return merged;
       return allCategories;
     });
   }, [allCategories]);

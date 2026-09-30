@@ -72,6 +72,7 @@ import {
   getEffectiveRolePermissions,
   sanitizeTabList,
   WorkspaceInventoryData,
+  DEFAULT_DEDUCTION_CATEGORIES,
 } from './types';
 import {
   formatVND,
@@ -129,6 +130,7 @@ import {
   getDeletedDebtors,
   markDebtorsDeletedLocally,
   unmarkDebtorDeletedLocally,
+  dedupeRecordsById,
 } from './services/dataService';
 import { AuthScreen } from './components/AuthScreen';
 import { RevenueColumnChart, DailyRevenuePoint } from './components/RevenueCharts';
@@ -486,19 +488,21 @@ export default function App() {
         ...DEFAULT_ROLE_PERMISSIONS,
         ...(remoteSnap.rolePermissions || {}),
       };
-      const nextProducts = Array.isArray(remoteSnap.products)
-        ? remoteSnap.products
-        : [];
-      const nextBills = Array.isArray(remoteSnap.bills) ? remoteSnap.bills : [];
-      const nextBillItems = Array.isArray(remoteSnap.billItems)
-        ? remoteSnap.billItems
-        : [];
-      const nextDeductions = Array.isArray(remoteSnap.deductions)
-        ? remoteSnap.deductions
-        : [];
-      const nextReturns = Array.isArray(remoteSnap.returns)
-        ? remoteSnap.returns
-        : [];
+      const nextProducts = dedupeRecordsById(
+        Array.isArray(remoteSnap.products) ? remoteSnap.products : []
+      );
+      const nextBills = dedupeRecordsById(
+        Array.isArray(remoteSnap.bills) ? remoteSnap.bills : []
+      );
+      const nextBillItems = dedupeRecordsById(
+        Array.isArray(remoteSnap.billItems) ? remoteSnap.billItems : []
+      );
+      const nextDeductions = dedupeRecordsById(
+        Array.isArray(remoteSnap.deductions) ? remoteSnap.deductions : []
+      );
+      const nextReturns = dedupeRecordsById(
+        Array.isArray(remoteSnap.returns) ? remoteSnap.returns : []
+      );
       const nextDebtors = Array.isArray(remoteSnap.debtors)
         ? remoteSnap.debtors
         : [];
@@ -1139,7 +1143,7 @@ export default function App() {
                 updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
               };
             });
-          setBills(loaded);
+          setBills(dedupeRecordsById(loaded));
         }
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'bills')
@@ -1175,7 +1179,7 @@ export default function App() {
                 updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
               };
             });
-          setBillItems(loaded);
+          setBillItems(dedupeRecordsById(loaded));
         }
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'bill_items')
@@ -1203,7 +1207,7 @@ export default function App() {
               updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
             };
           });
-          setProducts(loaded);
+          setProducts(dedupeRecordsById(loaded));
         }
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'products')
@@ -1234,7 +1238,7 @@ export default function App() {
               updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
             };
           });
-          setDeductions(loaded);
+          setDeductions(dedupeRecordsById(loaded));
         }
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'deductions')
@@ -1265,7 +1269,7 @@ export default function App() {
               updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
             };
           });
-          setReturns(loaded);
+          setReturns(dedupeRecordsById(loaded));
         }
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'returns')
@@ -1422,20 +1426,36 @@ export default function App() {
     return effectiveBillItems.filter((it) => periodBillIds.has(it.billId));
   }, [effectiveBillItems, periodBillIds]);
 
-  // Ensure every return is represented as a single unified cashflow line in Deductions (Khoản trừ)
+  // Ensure every return (hoàn bia / món thừa) is synced as a single unified cashflow line in Deductions (Khoản trừ)
   const effectiveDeductions = useMemo<DeductionRecord[]>(() => {
     const billMap = new Map(bills.map((b) => [b.id, b]));
-    const result: DeductionRecord[] = deductions.map((d) => ({
-      ...d,
-      deductionDate: d.deductionDate || d.billDate || todayStr,
-      billDate: d.billDate || d.deductionDate || todayStr,
-      productName: d.productName || '',
-      billCode: d.billCode || '',
-      category: d.category || 'Khác',
-      note: d.note || '',
-    }));
+    const uniqueDeductions = dedupeRecordsById(deductions);
+    const uniqueReturns = dedupeRecordsById(returns);
+    const result: DeductionRecord[] = uniqueDeductions.map((d) => {
+      const codeStr = String(d.billCode || '');
+      const isV2 = codeStr.endsWith('-V2');
+      const safeAmt = Math.max(0, Math.round(Number(d.amount) || 0));
+      const safeQty = isV2 ? Math.max(1, Math.round(Number(d.quantity) || 1)) : 1;
+      const safeUnitPrice = isV2
+        ? Number(d.unitPrice) > 0
+          ? Math.max(0, Math.round(Number(d.unitPrice)))
+          : Math.round(safeAmt / safeQty)
+        : safeAmt;
+      return {
+        ...d,
+        deductionDate: d.deductionDate || d.billDate || todayStr,
+        billDate: d.billDate || d.deductionDate || todayStr,
+        productName: d.productName || '',
+        billCode: codeStr,
+        category: d.category || 'Khác',
+        quantity: safeQty,
+        unitPrice: safeUnitPrice,
+        amount: safeAmt,
+        note: d.note || '',
+      };
+    });
 
-    for (const r of returns) {
+    for (const r of uniqueReturns) {
       const expectedDedId = sanitizeId(`ded_${r.id}`);
       const rProdLower = String(r.productName || '').toLowerCase();
       const alreadyLinkedIdx = result.findIndex(
@@ -1443,9 +1463,11 @@ export default function App() {
           d.id === expectedDedId ||
           d.id === `ded_${r.id}` ||
           (d.billId === r.billId &&
-            d.amount === r.amount &&
-            (d.billCode === 'HOAN-TRA' ||
-              (rProdLower &&
+            (String(d.id || '').startsWith('ded_ret_') ||
+              d.billCode === 'HOAN-TRA' ||
+              /\bsl hoàn trả\s*:/i.test(String(d.productName || '')) ||
+              (d.amount === r.amount &&
+                rProdLower &&
                 String(d.productName || '')
                   .toLowerCase()
                   .includes(rProdLower))))
@@ -1459,22 +1481,24 @@ export default function App() {
         r.quantity
       );
       const rDate = r.returnDate || r.billDate || todayStr;
+      const rAmt = Math.max(0, Math.round(Number(r.amount) || 0));
 
       if (alreadyLinkedIdx >= 0) {
         const existing = result[alreadyLinkedIdx];
+        const isEditedV2 = String(existing.billCode || '').endsWith('-V2');
         const wasManuallyEdited =
-          (existing.updatedAtMs || 0) > (r.createdAtMs || 0) + 1000;
-        if (
-          !wasManuallyEdited &&
-          (existing.productName !== formattedTitle ||
-            existing.billCode !== 'HOAN-TRA')
-        ) {
+          isEditedV2 || (existing.updatedAtMs || 0) > (r.createdAtMs || 0) + 1000;
+        if (!wasManuallyEdited) {
           result[alreadyLinkedIdx] = {
             ...existing,
             deductionDate: existing.deductionDate || rDate,
             billDate: existing.billDate || rDate,
-            billCode: 'HOAN-TRA',
+            billCode: existing.billCode || r.billCode || 'HOAN-TRA',
             productName: formattedTitle,
+            category: 'Hoàn bia / món thừa',
+            quantity: 1,
+            unitPrice: rAmt,
+            amount: rAmt,
           };
         }
       } else {
@@ -1483,14 +1507,14 @@ export default function App() {
           id: expectedDedId,
           ownerId: r.ownerId || ownerId,
           billId: r.billId || '',
-          billCode: 'HOAN-TRA',
+          billCode: r.billCode || 'HOAN-TRA',
           billDate: rDate,
           deductionDate: rDate,
           productName: formattedTitle,
-          category: r.category || 'Hoàn trả khách',
-          quantity: Number(r.quantity) || 1,
-          unitPrice: Number(r.unitPrice) || 0,
-          amount: Number(r.amount) || 0,
+          category: 'Hoàn bia / món thừa',
+          quantity: 1,
+          unitPrice: rAmt,
+          amount: rAmt,
           note: r.note || '',
           createdAtMs: ts,
           updatedAtMs: ts,
@@ -1553,20 +1577,26 @@ export default function App() {
   }, [periodBills, paymentFilter, categoryFilter, searchKeyword, effectiveBillItems]);
 
   // Financial Metrics
+  // Note: Beer/item returns are included in periodDeductions (1 dòng tiền duy nhất),
+  // so grossCash & grossTransfer use b.totalAmount and subtract totalDeductions once.
   const financialSummary = useMemo(() => {
     const grossCash = periodBills
       .filter((b) => b.paymentType === 'cash')
-      .reduce((s, b) => s + b.totalAmount, 0);
+      .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
 
     const grossTransfer = periodBills
       .filter((b) => b.paymentType === 'transfer')
-      .reduce((s, b) => s + b.totalAmount, 0);
+      .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
 
     const totalDeductions = periodDeductions.reduce((s, d) => s + d.amount, 0);
 
     const totalDebt = periodBills
       .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
-      .reduce((s, b) => s + b.totalAmount, 0);
+      .reduce(
+        (s, b) =>
+          s + Math.max(0, (Number(b.totalAmount) || 0) - (Number(b.deductedAmount) || 0)),
+        0
+      );
 
     const netCashRevenue = grossCash - totalDeductions;
     const netTransferRevenue = grossTransfer;
@@ -1600,10 +1630,13 @@ export default function App() {
         deduction: 0,
         debt: 0,
       };
-      if (b.paymentType === 'cash') cur.cash += b.totalAmount;
-      else if (b.paymentType === 'transfer') cur.transfer += b.totalAmount;
+      if (b.paymentType === 'cash') cur.cash += Number(b.totalAmount) || 0;
+      else if (b.paymentType === 'transfer') cur.transfer += Number(b.totalAmount) || 0;
       else if (b.paymentType === 'debt' && b.debtStatus !== 'paid')
-        cur.debt += b.totalAmount;
+        cur.debt += Math.max(
+          0,
+          (Number(b.totalAmount) || 0) - (Number(b.deductedAmount) || 0)
+        );
       dateMap.set(b.billDate, cur);
     }
 
@@ -1926,6 +1959,9 @@ export default function App() {
     const affectedDeductions = deductions
       .filter((d) => d.category === oldName)
       .map((d) => ({ ...d, category: trimmed }));
+    const affectedReturns = returns
+      .filter((r) => r.category === oldName)
+      .map((r) => ({ ...r, category: trimmed }));
 
     setProducts((prev) =>
       prev.map((p) => (p.category === oldName ? { ...p, category: trimmed } : p))
@@ -1936,6 +1972,9 @@ export default function App() {
     setDeductions((prev) =>
       prev.map((d) => (d.category === oldName ? { ...d, category: trimmed } : d))
     );
+    setReturns((prev) =>
+      prev.map((r) => (r.category === oldName ? { ...r, category: trimmed } : r))
+    );
 
     await renameOrReassignCategoryInCloud({
       ownerId,
@@ -1943,6 +1982,7 @@ export default function App() {
       affectedProducts,
       affectedBillItems,
       affectedDeductions,
+      affectedReturns,
     });
     showToast(`Đã đổi tên danh mục "${oldName}" thành "${trimmed}" trên toàn hệ thống!`);
   };
@@ -2099,9 +2139,17 @@ export default function App() {
       autoAddProducts,
     });
 
-    setBills((prev) => [res.bill, ...prev]);
-    setBillItems((prev) => [...res.billItems, ...prev]);
-    setProducts(res.updatedProducts);
+    setBills((prev) =>
+      dedupeRecordsById([res.bill, ...prev.filter((b) => b.id !== res.bill.id)])
+    );
+    const newItemIds = new Set(res.billItems.map((it) => it.id));
+    setBillItems((prev) =>
+      dedupeRecordsById([
+        ...res.billItems,
+        ...prev.filter((it) => !newItemIds.has(it.id)),
+      ])
+    );
+    setProducts(dedupeRecordsById(res.updatedProducts));
     showToast(
       `Đã lưu Bill ${res.bill.billCode} (Ca ngày ${res.bill.billDate} · ${formatVND(
         res.bill.totalAmount
@@ -2137,9 +2185,17 @@ export default function App() {
       autoAddProducts,
     });
 
-    setBills((prev) => [res.bill, ...prev]);
-    setBillItems((prev) => [...res.billItems, ...prev]);
-    setProducts(res.updatedProducts);
+    setBills((prev) =>
+      dedupeRecordsById([res.bill, ...prev.filter((b) => b.id !== res.bill.id)])
+    );
+    const newItemIds = new Set(res.billItems.map((it) => it.id));
+    setBillItems((prev) =>
+      dedupeRecordsById([
+        ...res.billItems,
+        ...prev.filter((it) => !newItemIds.has(it.id)),
+      ])
+    );
+    setProducts(dedupeRecordsById(res.updatedProducts));
     const totalQty = zeroItems.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
     showToast(
       `Đã lưu phiếu Chủ/QL sử dụng ${res.bill.billCode} (+${totalQty} SL bán · Thành tiền: 0đ)!`
@@ -2378,23 +2434,98 @@ export default function App() {
     );
   };
 
+  const effectiveDeductionCategories = useMemo(() => {
+    const result: string[] = [];
+    const seen = new Set<string>();
+    const addCat = (c?: string) => {
+      const clean = String(c || '').trim();
+      if (!clean) return;
+      const lower = clean.toLowerCase();
+      if (!seen.has(lower)) {
+        seen.add(lower);
+        result.push(clean);
+      }
+    };
+    DEFAULT_DEDUCTION_CATEGORIES.forEach(addCat);
+    (inventoryData.deductionCategories || []).forEach(addCat);
+    deductions.forEach((d) => addCat(d.category));
+    return result;
+  }, [inventoryData.deductionCategories, deductions]);
+
+  const handleAddDeductionCategory = async (categoryName: string) => {
+    const clean = categoryName.trim();
+    if (!clean) return;
+    setWorkspaceInitialized(true);
+    const currentList = effectiveDeductionCategories;
+    if (currentList.some((c) => c.toLowerCase() === clean.toLowerCase())) {
+      return;
+    }
+    const nextList = [...currentList, clean];
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      deductionCategories: nextList,
+      updatedAtMs: Date.now(),
+    };
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+    showToast(`Đã tạo nhóm khoản trừ mới "${clean}"!`);
+  };
+
+  const handleDeleteDeductionCategory = async (categoryName: string) => {
+    const clean = categoryName.trim();
+    if (!clean) return;
+    setWorkspaceInitialized(true);
+    const nextList = effectiveDeductionCategories.filter(
+      (c) => c.toLowerCase() !== clean.toLowerCase()
+    );
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      deductionCategories: nextList,
+      updatedAtMs: Date.now(),
+    };
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+    showToast(`Đã xóa nhóm khoản trừ "${clean}".`);
+  };
+
   const handleAddExpenseDeduction = async (params: {
     deductionDate: string;
     expenseTitle: string;
     category: string;
+    quantity?: number;
+    unitPrice?: number;
     amount: number;
     note: string;
   }) => {
     setWorkspaceInitialized(true);
+    const cleanCat = (params.category || 'Khác').trim() || 'Khác';
+    if (
+      !effectiveDeductionCategories.some(
+        (c) => c.toLowerCase() === cleanCat.toLowerCase()
+      )
+    ) {
+      const nextList = [...effectiveDeductionCategories, cleanCat];
+      const nextInv: WorkspaceInventoryData = {
+        ...inventoryData,
+        deductionCategories: nextList,
+        updatedAtMs: Date.now(),
+      };
+      setInventoryData(nextInv);
+      saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+    }
     const ded = await saveExpenseDeductionToCloud({
       ownerId,
       deductionDate: params.deductionDate,
       expenseTitle: params.expenseTitle,
-      category: params.category,
+      category: cleanCat,
+      quantity: params.quantity ?? 1,
+      unitPrice: params.unitPrice ?? params.amount,
       amount: params.amount,
       note: params.note,
     });
-    setDeductions((prev) => [ded, ...prev]);
+    setDeductions((prev) =>
+      dedupeRecordsById([ded, ...prev.filter((d) => d.id !== ded.id)])
+    );
     showToast(
       `Đã lưu khoản trừ "${params.expenseTitle}" (-${formatVND(
         params.amount
@@ -2407,6 +2538,8 @@ export default function App() {
     deductionDate: string;
     expenseTitle: string;
     category: string;
+    quantity?: number;
+    unitPrice?: number;
     amount: number;
     note: string;
   }) => {
@@ -2423,6 +2556,8 @@ export default function App() {
         deductionDate: params.deductionDate,
         expenseTitle: params.expenseTitle,
         category: params.category,
+        quantity: params.quantity,
+        unitPrice: params.unitPrice,
         amount: params.amount,
         note: params.note,
       },
@@ -2478,11 +2613,18 @@ export default function App() {
       existingProduct: matchingProd,
     });
 
-    setReturns((prev) => [res.returnRecord, ...prev]);
-    setDeductions((prev) => [
-      res.linkedDeduction,
-      ...prev.filter((d) => d.id !== res.linkedDeduction.id),
-    ]);
+    setReturns((prev) =>
+      dedupeRecordsById([
+        res.returnRecord,
+        ...prev.filter((r) => r.id !== res.returnRecord.id),
+      ])
+    );
+    setDeductions((prev) =>
+      dedupeRecordsById([
+        res.linkedDeduction,
+        ...prev.filter((d) => d.id !== res.linkedDeduction.id),
+      ])
+    );
     setBills((prev) =>
       prev.map((b) => (b.id === res.updatedBill.id ? res.updatedBill : b))
     );
@@ -2496,9 +2638,9 @@ export default function App() {
     }
     const tableName = extractBillTableName(params.bill);
     showToast(
-      `Đã hoàn trả ${params.returnQty} ${params.billItem.productName} (${tableName}) và tự động ghi vào Khoản trừ ngày ${params.returnDate} (-${formatVND(
+      `Đã hoàn trả ${params.returnQty} ${params.billItem.productName} (${tableName}) và tự động tính vào Khoản trừ ngày ${params.returnDate} (-${formatVND(
         res.returnRecord.amount
-      )} · tính chung 1 dòng tiền duy nhất)!`
+      )} · 1 dòng tiền duy nhất)!`
     );
   };
 
@@ -2507,10 +2649,10 @@ export default function App() {
     setWorkspaceInitialized(true);
     const idSet = new Set(deductionIds);
 
-    // Check if any deleted deduction is linked to a customer return
+    // Check if any deleted deduction is explicitly linked to a legacy customer return
     const linkedReturnIds = new Set<string>();
     for (const dId of deductionIds) {
-      if (dId.startsWith('ded_')) {
+      if (dId.startsWith('ded_ret_')) {
         linkedReturnIds.add(dId.slice(4));
       }
     }
@@ -2620,6 +2762,9 @@ export default function App() {
     category: string;
     unitPrice: number;
     unit: string;
+    totalSold?: number;
+    totalReturned?: number;
+    totalRevenue?: number;
   }) => {
     setWorkspaceInitialized(true);
     const cleanCat = prodInput.category.trim() || 'Khác';
@@ -2670,19 +2815,34 @@ export default function App() {
     const isUpdatingExisting = Boolean(existingProd);
 
     if (existingProd) {
+      const nextSold =
+        typeof prodInput.totalSold === 'number'
+          ? Math.max(0, Math.round(prodInput.totalSold))
+          : Math.max(existingProd.totalSold || 0, calcSold);
+      const nextRet =
+        typeof prodInput.totalReturned === 'number'
+          ? Math.max(0, Math.round(prodInput.totalReturned))
+          : Math.max(existingProd.totalReturned || 0, calcRet);
+      const nextRev =
+        typeof prodInput.totalRevenue === 'number'
+          ? Math.max(0, Math.round(prodInput.totalRevenue))
+          : Math.max(existingProd.totalRevenue || 0, calcRev);
+
       productToSave = {
         ...existingProd,
         productName: cleanProdName,
         category: cleanCat,
         unitPrice: prodInput.unitPrice,
-        unit: prodInput.unit,
-        totalSold: Math.max(existingProd.totalSold || 0, calcSold),
-        totalReturned: Math.max(existingProd.totalReturned || 0, calcRet),
-        totalRevenue: Math.max(existingProd.totalRevenue || 0, calcRev),
+        unit: prodInput.unit || existingProd.unit || 'Phần',
+        totalSold: nextSold,
+        totalReturned: nextRet,
+        totalRevenue: nextRev,
         updatedAtMs: now,
       };
       setProducts((prev) =>
-        prev.map((p) => (p.id === existingProd.id ? productToSave : p))
+        dedupeRecordsById(
+          prev.map((p) => (p.id === existingProd.id ? productToSave : p))
+        )
       );
     } else {
       productToSave = {
@@ -2691,17 +2851,31 @@ export default function App() {
         productName: cleanProdName,
         category: cleanCat,
         unitPrice: prodInput.unitPrice,
-        unit: prodInput.unit,
-        totalSold: calcSold,
-        totalReturned: calcRet,
-        totalRevenue: calcRev,
+        unit: prodInput.unit || 'Phần',
+        totalSold:
+          typeof prodInput.totalSold === 'number'
+            ? Math.max(0, Math.round(prodInput.totalSold))
+            : calcSold,
+        totalReturned:
+          typeof prodInput.totalReturned === 'number'
+            ? Math.max(0, Math.round(prodInput.totalReturned))
+            : calcRet,
+        totalRevenue:
+          typeof prodInput.totalRevenue === 'number'
+            ? Math.max(0, Math.round(prodInput.totalRevenue))
+            : calcRev,
         createdAtMs: now,
         updatedAtMs: now,
       };
-      setProducts((prev) => [productToSave, ...prev]);
+      setProducts((prev) =>
+        dedupeRecordsById([
+          productToSave,
+          ...prev.filter((p) => p.id !== productToSave.id),
+        ])
+      );
     }
 
-    // Sync category & productName to all matching billItems so CategoryAnalyticsTab updates immediately
+    // Sync category & productName to all matching billItems, returns, and inventoryData across the entire system
     const affectedBillItems: BillItemRecord[] = [];
     const nextBillItems = billItems.map((it) => {
       if (matchNamesLower.has((it.productName || '').trim().toLowerCase())) {
@@ -2722,19 +2896,83 @@ export default function App() {
       setBillItems(nextBillItems);
     }
 
+    const affectedReturns: ReturnRecord[] = [];
+    const nextReturns = returns.map((r) => {
+      if (matchNamesLower.has((r.productName || '').trim().toLowerCase())) {
+        if (r.category !== cleanCat || r.productName.trim() !== cleanProdName) {
+          const updatedRet: ReturnRecord = {
+            ...r,
+            productName: cleanProdName,
+            category: cleanCat,
+            updatedAtMs: now,
+          };
+          affectedReturns.push(updatedRet);
+          return updatedRet;
+        }
+      }
+      return r;
+    });
+    if (affectedReturns.length > 0) {
+      setReturns(nextReturns);
+    }
+
+    // Also sync inventoryData itemConfigs if product name or category changed
+    if (existingProd) {
+      const oldKey = existingProd.productName.trim().toLowerCase();
+      const newKey = cleanProdName.toLowerCase();
+      const existingCfg =
+        inventoryData.itemConfigs?.[oldKey] || inventoryData.itemConfigs?.[newKey];
+      if (existingCfg || oldKey !== newKey) {
+        const nextConfigs = { ...(inventoryData.itemConfigs || {}) };
+        if (oldKey !== newKey && nextConfigs[oldKey]) {
+          delete nextConfigs[oldKey];
+        }
+        if (existingCfg) {
+          nextConfigs[newKey] = {
+            ...existingCfg,
+            productName: cleanProdName,
+            category: cleanCat,
+            unit: prodInput.unit || existingCfg.unit || 'Lon',
+          };
+        }
+        const nextDailyEntries = { ...(inventoryData.dailyEntries || {}) };
+        if (oldKey !== newKey) {
+          for (const dKey of Object.keys(nextDailyEntries)) {
+            const dayMap = { ...(nextDailyEntries[dKey] || {}) };
+            if (dayMap[oldKey]) {
+              dayMap[newKey] = {
+                ...dayMap[oldKey],
+              };
+              delete dayMap[oldKey];
+              nextDailyEntries[dKey] = dayMap;
+            }
+          }
+        }
+        const nextInv: WorkspaceInventoryData = {
+          ...inventoryData,
+          itemConfigs: nextConfigs,
+          dailyEntries: nextDailyEntries,
+          updatedAtMs: now,
+        };
+        setInventoryData(nextInv);
+        saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+      }
+    }
+
     await createOrUpdateProductInFirestore(
       ownerId,
       productToSave,
       isUpdatingExisting
     );
 
-    if (affectedBillItems.length > 0) {
+    if (affectedBillItems.length > 0 || affectedReturns.length > 0) {
       await renameOrReassignCategoryInCloud({
         ownerId,
         categories: nextCatsToSave || effectiveCategories,
         affectedProducts: [],
         affectedBillItems,
         affectedDeductions: [],
+        affectedReturns,
       });
     }
   };
@@ -4109,6 +4347,9 @@ export default function App() {
               canWrite={canWrite}
               canDelete={canDelete}
               preselectedBillId={preselectedReturnBillId}
+              deductionCategories={effectiveDeductionCategories}
+              onAddDeductionCategory={handleAddDeductionCategory}
+              onDeleteDeductionCategory={handleDeleteDeductionCategory}
               onAddExpenseDeduction={handleAddExpenseDeduction}
               onUpdateExpenseDeduction={handleUpdateExpenseDeduction}
               onRecordReturn={handleRecordReturn}
@@ -4131,6 +4372,9 @@ export default function App() {
               canWrite={canWrite}
               canDelete={canDelete}
               preselectedBillId={preselectedReturnBillId}
+              deductionCategories={effectiveDeductionCategories}
+              onAddDeductionCategory={handleAddDeductionCategory}
+              onDeleteDeductionCategory={handleDeleteDeductionCategory}
               onAddExpenseDeduction={handleAddExpenseDeduction}
               onUpdateExpenseDeduction={handleUpdateExpenseDeduction}
               onRecordReturn={handleRecordReturn}
