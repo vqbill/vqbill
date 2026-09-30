@@ -1932,15 +1932,12 @@ export async function updateExpenseDeductionInCloud(params: {
   );
   const cleanNote = truncateStr(updates.note ?? '', 500, '');
   const rawBillCode = String(deduction.billCode || 'CHI-TRONG-NGAY');
-  const nextBillCode = rawBillCode.endsWith('-V2')
-    ? rawBillCode
-    : `${rawBillCode}-V2`;
 
   const updatedDeduction: DeductionRecord = {
     ...deduction,
     ownerId: cleanOwnerId,
     billId: sanitizeId(deduction.billId || `expense_${now}`),
-    billCode: truncateStr(nextBillCode, 64, 'CHI-TRONG-NGAY-V2'),
+    billCode: truncateStr(rawBillCode, 64, 'CHI-TRONG-NGAY'),
     billDate:
       deduction.billDate && /^\d{4}-\d{2}-\d{2}$/.test(deduction.billDate)
         ? deduction.billDate

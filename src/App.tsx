@@ -574,12 +574,40 @@ export default function App() {
       // Pick the best remote source based on latest version / updatedAtMs
       const fsVer = Number(firestoreSnap?.version) || 0;
       const srvVer = Number(serverSnap?.version) || 0;
-      const bestRemote =
+      const rawBestRemote =
         firestoreSnap && serverSnap?.initialized
           ? srvVer > fsVer
             ? serverSnap
             : firestoreSnap
           : firestoreSnap || serverSnap;
+
+      // Ensure deductions take the freshest updatedAtMs between Firestore and Server
+      const bestRemote = rawBestRemote
+        ? (() => {
+            if (firestoreSnap?.deductions && serverSnap?.deductions) {
+              const fsDedMap = new Map(
+                firestoreSnap.deductions.map((d) => [d.id, d])
+              );
+              const srvDedMap = new Map(
+                serverSnap.deductions.map((d) => [d.id, d])
+              );
+              const baseDeds = rawBestRemote.deductions || [];
+              const mergedDeds = baseDeds.map((d) => {
+                const f = fsDedMap.get(d.id);
+                const s = srvDedMap.get(d.id);
+                if (f && s) {
+                  if ((f.updatedAtMs || 0) > (s.updatedAtMs || 0)) return f;
+                  if ((s.updatedAtMs || 0) > (f.updatedAtMs || 0)) return s;
+                  if ((f.quantity || 1) > 1 && (s.quantity || 1) === 1) return f;
+                  if ((s.quantity || 1) > 1 && (f.quantity || 1) === 1) return s;
+                }
+                return d;
+              });
+              return { ...rawBestRemote, deductions: mergedDeds };
+            }
+            return rawBestRemote;
+          })()
+        : null;
 
       if (bestRemote && bestRemote.initialized) {
         if (localCached?.initialized && localUnsyncedBills.length > 0) {
@@ -1218,7 +1246,9 @@ export default function App() {
       (snap) => {
         if (!snap.empty || initialCloudHandshakeDoneRef.current) {
           if (snap.empty && !workspaceInitialized) return;
-          markRemoteStateUpdate();
+          if (!snap.metadata.hasPendingWrites) {
+            markRemoteStateUpdate();
+          }
           const loaded: DeductionRecord[] = snap.docs.map((d) => {
             const data = d.data();
             return {
@@ -1433,14 +1463,15 @@ export default function App() {
     const uniqueReturns = dedupeRecordsById(returns);
     const result: DeductionRecord[] = uniqueDeductions.map((d) => {
       const codeStr = String(d.billCode || '');
-      const isV2 = codeStr.endsWith('-V2');
       const safeAmt = Math.max(0, Math.round(Number(d.amount) || 0));
-      const safeQty = isV2 ? Math.max(1, Math.round(Number(d.quantity) || 1)) : 1;
-      const safeUnitPrice = isV2
-        ? Number(d.unitPrice) > 0
+      const safeQty = Math.max(1, Math.round(Number(d.quantity) || 1));
+      const safeUnitPrice =
+        safeQty === 1
+          ? safeAmt
+          : Number(d.unitPrice) > 0 &&
+            Math.abs(safeQty * Number(d.unitPrice) - safeAmt) <= safeQty * 2
           ? Math.max(0, Math.round(Number(d.unitPrice)))
-          : Math.round(safeAmt / safeQty)
-        : safeAmt;
+          : Math.max(0, Math.round(safeAmt / safeQty));
       return {
         ...d,
         deductionDate: d.deductionDate || d.billDate || todayStr,
@@ -1485,10 +1516,10 @@ export default function App() {
 
       if (alreadyLinkedIdx >= 0) {
         const existing = result[alreadyLinkedIdx];
-        const isEditedV2 = String(existing.billCode || '').endsWith('-V2');
         const wasManuallyEdited =
-          isEditedV2 || (existing.updatedAtMs || 0) > (r.createdAtMs || 0) + 1000;
+          (existing.updatedAtMs || 0) > (r.createdAtMs || 0) + 1000;
         if (!wasManuallyEdited) {
+          const exQty = Math.max(1, Math.round(Number(existing.quantity) || 1));
           result[alreadyLinkedIdx] = {
             ...existing,
             deductionDate: existing.deductionDate || rDate,
@@ -1496,8 +1527,8 @@ export default function App() {
             billCode: existing.billCode || r.billCode || 'HOAN-TRA',
             productName: formattedTitle,
             category: 'Hoàn bia / món thừa',
-            quantity: 1,
-            unitPrice: rAmt,
+            quantity: exQty,
+            unitPrice: Math.round(rAmt / exQty),
             amount: rAmt,
           };
         }
@@ -2523,6 +2554,7 @@ export default function App() {
       amount: params.amount,
       note: params.note,
     });
+    isApplyingRemoteSnapshotRef.current = false;
     setDeductions((prev) =>
       dedupeRecordsById([ded, ...prev.filter((d) => d.id !== ded.id)])
     );
@@ -2564,6 +2596,7 @@ export default function App() {
       linkedReturn,
     });
 
+    isApplyingRemoteSnapshotRef.current = false;
     setDeductions((prev) => {
       const exists = prev.some((d) => d.id === res.updatedDeduction.id);
       if (exists) {

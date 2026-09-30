@@ -198,8 +198,9 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     DEFAULT_DEDUCTION_CATEGORIES[0]
   );
   const [expenseQuantity, setExpenseQuantity] = useState<number>(1);
-  const [expenseUnitPrice, setExpenseUnitPrice] = useState<number>(50000);
-  const [expenseAmount, setExpenseAmount] = useState<number>(50000);
+  const [expenseUnitPrice, setExpenseUnitPrice] = useState<number>(0);
+  const [expenseAmount, setExpenseAmount] = useState<number>(0);
+  const [expensePriceMode, setExpensePriceMode] = useState<'total' | 'unit'>('total');
   const [expenseNote, setExpenseNote] = useState<string>('');
   const [searchDeduction, setSearchDeduction] = useState('');
   const [newDedCategoryName, setNewDedCategoryName] = useState('');
@@ -214,7 +215,9 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   const [editDedQty, setEditDedQty] = useState<number>(1);
   const [editDedUnitPrice, setEditDedUnitPrice] = useState<number>(0);
   const [editDedAmount, setEditDedAmount] = useState<number>(0);
+  const [editPriceMode, setEditPriceMode] = useState<'total' | 'unit'>('total');
   const [editDedNote, setEditDedNote] = useState<string>('');
+  const [inlineQtyDrafts, setInlineQtyDrafts] = useState<Record<string, string>>({});
 
   // Bidirectional auto-calculation handlers for New Expense Deduction
   const handleExpenseQuantityChange = (rawVal: string) => {
@@ -224,7 +227,9 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     const effQty = nextQty > 0 ? nextQty : 1;
     const curUnit = Number(expenseUnitPrice) || 0;
     const curTotal = Number(expenseAmount) || 0;
-    if (curUnit > 0) {
+    if (expensePriceMode === 'total' && curTotal > 0) {
+      setExpenseUnitPrice(Math.round(curTotal / effQty));
+    } else if (curUnit > 0) {
       setExpenseAmount(Math.round(effQty * curUnit));
     } else if (curTotal > 0) {
       setExpenseUnitPrice(Math.round(curTotal / effQty));
@@ -234,6 +239,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   const handleExpenseUnitPriceChange = (rawVal: string) => {
     const parsed = Number(rawVal);
     const nextUnit = Number.isFinite(parsed) ? parsed : 0;
+    setExpensePriceMode('unit');
     setExpenseUnitPrice(nextUnit);
     const effQty = expenseQuantity > 0 ? expenseQuantity : 1;
     setExpenseAmount(Math.round(effQty * nextUnit));
@@ -242,6 +248,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   const handleExpenseTotalAmountChange = (rawVal: string) => {
     const parsed = Number(rawVal);
     const nextTotal = Number.isFinite(parsed) ? parsed : 0;
+    setExpensePriceMode('total');
     setExpenseAmount(nextTotal);
     const effQty = expenseQuantity > 0 ? expenseQuantity : 1;
     setExpenseUnitPrice(Math.round(nextTotal / effQty));
@@ -255,7 +262,9 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     const effQty = nextQty > 0 ? nextQty : 1;
     const curUnit = Number(editDedUnitPrice) || 0;
     const curTotal = Number(editDedAmount) || 0;
-    if (curUnit > 0) {
+    if (editPriceMode === 'total' && curTotal > 0) {
+      setEditDedUnitPrice(Math.round(curTotal / effQty));
+    } else if (curUnit > 0) {
       setEditDedAmount(Math.round(effQty * curUnit));
     } else if (curTotal > 0) {
       setEditDedUnitPrice(Math.round(curTotal / effQty));
@@ -265,6 +274,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   const handleEditDedUnitPriceChange = (rawVal: string) => {
     const parsed = Number(rawVal);
     const nextUnit = Number.isFinite(parsed) ? parsed : 0;
+    setEditPriceMode('unit');
     setEditDedUnitPrice(nextUnit);
     const effQty = editDedQty > 0 ? editDedQty : 1;
     setEditDedAmount(Math.round(effQty * nextUnit));
@@ -273,6 +283,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
   const handleEditDedTotalAmountChange = (rawVal: string) => {
     const parsed = Number(rawVal);
     const nextTotal = Number.isFinite(parsed) ? parsed : 0;
+    setEditPriceMode('total');
     setEditDedAmount(nextTotal);
     const effQty = editDedQty > 0 ? editDedQty : 1;
     setEditDedUnitPrice(Math.round(nextTotal / effQty));
@@ -602,8 +613,9 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           });
           setExpenseTitle('');
           setExpenseQuantity(1);
-          setExpenseUnitPrice(50000);
-          setExpenseAmount(50000);
+          setExpenseUnitPrice(0);
+          setExpenseAmount(0);
+          setExpensePriceMode('total');
           setExpenseNote('');
         } catch (err: any) {
           setStatusMsg({
@@ -632,13 +644,60 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     const q = Math.max(1, Math.round(Number(ded.quantity) || 1));
     const tot = Math.max(0, Math.round(Number(ded.amount) || 0));
     const uPrice =
-      Number(ded.unitPrice) > 0
+      q === 1
+        ? tot
+        : Number(ded.unitPrice) > 0 &&
+          Math.abs(q * Number(ded.unitPrice) - tot) <= q * 2
         ? Math.max(0, Math.round(Number(ded.unitPrice)))
         : Math.round(tot / q);
+    setEditPriceMode('total');
     setEditDedQty(q);
     setEditDedUnitPrice(uPrice);
     setEditDedAmount(tot);
     setEditDedNote(ded.note || '');
+  };
+
+  const handleCommitInlineQty = async (ded: DeductionRecord, rawQtyVal: string | number) => {
+    if (!canWrite || !onUpdateExpenseDeduction) return;
+    const parsed = Number(rawQtyVal);
+    const safeQty = Number.isFinite(parsed) && parsed >= 1 ? Math.round(parsed) : 1;
+    const currentQty = Math.max(1, Math.round(Number(ded.quantity) || 1));
+    const safeTotal = Math.max(0, Math.round(Number(ded.amount) || 0));
+    const nextUnitPrice = safeQty === 1 ? safeTotal : Math.max(0, Math.round(safeTotal / safeQty));
+
+    setInlineQtyDrafts((prev) => {
+      const next = { ...prev };
+      delete next[ded.id];
+      return next;
+    });
+
+    if (safeQty === currentQty && Number(ded.unitPrice) === nextUnitPrice) {
+      return;
+    }
+
+    try {
+      await onUpdateExpenseDeduction({
+        deduction: ded,
+        deductionDate: ded.deductionDate || ded.billDate || todayStr,
+        expenseTitle: ded.productName,
+        category: normalizeExpenseCategory(ded),
+        quantity: safeQty,
+        unitPrice: nextUnitPrice,
+        amount: safeTotal,
+        note: ded.note || '',
+      });
+      setStatusMsg({
+        type: 'ok',
+        text: `Đã cập nhật số lượng "${ded.productName}": SL ${safeQty} → Số tiền chi: ${formatVND(
+          nextUnitPrice
+        )} / 1 SL (Tổng chi: -${formatVND(safeTotal)})!`,
+      });
+    } catch (err: any) {
+      setStatusMsg({
+        type: 'err',
+        text: err?.message || 'Lỗi khi cập nhật số lượng khoản trừ.',
+      });
+    }
   };
 
   const handleCreateDeductionCategory = async (e?: React.FormEvent) => {
@@ -1110,6 +1169,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                     setExpenseQuantity(1);
                     setExpenseUnitPrice(preset.defaultAmount);
                     setExpenseAmount(preset.defaultAmount);
+                    setExpensePriceMode('total');
                   }}
                   className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-rose-500 dark:hover:border-rose-500 bg-slate-50 dark:bg-slate-800/50 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
                 >
@@ -1198,30 +1258,30 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
 
             <div className="lg:col-span-2">
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Số tiền chi (Đơn giá ₫) *
+                Số tiền chi (/ 1 SL) *
               </label>
               <input
                 type="number"
                 min={0}
                 step="any"
-                value={expenseUnitPrice}
+                value={expenseUnitPrice || ''}
                 onChange={(e) => handleExpenseUnitPriceChange(e.target.value)}
-                placeholder="VD: 100000"
+                placeholder="VD: 155000"
                 className="w-full h-10 px-3 text-xs font-mono font-semibold text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
               />
             </div>
 
             <div className="lg:col-span-3">
               <label className="block text-xs font-medium text-rose-700 dark:text-rose-300 mb-1">
-                Tổng tiền chi (SL × Số tiền chi) *
+                Tổng tiền chi (₫) *
               </label>
               <input
                 type="number"
                 min={0}
                 step="any"
-                value={expenseAmount}
+                value={expenseAmount || ''}
                 onChange={(e) => handleExpenseTotalAmountChange(e.target.value)}
-                placeholder="VD: 500000"
+                placeholder="VD: 775000"
                 className="w-full h-10 px-3 text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50/40 dark:bg-rose-950/20"
               />
             </div>
@@ -1729,10 +1789,23 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   {filteredDeductions.map((ded) => {
                     const fromReturn = isReturnLinkedDeduction(ded);
                     const isRowEditing = editingDeduction?.id === ded.id;
-                    const displayQty = Math.max(1, Math.round(Number(ded.quantity) || 1));
+                    const savedQty = Math.max(1, Math.round(Number(ded.quantity) || 1));
+                    const draftQtyStr = inlineQtyDrafts[ded.id];
+                    const parsedDraftQty =
+                      draftQtyStr !== undefined ? Number(draftQtyStr) : savedQty;
+                    const displayQty =
+                      Number.isFinite(parsedDraftQty) && parsedDraftQty >= 1
+                        ? Math.round(parsedDraftQty)
+                        : savedQty;
                     const displayTotal = Math.max(0, Math.round(Number(ded.amount) || 0));
                     const displayUnitPrice =
-                      Number(ded.unitPrice) > 0
+                      draftQtyStr !== undefined
+                        ? Math.round(displayTotal / displayQty)
+                        : displayQty === 1
+                        ? displayTotal
+                        : Number(ded.unitPrice) > 0 &&
+                          Math.abs(displayQty * Number(ded.unitPrice) - displayTotal) <=
+                            displayQty * 2
                         ? Math.max(0, Math.round(Number(ded.unitPrice)))
                         : Math.round(displayTotal / displayQty);
 
@@ -1869,10 +1942,63 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                           {normalizeExpenseCategory(ded)}
                         </td>
                         <td className="py-2.5 px-2.5 text-center font-mono font-bold text-slate-900 dark:text-white whitespace-nowrap">
-                          {formatNumber(displayQty)}
+                          {canWrite && !fromReturn ? (
+                            <div className="inline-flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleCommitInlineQty(ded, Math.max(1, displayQty - 1))
+                                }
+                                disabled={displayQty <= 1}
+                                className="w-6 h-7 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 disabled:opacity-40 cursor-pointer"
+                                title="Giảm số lượng"
+                              >
+                                -
+                              </button>
+                              <input
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={
+                                  inlineQtyDrafts[ded.id] !== undefined
+                                    ? inlineQtyDrafts[ded.id]
+                                    : savedQty
+                                }
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setInlineQtyDrafts((prev) => ({
+                                    ...prev,
+                                    [ded.id]: val,
+                                  }));
+                                }}
+                                onBlur={(e) => handleCommitInlineQty(ded, e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    (e.target as HTMLInputElement).blur();
+                                  }
+                                }}
+                                className="w-14 h-7 px-1 text-center text-xs font-mono font-bold rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:border-rose-500 focus:outline-none"
+                                title="Nhập số lượng mua (mặc định 1, có thể chỉnh thành 5, 6, 7... để tự chia Số tiền chi)"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleCommitInlineQty(ded, displayQty + 1)}
+                                className="w-6 h-7 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                                title="Tăng số lượng"
+                              >
+                                +
+                              </button>
+                            </div>
+                          ) : (
+                            formatNumber(displayQty)
+                          )}
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                          {formatVND(displayUnitPrice)}
+                          <div>{formatVND(displayUnitPrice)}</div>
+                          <div className="text-[10px] text-slate-400">
+                            / 1 số lượng mua
+                          </div>
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">
                           -{formatVND(displayTotal)}
