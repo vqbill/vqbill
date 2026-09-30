@@ -381,9 +381,34 @@ export const DEFAULT_DEDUCTION_CATEGORIES = [
   'Khác',
 ] as const;
 
+export interface DebtPaymentRecord {
+  id: string;
+  billId: string;
+  billCode: string;
+  debtorName: string;
+  amount: number;
+  paymentMethod: 'cash' | 'transfer';
+  paidDate: string; // YYYY-MM-DD
+  note?: string;
+  createdAtMs: number;
+  createdBy?: string;
+}
+
+export interface CalendarEventNote {
+  id: string;
+  solarDate: string; // YYYY-MM-DD
+  lunarLabel: string; // VD: "15/8 ÂL"
+  title: string;
+  category: 'booking' | 'worship' | 'payment' | 'reminder';
+  createdAtMs: number;
+  createdBy?: string;
+}
+
 export interface WorkspaceInventoryData {
   trackedCategories: string[]; // Mặc định ['Bia', 'Nước ngọt']
   deductionCategories?: string[]; // Danh sách nhóm khoản trừ tùy chỉnh & mặc định
+  debtPayments?: DebtPaymentRecord[]; // Lịch sử trả nợ từng phần (trả góp công nợ)
+  calendarEvents?: CalendarEventNote[]; // Ghi chú sự kiện trên Lịch Âm Dương
   itemConfigs: Record<string, InventoryItemConfig>; // key = lowercase productName
   dailyEntries: Record<string, Record<string, DailyInventoryEntry>>; // date -> lowercase productName
   importLogs: InventoryImportLog[];

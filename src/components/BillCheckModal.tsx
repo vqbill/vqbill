@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   X,
   Receipt,
@@ -10,6 +10,8 @@ import {
   ChevronRight,
   User,
   CheckCheck,
+  Printer,
+  Scissors,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -45,6 +47,7 @@ interface BillCheckModalProps {
   onEditBill: (bill: BillRecord) => void;
   onReturnBill: (bill: BillRecord) => void;
   onDeleteBill: (bill: BillRecord) => void;
+  onOpenSplitMerge?: (bill: BillRecord) => void;
 }
 
 function extractReceiptTableLabel(note?: string): {
@@ -196,7 +199,11 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
   onEditBill,
   onReturnBill,
   onDeleteBill,
+  onOpenSplitMerge,
 }) => {
+  const receiptPrintRef = useRef<HTMLDivElement | null>(null);
+  const [paperSize, setPaperSize] = useState<'K80' | 'K58'>('K80');
+
   const effectiveItems = useMemo<BillItemRecord[]>(() => {
     if (items && items.length > 0) {
       return items;
@@ -252,6 +259,188 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
 
   const { tableLabel, extraNote } = extractReceiptTableLabel(bill.note);
   const displayDateDMY = formatDateDMY(bill.rawDate || bill.billDate);
+
+  const handlePrintThermalReceipt = (targetSize: 'K80' | 'K58' = paperSize) => {
+    setPaperSize(targetSize);
+    const widthMm = targetSize === 'K58' ? '58mm' : '80mm';
+    const fontSizePx = targetSize === 'K58' ? '11px' : '12.5px';
+
+    const rowsHtml = effectiveItems
+      .map((item) => {
+        const hasReturn = (item.returnedQuantity || 0) > 0;
+        const netItemQty = Math.max(
+          0,
+          (item.quantity || 0) - (item.returnedQuantity || 0)
+        );
+        const netItemSubtotal = Math.round(netItemQty * item.unitPrice);
+        const { parentLine, mainLine, subNotes, originalUnitPrice } =
+          formatReceiptItemDisplay(item);
+
+        return `
+          <tr>
+            <td style="padding: 4px 2px 4px 0; vertical-align: bottom;">
+              ${parentLine ? `<div style="font-weight: 500;">${parentLine}</div>` : ''}
+              <div style="font-weight: 600;">${mainLine}</div>
+              ${
+                subNotes.length > 0
+                  ? `<div style="font-size: 10px; color: #333; padding-left: 4px;">${subNotes.join('<br/>')}</div>`
+                  : ''
+              }
+              ${
+                hasReturn
+                  ? `<div style="font-size: 10px; color: #b91c1c;">(Đặt ${item.quantity} · Trả ${item.returnedQuantity})</div>`
+                  : ''
+              }
+            </td>
+            <td style="padding: 4px 2px; text-align: right; vertical-align: bottom; white-space: nowrap;">
+              <span>${formatReceiptMoney(item.unitPrice)}</span>
+              ${
+                originalUnitPrice && originalUnitPrice > item.unitPrice
+                  ? `<span style="text-decoration: line-through; color: #666; margin-left: 3px; font-size: 10px;">${formatReceiptMoney(originalUnitPrice)}</span>`
+                  : ''
+              }
+            </td>
+            <td style="padding: 4px 2px; text-align: center; vertical-align: bottom; white-space: nowrap;">
+              x ${formatNumber(netItemQty)}
+            </td>
+            <td style="padding: 4px 0 4px 2px; text-align: right; vertical-align: bottom; white-space: nowrap; font-weight: 600;">
+              ${formatReceiptMoney(netItemSubtotal)}
+            </td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    const htmlContent = `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>In Phiếu ${bill.billCode} (${targetSize})</title>
+  <style>
+    @page {
+      size: ${widthMm} auto;
+      margin: 0mm;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    body {
+      margin: 0;
+      padding: ${targetSize === 'K58' ? '3mm 2.5mm' : '4mm 4mm'};
+      width: ${widthMm};
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: ${fontSizePx};
+      color: #000;
+      background: #fff;
+      line-height: 1.35;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: ${fontSizePx};
+    }
+    th {
+      border-top: 1px solid #000;
+      border-bottom: 1px solid #000;
+      padding: 4px 2px;
+      font-weight: 700;
+    }
+    tbody tr {
+      border-bottom: 1px dashed #ccc;
+    }
+    tbody tr:last-child {
+      border-bottom: 1px solid #000;
+    }
+  </style>
+</head>
+<body>
+  <div style="text-align: center; padding-bottom: 6px;">
+    <div style="font-size: ${targetSize === 'K58' ? '14px' : '16px'}; font-weight: 800; text-transform: uppercase;">VỊNH QUÁN</div>
+    <div style="font-size: ${targetSize === 'K58' ? '10.5px' : '12px'};">ĐC: 131 Chu Huy Mân, Đà nẵng</div>
+    <div style="font-size: ${targetSize === 'K58' ? '10.5px' : '12px'};">ĐT: 0702.444.449</div>
+    <div style="margin-top: 4px; font-size: ${targetSize === 'K58' ? '13px' : '14px'}; font-weight: 800; text-transform: uppercase;">${tableLabel}</div>
+    <div style="font-size: ${targetSize === 'K58' ? '15px' : '18px'}; font-weight: 800; text-transform: uppercase;">PHIẾU TÍNH TIỀN</div>
+    <div style="font-weight: 700;">${bill.billCode}</div>
+  </div>
+  <div style="display: flex; justify-content: space-between; font-size: ${targetSize === 'K58' ? '10.5px' : '12px'}; padding-bottom: 6px;">
+    <span>Giờ vào: ${displayDateDMY}${bill.checkInTime ? ` ${bill.checkInTime}` : ''}</span>
+    <span>Giờ in: ${bill.checkOutTime || new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th style="text-align: left;">Tên hàng</th>
+        <th style="text-align: right;">Đ.Giá</th>
+        <th style="text-align: center;">SL</th>
+        <th style="text-align: right;">Thành tiền</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+    </tbody>
+  </table>
+  <div style="padding-top: 6px;">
+    <div style="display: flex; justify-content: space-between; font-weight: 600;">
+      <span>Chiết khấu:</span>
+      <span>${formatReceiptMoney(discountAmount)}</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; font-size: ${targetSize === 'K58' ? '14px' : '16px'}; font-weight: 800; padding-top: 2px;">
+      <span>Tổng Cộng:</span>
+      <span>${formatReceiptMoney(bill.totalAmount)}</span>
+    </div>
+    ${
+      bill.deductedAmount > 0
+        ? `
+      <div style="display: flex; justify-content: space-between; font-weight: 600; border-top: 1px dashed #999; margin-top: 4px; padding-top: 4px;">
+        <span>Trừ hoàn trả:</span>
+        <span>-${formatReceiptMoney(bill.deductedAmount)}</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-weight: 800; font-size: ${targetSize === 'K58' ? '13px' : '15px'};">
+        <span>Thực thu:</span>
+        <span>${formatReceiptMoney(netBillAmount)}</span>
+      </div>
+    `
+        : ''
+    }
+  </div>
+  ${
+    extraNote
+      ? `<div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #ccc; font-size: 10.5px;"><strong>Ghi chú:</strong> ${extraNote}</div>`
+      : ''
+  }
+  <div style="text-align: center; margin-top: 10px; padding-top: 6px; border-top: 1px dashed #ccc; font-size: 10.5px;">
+    Cảm ơn Quý khách & Hẹn gặp lại!
+  </div>
+</body>
+</html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document;
+    if (doc) {
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+        setTimeout(() => {
+          if (document.body.contains(iframe)) {
+            document.body.removeChild(iframe);
+          }
+        }, 2000);
+      }, 150);
+    }
+  };
 
   return (
     <div
@@ -309,7 +498,7 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
           </div>
         </div>
 
-        {/* Quick Audit Status Bar (Outside the receipt paper so receipt matches Image 2) */}
+        {/* Quick Audit Status Bar & Thermal Paper Size Switcher */}
         <div className="px-4 sm:px-5 py-2.5 bg-slate-50 dark:bg-slate-900/90 border-b border-slate-200/80 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span
@@ -338,27 +527,64 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
             </span>
           </div>
 
-          {effectiveItems.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
-                Đã dò {checkedCount}/{effectiveItems.length}
-              </span>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* K80 / K58 Thermal Paper Width Selector */}
+            <div className="inline-flex items-center rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-0.5 text-[11px] font-mono">
               <button
                 type="button"
-                onClick={handleToggleCheckAll}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 underline cursor-pointer"
+                onClick={() => setPaperSize('K80')}
+                className={`px-2 py-0.5 rounded-md font-bold cursor-pointer transition-colors ${
+                  paperSize === 'K80'
+                    ? 'bg-slate-900 text-white dark:bg-emerald-600'
+                    : 'text-slate-600 dark:text-slate-300'
+                }`}
+                title="Xem & in chuẩn khổ giấy nhiệt K80 (80mm)"
               >
-                <CheckCheck className="w-3.5 h-3.5" />
-                <span>{allChecked ? 'Bỏ tích' : 'Tích đủ'}</span>
+                Khổ K80 (80mm)
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaperSize('K58')}
+                className={`px-2 py-0.5 rounded-md font-bold cursor-pointer transition-colors ${
+                  paperSize === 'K58'
+                    ? 'bg-slate-900 text-white dark:bg-emerald-600'
+                    : 'text-slate-600 dark:text-slate-300'
+                }`}
+                title="Xem & in chuẩn khổ giấy nhiệt K58 (58mm)"
+              >
+                Khổ K58 (58mm)
               </button>
             </div>
-          )}
+
+            {effectiveItems.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
+                  Đã dò {checkedCount}/{effectiveItems.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleToggleCheckAll}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 underline cursor-pointer"
+                >
+                  <CheckCheck className="w-3.5 h-3.5" />
+                  <span>{allChecked ? 'Bỏ tích' : 'Tích đủ'}</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Scrollable Thermal Receipt Body */}
         <div className="p-3 sm:p-6 overflow-y-auto flex-1 bg-slate-200/70 dark:bg-slate-950/80">
-          {/* Authentic Thermal Paper Receipt Container (Exact Format of Image 2) */}
-          <div className="mx-auto max-w-[440px] bg-white text-slate-950 shadow-xl border border-slate-300 px-4 sm:px-6 py-5 sm:py-6 font-sans select-text">
+          {/* Authentic Thermal Paper Receipt Container (Supports K80 80mm & K58 58mm) */}
+          <div
+            ref={receiptPrintRef}
+            className={`mx-auto transition-all bg-white text-slate-950 shadow-xl border border-slate-300 font-sans select-text ${
+              paperSize === 'K58'
+                ? 'max-w-[305px] px-3 py-4 text-[11px]'
+                : 'max-w-[440px] px-4 sm:px-6 py-5 sm:py-6'
+            }`}
+          >
             {/* Store & Receipt Header */}
             <div className="text-center space-y-0.5 pb-2">
               <div className="text-base sm:text-[17px] font-extrabold tracking-wide uppercase text-black">
@@ -600,6 +826,31 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
         {/* Footer Actions Bar */}
         <div className="px-4 sm:px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handlePrintThermalReceipt(paperSize)}
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="In máy in nhiệt K80 / K58 hoặc Lưu PDF gửi khách"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>In Bill {paperSize} / PDF</span>
+            </button>
+
+            {canWrite && onOpenSplitMerge && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenSplitMerge(bill);
+                }}
+                className="px-3 py-2 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 text-xs font-semibold text-blue-700 dark:text-blue-300 inline-flex items-center gap-1.5 cursor-pointer"
+                title="Tách bill cho nhóm đông, gộp bàn hoặc chuyển số bàn"
+              >
+                <Scissors className="w-3.5 h-3.5" />
+                <span>Chia / Gộp / Chuyển Bàn</span>
+              </button>
+            )}
+
             {canWrite && (
               <button
                 type="button"
@@ -610,7 +861,7 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
                 className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <Edit3 className="w-3.5 h-3.5" />
-                <span>Sửa Bill Này</span>
+                <span>Sửa Bill</span>
               </button>
             )}
 

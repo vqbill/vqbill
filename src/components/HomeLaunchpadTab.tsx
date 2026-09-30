@@ -32,6 +32,7 @@ import {
   extractBillTableName,
   isOwnerUseBill,
 } from '../utils/parser';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface HomeLaunchpadTabProps {
   todayStr: string;
@@ -389,6 +390,9 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
           </div>
         </div>
       </div>
+
+      {/* PWA Home Screen Installation Card */}
+      <PWAInstallButton variant="card" />
 
       {/* 2. Quick Navigation Launchpad Grid */}
       <div className="space-y-3">

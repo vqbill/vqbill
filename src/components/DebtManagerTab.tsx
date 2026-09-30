@@ -10,21 +10,26 @@ import {
   Users,
   Trash2,
   MessageSquareText,
+  Wallet,
+  History,
+  PlusCircle,
 } from 'lucide-react';
 import {
   BillRecord,
   BillItemRecord,
   ProductRecord,
+  DebtPaymentRecord,
   PAYMENT_LABELS,
   ConfirmRequestOptions,
 } from '../types';
-import { formatVND, formatNumber } from '../utils/parser';
+import { formatVND, formatNumber, getCurrentBusinessDate } from '../utils/parser';
 
 interface DebtManagerTabProps {
   bills: BillRecord[];
   billItems: BillItemRecord[];
   products: ProductRecord[];
   debtors?: string[];
+  debtPayments?: DebtPaymentRecord[];
   onAddDebtor?: (name: string) => Promise<void>;
   onDeleteDebtor?: (name: string) => Promise<void>;
   canWrite: boolean;
@@ -38,6 +43,14 @@ interface DebtManagerTabProps {
   ) => Promise<void>;
   onJumpToReturnForBill: (bill: BillRecord) => void;
   onSettleDebt: (bill: BillRecord, settledVia: 'cash' | 'transfer') => Promise<void>;
+  onRecordPartialDebtPayment?: (params: {
+    bill: BillRecord;
+    amount: number;
+    paymentMethod: 'cash' | 'transfer';
+    paidDate: string;
+    note: string;
+  }) => Promise<void>;
+  onDeletePartialDebtPayment?: (payment: DebtPaymentRecord) => Promise<void>;
   onDeleteBill: (bill: BillRecord) => Promise<void>;
   onDeleteAllDebtBills: (billsToDelete: BillRecord[]) => Promise<void>;
   onDeleteAllMenuProducts: () => void;
@@ -50,6 +63,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   billItems,
   products,
   debtors = [],
+  debtPayments = [],
   onAddDebtor,
   onDeleteDebtor,
   canWrite,
@@ -58,6 +72,8 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   onUpdateBillItemPriceInline,
   onJumpToReturnForBill,
   onSettleDebt,
+  onRecordPartialDebtPayment,
+  onDeletePartialDebtPayment,
   onDeleteBill,
   onDeleteAllDebtBills,
   requestConfirm,
@@ -72,7 +88,53 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   const [inlinePrices, setInlinePrices] = useState<Record<string, number>>({});
   const [inlineNotes, setInlineNotes] = useState<Record<string, string>>({});
 
+  // Partial Debt Payment (Trả góp từng đợt) form state
+  const [partialAmountInput, setPartialAmountInput] = useState<string>('');
+  const [partialMethod, setPartialMethod] = useState<'cash' | 'transfer'>('cash');
+  const [partialDate, setPartialDate] = useState<string>(() => getCurrentBusinessDate());
+  const [partialNote, setPartialNote] = useState<string>('');
+
   const allowDeleteDebt = canDelete || canWrite;
+
+  // Map billId -> list of partial payments & total paid so far
+  const paymentsByBillId = useMemo(() => {
+    const map = new Map<string, DebtPaymentRecord[]>();
+    for (const p of debtPayments) {
+      if (!p || !p.billId) continue;
+      const list = map.get(p.billId) || [];
+      list.push(p);
+      map.set(p.billId, list);
+    }
+    for (const [k, list] of map.entries()) {
+      list.sort((a, b) => a.createdAtMs - b.createdAtMs);
+      map.set(k, list);
+    }
+    return map;
+  }, [debtPayments]);
+
+  const getBillDebtMetrics = (bill: BillRecord) => {
+    const netOriginal = Math.max(0, bill.totalAmount - (bill.deductedAmount || 0));
+    const list = paymentsByBillId.get(bill.id) || [];
+    const paidInstallments = list.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const isFullyPaid =
+      bill.debtStatus === 'paid' ||
+      bill.paymentType !== 'debt' ||
+      (netOriginal > 0 && paidInstallments >= netOriginal);
+    const remainingDebt = isFullyPaid
+      ? 0
+      : Math.max(0, netOriginal - paidInstallments);
+    const effectivePaid = isFullyPaid
+      ? netOriginal
+      : Math.min(netOriginal, paidInstallments);
+    return {
+      netOriginal,
+      paidInstallments,
+      effectivePaid,
+      remainingDebt,
+      isFullyPaid,
+      paymentsList: list,
+    };
+  };
 
   const allDebtorNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -143,28 +205,30 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   const totalUnpaidDebt = useMemo(() => {
     return bills
       .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
-      .reduce((sum, b) => sum + Math.max(0, b.totalAmount - (b.deductedAmount || 0)), 0);
-  }, [bills]);
+      .reduce((sum, b) => sum + getBillDebtMetrics(b).remainingDebt, 0);
+  }, [bills, paymentsByBillId]);
 
   const totalCompletedDebt = useMemo(() => {
     return bills
       .filter(
         (b) =>
+          b.paymentType === 'debt' ||
+          b.debtStatus === 'unpaid' ||
           b.debtStatus === 'paid' ||
-          (b.paymentType !== 'debt' && b.debtorName.trim() !== '')
+          b.debtorName.trim() !== ''
       )
-      .reduce((sum, b) => sum + Math.max(0, b.totalAmount - (b.deductedAmount || 0)), 0);
-  }, [bills]);
+      .reduce((sum, b) => sum + getBillDebtMetrics(b).effectivePaid, 0);
+  }, [bills, paymentsByBillId]);
 
   const uniqueDebtorsCount = useMemo(() => {
     const names = new Set(
       bills
-        .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
+        .filter((b) => getBillDebtMetrics(b).remainingDebt > 0)
         .map((b) => b.debtorName.trim().toLowerCase())
         .filter(Boolean)
     );
     return names.size;
-  }, [bills]);
+  }, [bills, paymentsByBillId]);
 
   const handleInspectAndScroll = (billId: string) => {
     setSelectedBillId(billId);
@@ -175,18 +239,58 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
 
   const handleSettle = (bill: BillRecord, method: 'cash' | 'transfer') => {
     if (!canWrite) return;
-    const netDebt = Math.max(0, bill.totalAmount - (bill.deductedAmount || 0));
+    const { remainingDebt } = getBillDebtMetrics(bill);
     requestConfirm({
-      title: 'Xác nhận Tất Toán Công Nợ',
-      message: `Bạn có chắc chắn muốn thu nợ ${formatVND(netDebt)} của khách "${
+      title: 'Xác nhận Tất Toán Dư Nợ Còn Lại',
+      message: `Bạn có chắc chắn muốn thu dứt điểm số dư nợ còn lại ${formatVND(
+        remainingDebt
+      )} của khách "${
         bill.debtorName || 'Khách ghi nợ'
-      }" (Bill ${bill.billCode}) bằng hình thức "${PAYMENT_LABELS[method]}" và cập nhật lên Firebase không?`,
-      confirmLabel: `Xác nhận Thu nợ (${PAYMENT_LABELS[method]})`,
+      }" (Bill ${bill.billCode}) bằng hình thức "${PAYMENT_LABELS[method]}" không?`,
+      confirmLabel: `Xác nhận Thu hết (${PAYMENT_LABELS[method]})`,
       variant: 'primary',
       onConfirm: async () => {
         setIsSettling(true);
         try {
           await onSettleDebt(bill, method);
+        } finally {
+          setIsSettling(false);
+        }
+      },
+    });
+  };
+
+  const handleRecordPartialSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeDebtBill || !canWrite || !onRecordPartialDebtPayment) return;
+    const { remainingDebt } = getBillDebtMetrics(activeDebtBill);
+    const cleanAmt = Math.round(Number(partialAmountInput.replace(/[^\d]/g, '')) || 0);
+    if (cleanAmt <= 0) return;
+    const cappedAmt = Math.min(remainingDebt, cleanAmt);
+    if (cappedAmt <= 0) return;
+
+    const afterRemain = Math.max(0, remainingDebt - cappedAmt);
+    requestConfirm({
+      title: 'Xác nhận Thu Nợ Từng Phần (Trả Góp Công Nợ)',
+      message: `Ghi nhận khách "${
+        activeDebtBill.debtorName || 'Khách nợ'
+      }" trả trước ${formatVND(cappedAmt)} (${PAYMENT_LABELS[partialMethod]}) cho Bill ${
+        activeDebtBill.billCode
+      }? Dư nợ còn lại sau đợt này: ${formatVND(afterRemain)}.`,
+      confirmLabel: `Thu ${formatVND(cappedAmt)}`,
+      variant: 'primary',
+      onConfirm: async () => {
+        setIsSettling(true);
+        try {
+          await onRecordPartialDebtPayment({
+            bill: activeDebtBill,
+            amount: cappedAmt,
+            paymentMethod: partialMethod,
+            paidDate: partialDate || getCurrentBusinessDate(),
+            note: partialNote.trim(),
+          });
+          setPartialAmountInput('');
+          setPartialNote('');
         } finally {
           setIsSettling(false);
         }
@@ -382,12 +486,10 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                 (b.debtorName || '').trim().toLowerCase() ===
                 dName.trim().toLowerCase()
             );
-            const unpaidSum = dBills
-              .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
-              .reduce(
-                (s, b) => s + Math.max(0, b.totalAmount - (b.deductedAmount || 0)),
-                0
-              );
+            const unpaidSum = dBills.reduce(
+              (s, b) => s + getBillDebtMetrics(b).remainingDebt,
+              0
+            );
 
             return (
               <div
@@ -496,8 +598,12 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
             {/* Mobile Debt Cards (< md) */}
             <div className="md:hidden space-y-2.5">
               {debtBills.map((bill) => {
-                const netDebt = Math.max(0, bill.totalAmount - (bill.deductedAmount || 0));
-                const isPaid = bill.debtStatus === 'paid' || bill.paymentType !== 'debt';
+                const {
+                  netOriginal,
+                  paidInstallments,
+                  remainingDebt,
+                  isFullyPaid: isPaid,
+                } = getBillDebtMetrics(bill);
                 const isSelected = activeDebtBill?.id === bill.id;
 
                 return (
@@ -521,16 +627,27 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                       </div>
                       <div className="text-right">
                         <div className="text-sm font-bold font-mono text-amber-600 dark:text-amber-400">
-                          {formatVND(netDebt)}
+                          {isPaid ? formatVND(netOriginal) : `Còn nợ: ${formatVND(remainingDebt)}`}
                         </div>
+                        {paidInstallments > 0 && !isPaid && (
+                          <div className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+                            Đã trả góp: {formatVND(paidInstallments)} / {formatVND(netOriginal)}
+                          </div>
+                        )}
                         <div
                           className={`text-[11px] font-semibold ${
                             isPaid
                               ? 'text-emerald-600 dark:text-emerald-400'
+                              : paidInstallments > 0
+                              ? 'text-blue-600 dark:text-blue-400'
                               : 'text-amber-600 dark:text-amber-400'
                           }`}
                         >
-                          {isPaid ? `Đã thu (${PAYMENT_LABELS[bill.paymentType]})` : 'Đang nợ'}
+                          {isPaid
+                            ? `Đã thu đủ (${PAYMENT_LABELS[bill.paymentType]})`
+                            : paidInstallments > 0
+                            ? 'Đang trả góp từng phần'
+                            : 'Đang nợ'}
                         </div>
                       </div>
                     </div>
@@ -586,8 +703,12 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                   {debtBills.map((bill) => {
-                    const netDebt = Math.max(0, bill.totalAmount - (bill.deductedAmount || 0));
-                    const isPaid = bill.debtStatus === 'paid' || bill.paymentType !== 'debt';
+                    const {
+                      netOriginal,
+                      paidInstallments,
+                      remainingDebt,
+                      isFullyPaid: isPaid,
+                    } = getBillDebtMetrics(bill);
                     const isSelected = activeDebtBill?.id === bill.id;
 
                     return (
@@ -612,13 +733,24 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                         <td className="py-3 px-3 text-slate-600 dark:text-slate-300 max-w-xs truncate">
                           {bill.itemsSummary}
                         </td>
-                        <td className="py-3 px-3 text-right font-mono font-bold text-amber-600 dark:text-amber-400">
-                          {formatVND(netDebt)}
+                        <td className="py-3 px-3 text-right font-mono">
+                          <div className="font-bold text-amber-600 dark:text-amber-400">
+                            {isPaid ? formatVND(netOriginal) : formatVND(remainingDebt)}
+                          </div>
+                          {paidInstallments > 0 && !isPaid && (
+                            <div className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                              Đã trả: {formatVND(paidInstallments)} / {formatVND(netOriginal)}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-3">
                           {isPaid ? (
                             <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
                               Đã tất toán ({PAYMENT_LABELS[bill.paymentType]})
+                            </span>
+                          ) : paidInstallments > 0 ? (
+                            <span className="text-blue-600 dark:text-blue-400 font-semibold">
+                              Đang trả góp (Còn {formatVND(remainingDebt)})
                             </span>
                           ) : (
                             <span className="text-amber-600 dark:text-amber-400 font-semibold">
@@ -971,15 +1103,246 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                   -{formatVND(activeDebtBill.deductedAmount || 0)}
                 </strong>
               </div>
+              <div>
+                <span className="text-slate-500">Đã trả góp: </span>
+                <strong className="text-emerald-600 dark:text-emerald-400">
+                  {formatVND(getBillDebtMetrics(activeDebtBill).effectivePaid)}
+                </strong>
+              </div>
               <div className="text-sm">
-                <span className="text-slate-600 dark:text-slate-300">Còn nợ: </span>
+                <span className="text-slate-600 dark:text-slate-300">Còn dư nợ: </span>
                 <strong className="text-amber-600 dark:text-amber-400">
-                  {formatVND(
-                    Math.max(0, activeDebtBill.totalAmount - (activeDebtBill.deductedAmount || 0))
-                  )}
+                  {formatVND(getBillDebtMetrics(activeDebtBill).remainingDebt)}
                 </strong>
               </div>
             </div>
+
+            {/* PARTIAL DEBT PAYMENT (TRẢ GÓP CÔNG NỢ TỪNG ĐỢT) & HISTORY PANEL */}
+            {(() => {
+              const metrics = getBillDebtMetrics(activeDebtBill);
+              return (
+                <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-800 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Wallet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                          Trả Góp Công Nợ Từng Phần & Lịch Sử Trả Nợ ({metrics.paymentsList.length} đợt)
+                        </h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Cho phép khách trả trước một phần bằng Tiền mặt hoặc Chuyển khoản, hệ thống tự trừ dư nợ và lưu lịch sử từng đợt.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3 Balance Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs font-mono">
+                    <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                      <div className="text-[11px] font-sans text-slate-500">
+                        1. Tổng nợ gốc (Sau hoàn trả)
+                      </div>
+                      <div className="mt-0.5 text-base font-bold text-slate-900 dark:text-white">
+                        {formatVND(metrics.netOriginal)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/60 dark:bg-emerald-950/30">
+                      <div className="text-[11px] font-sans text-emerald-700 dark:text-emerald-300">
+                        2. Đã thanh toán ({metrics.paymentsList.length} đợt)
+                      </div>
+                      <div className="mt-0.5 text-base font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatVND(metrics.effectivePaid)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-xl border border-amber-200 dark:border-amber-800/80 bg-amber-50/60 dark:bg-amber-950/30">
+                      <div className="text-[11px] font-sans text-amber-800 dark:text-amber-300">
+                        3. Còn dư nợ phải thu
+                      </div>
+                      <div className="mt-0.5 text-base font-bold text-amber-600 dark:text-amber-400">
+                        {formatVND(metrics.remainingDebt)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Form to record a new partial installment */}
+                  {canWrite && !metrics.isFullyPaid && onRecordPartialDebtPayment && (
+                    <form
+                      onSubmit={handleRecordPartialSubmit}
+                      className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/40 dark:bg-emerald-950/20 space-y-3 text-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Nhập Số Tiền Khách Trả Đợt Này:</span>
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+                          {[500000, 1000000, Math.round(metrics.remainingDebt / 2), metrics.remainingDebt]
+                            .filter((v, i, arr) => v > 0 && v <= metrics.remainingDebt && arr.indexOf(v) === i)
+                            .map((presetAmt) => (
+                              <button
+                                key={presetAmt}
+                                type="button"
+                                onClick={() => setPartialAmountInput(String(presetAmt))}
+                                className="px-2 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 font-semibold cursor-pointer"
+                              >
+                                {presetAmt === metrics.remainingDebt
+                                  ? `Trả hết (${formatVND(presetAmt)})`
+                                  : `+ ${formatVND(presetAmt)}`}
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                            Số tiền trả (VNĐ):
+                          </label>
+                          <input
+                            type="number"
+                            min={1000}
+                            max={metrics.remainingDebt}
+                            step={1000}
+                            value={partialAmountInput}
+                            onChange={(e) => setPartialAmountInput(e.target.value)}
+                            placeholder={`Tối đa ${metrics.remainingDebt}`}
+                            className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-emerald-600 dark:text-emerald-400"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                            Hình thức thanh toán:
+                          </label>
+                          <select
+                            value={partialMethod}
+                            onChange={(e) =>
+                              setPartialMethod(e.target.value as 'cash' | 'transfer')
+                            }
+                            className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-semibold"
+                          >
+                            <option value="cash">Tiền mặt</option>
+                            <option value="transfer">Chuyển khoản</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                            Ngày thu tiền:
+                          </label>
+                          <input
+                            type="date"
+                            value={partialDate}
+                            onChange={(e) => setPartialDate(e.target.value)}
+                            className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                            Ghi chú đợt trả:
+                          </label>
+                          <input
+                            type="text"
+                            value={partialNote}
+                            onChange={(e) => setPartialNote(e.target.value)}
+                            placeholder="VD: Trả trước đợt 1..."
+                            className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button
+                          type="submit"
+                          disabled={isSettling || !partialAmountInput}
+                          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>Ghi Nhận Trả Góp Đợt Này</span>
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Installment History Table */}
+                  {metrics.paymentsList.length > 0 && (
+                    <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500">
+                            <th className="py-2 px-3">Đợt trả</th>
+                            <th className="py-2 px-3">Ngày thu</th>
+                            <th className="py-2 px-3">Hình thức</th>
+                            <th className="py-2 px-3 text-right">Số tiền đã trả</th>
+                            <th className="py-2 px-3">Ghi chú</th>
+                            {allowDeleteDebt && onDeletePartialDebtPayment && (
+                              <th className="py-2 px-3 text-right">Xóa</th>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono">
+                          {metrics.paymentsList.map((pmt, pIdx) => (
+                            <tr key={pmt.id}>
+                              <td className="py-2 px-3 font-bold text-slate-700 dark:text-slate-300">
+                                <span className="inline-flex items-center gap-1">
+                                  <History className="w-3 h-3 text-emerald-500" />
+                                  Đợt #{pIdx + 1}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3">{pmt.paidDate}</td>
+                              <td className="py-2 px-3 font-sans font-semibold">
+                                <span
+                                  className={
+                                    pmt.paymentMethod === 'cash'
+                                      ? 'text-emerald-600 dark:text-emerald-400'
+                                      : 'text-blue-600 dark:text-blue-400'
+                                  }
+                                >
+                                  {PAYMENT_LABELS[pmt.paymentMethod]}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-right font-bold text-emerald-600 dark:text-emerald-400">
+                                +{formatVND(pmt.amount)}
+                              </td>
+                              <td className="py-2 px-3 font-sans text-slate-600 dark:text-slate-300">
+                                {pmt.note || 'Thu nợ từng phần'}
+                              </td>
+                              {allowDeleteDebt && onDeletePartialDebtPayment && (
+                                <td className="py-2 px-3 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      requestConfirm({
+                                        title: 'Xác nhận Xóa Đợt Trả Góp Công Nợ',
+                                        message: `Bạn có chắc chắn muốn xóa đợt trả nợ ${formatVND(
+                                          pmt.amount
+                                        )} ngày ${pmt.paidDate} để hoàn lại dư nợ cho Bill ${
+                                          activeDebtBill.billCode
+                                        } không?`,
+                                        confirmLabel: 'Xóa đợt trả này',
+                                        variant: 'danger',
+                                        onConfirm: async () => {
+                                          await onDeletePartialDebtPayment(pmt);
+                                        },
+                                      });
+                                    }}
+                                    className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                                    title="Xóa đợt trả nợ này"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </td>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>
         )}
       </div>

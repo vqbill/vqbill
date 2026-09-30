@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   Camera,
   FileText,
@@ -10,6 +10,7 @@ import {
   Save,
   RefreshCw,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Sparkles,
   Code2,
@@ -36,6 +37,7 @@ import {
   resolveBusinessBillDate,
   SAMPLE_BILL_TEMPLATES,
   splitProductNameAndInlineNote,
+  extractBillTableName,
 } from '../utils/parser';
 import { extractBillWithGemini } from '../services/geminiService';
 import { GeminiKeyBar } from './GeminiKeyBar';
@@ -44,6 +46,7 @@ interface OcrScannerTabProps {
   canWrite: boolean;
   categories: string[];
   products: ProductRecord[];
+  existingBills?: BillRecord[];
   existingDebtors: string[];
   onDeleteDebtor?: (name: string) => Promise<void>;
   geminiApiKey: string;
@@ -73,6 +76,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   canWrite,
   categories,
   products,
+  existingBills = [],
   existingDebtors,
   onDeleteDebtor,
   geminiApiKey,
@@ -166,6 +170,58 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     Math.max(0, Math.round(Number(discountAmount) || 0))
   );
   const totalAmount = Math.max(0, subtotalAmount - safeDiscount);
+
+  // Real-Time Duplicate Bill Detector (Phát hiện Bill trùng lặp)
+  const duplicateBillWarning = useMemo(() => {
+    const validItems = items.filter((it) => it.productName.trim() !== '');
+    if (validItems.length === 0 || totalAmount <= 0) return null;
+
+    const cleanTable = tableName.trim().toLowerCase();
+    for (const b of existingBills) {
+      if (b.billDate !== billDate) continue;
+      if (Math.abs((Number(b.totalAmount) || 0) - totalAmount) > 500) continue;
+
+      const existingTable = (extractBillTableName(b) || '').trim().toLowerCase();
+      const sameTable =
+        cleanTable !== '' &&
+        existingTable !== '' &&
+        cleanTable === existingTable;
+      const sameCheckIn =
+        checkInTime.trim() !== '' &&
+        (b.checkInTime || '').trim() === checkInTime.trim();
+
+      const summaryLower = (b.itemsSummary || '').toLowerCase();
+      let matchedItemCount = 0;
+      for (const it of validItems) {
+        const pLower = it.productName.trim().toLowerCase();
+        if (pLower && summaryLower.includes(pLower)) {
+          matchedItemCount += 1;
+        }
+      }
+      const highItemOverlap =
+        validItems.length > 0 && matchedItemCount / validItems.length >= 0.7;
+
+      if (sameTable || sameCheckIn || highItemOverlap) {
+        const diffMin = Math.max(
+          1,
+          Math.round((Date.now() - (b.createdAtMs || Date.now())) / 60000)
+        );
+        const timeAgoLabel =
+          diffMin < 60
+            ? `cách đây ${diffMin} phút`
+            : diffMin < 1440
+            ? `cách đây ${Math.round(diffMin / 60)} giờ`
+            : `trong ca ngày ${b.billDate}`;
+        return {
+          bill: b,
+          timeAgoLabel,
+          matchedItemCount,
+          totalDraftItems: validItems.length,
+        };
+      }
+    }
+    return null;
+  }, [items, totalAmount, billDate, tableName, checkInTime, existingBills]);
 
   // Strict JSON output structure including all requested fields
   const strictJsonOutput: ExtractedBillJSON = {
@@ -589,21 +645,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setTimeout(() => setCopiedJson(false), 2000);
   };
 
-  const handleSaveBill = async () => {
-    if (!canWrite) {
-      setErrorMsg('Tài khoản của bạn ở chế độ Chỉ xem, không có quyền lưu hóa đơn.');
-      return;
-    }
+  const executeSaveBillNow = async () => {
     const validItems = items.filter((it) => it.productName.trim() !== '');
-    if (validItems.length === 0) {
-      setErrorMsg('Vui lòng thêm ít nhất 1 món ăn/nước uống trong hóa đơn.');
-      return;
-    }
-    if (paymentType === 'debt' && !debtorName.trim()) {
-      setErrorMsg('Vui lòng chọn hoặc nhập Tên người nợ đối với hóa đơn Công nợ.');
-      return;
-    }
-
     const finalNote = [tableName.trim(), note.trim()].filter(Boolean).join(' - ');
     const snapshotPopup = {
       billCode: `HD-${billDate.replace(/-/g, '').slice(2)}`,
@@ -651,6 +694,43 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleSaveBill = async () => {
+    if (!canWrite) {
+      setErrorMsg('Tài khoản của bạn ở chế độ Chỉ xem, không có quyền lưu hóa đơn.');
+      return;
+    }
+    const validItems = items.filter((it) => it.productName.trim() !== '');
+    if (validItems.length === 0) {
+      setErrorMsg('Vui lòng thêm ít nhất 1 món ăn/nước uống trong hóa đơn.');
+      return;
+    }
+    if (paymentType === 'debt' && !debtorName.trim()) {
+      setErrorMsg('Vui lòng chọn hoặc nhập Tên người nợ đối với hóa đơn Công nợ.');
+      return;
+    }
+
+    if (duplicateBillWarning) {
+      requestConfirm({
+        title: 'Cảnh Báo: Phát Hiện Hóa Đơn Trùng Lặp!',
+        message: `Hệ thống phát hiện Bill đang nhập có cùng tổng tiền ${formatVND(
+          totalAmount
+        )} và trùng món/bàn với hóa đơn "${
+          duplicateBillWarning.bill.billCode
+        }" (${duplicateBillWarning.bill.note || 'Không ghi chú'}) đã được nhập ${
+          duplicateBillWarning.timeAgoLabel
+        }. Bạn có chắc chắn vẫn muốn lưu thêm hóa đơn này không?`,
+        confirmLabel: 'Vẫn Lưu Hóa Đơn Này',
+        variant: 'warning',
+        onConfirm: async () => {
+          await executeSaveBillNow();
+        },
+      });
+      return;
+    }
+
+    await executeSaveBillNow();
   };
 
   return (
@@ -728,6 +808,32 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       </div>
 
       {/* Status Alerts */}
+      {duplicateBillWarning && (
+        <div className="p-4 rounded-2xl border-2 border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200 shadow-xs">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <div className="font-extrabold text-amber-900 dark:text-amber-200">
+                CẢNH BÁO PHÁT HIỆN BILL TRÙNG LẶP ({duplicateBillWarning.bill.billCode})!
+              </div>
+              <p className="leading-relaxed">
+                Bill này có vẻ đã được nhập <strong>{duplicateBillWarning.timeAgoLabel}</strong>: Mã{' '}
+                <strong className="font-mono">{duplicateBillWarning.bill.billCode}</strong> ·{' '}
+                <strong>{duplicateBillWarning.bill.note || 'Bàn khách'}</strong> · Tổng cộng{' '}
+                <strong className="font-mono">{formatVND(duplicateBillWarning.bill.totalAmount)}</strong>{' '}
+                (Trùng {duplicateBillWarning.matchedItemCount}/{duplicateBillWarning.totalDraftItems} món).
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={clearAllBillInputs}
+            className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold whitespace-nowrap cursor-pointer shrink-0"
+          >
+            Hủy Bill Trùng Này
+          </button>
+        </div>
+      )}
       {errorMsg && (
         <div className="p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 flex items-start sm:items-center gap-2.5 text-xs text-rose-700 dark:text-rose-300">
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />

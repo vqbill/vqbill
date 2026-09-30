@@ -43,6 +43,7 @@ import {
   Home,
   Boxes,
   UserCheck,
+  Scissors,
 } from 'lucide-react';
 import {
   auth,
@@ -75,6 +76,8 @@ import {
   sanitizeTabList,
   WorkspaceInventoryData,
   DEFAULT_DEDUCTION_CATEGORIES,
+  DebtPaymentRecord,
+  CalendarEventNote,
 } from './types';
 import {
   formatVND,
@@ -150,8 +153,10 @@ import { ProductCatalogTab } from './components/ProductCatalogTab';
 import { AccountsManagerTab } from './components/AccountsManagerTab';
 import { BillEditModal } from './components/BillEditModal';
 import { BillCheckModal } from './components/BillCheckModal';
+import { BillSplitMergeModal } from './components/BillSplitMergeModal';
 import { ConfirmDialogModal } from './components/ConfirmDialogModal';
 import { GeminiKeyBar } from './components/GeminiKeyBar';
+import { PWAInstallButton } from './components/PWAInstallButton';
 
 type ActiveTab = ManagementTabId;
 
@@ -420,6 +425,7 @@ export default function App() {
   // Modals & Cross-tab selections
   const [inspectingBill, setInspectingBill] = useState<BillRecord | null>(null);
   const [editingBill, setEditingBill] = useState<BillRecord | null>(null);
+  const [splitMergeBill, setSplitMergeBill] = useState<BillRecord | null>(null);
   const [preselectedReturnBillId, setPreselectedReturnBillId] = useState<string | null>(
     null
   );
@@ -1701,23 +1707,64 @@ export default function App() {
   // Note: Beer/item returns are included in periodDeductions (1 dòng tiền duy nhất),
   // so grossCash & grossTransfer use b.totalAmount and subtract totalDeductions once.
   const financialSummary = useMemo(() => {
-    const grossCash = periodBills
-      .filter((b) => b.paymentType === 'cash')
-      .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
+    const debtPaymentsList = inventoryData.debtPayments || [];
+    const paidByBillMap = new Map<string, number>();
+    for (const p of debtPaymentsList) {
+      if (!p || !p.billId) continue;
+      paidByBillMap.set(
+        p.billId,
+        (paidByBillMap.get(p.billId) || 0) + (Number(p.amount) || 0)
+      );
+    }
 
-    const grossTransfer = periodBills
-      .filter((b) => b.paymentType === 'transfer')
-      .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
+    const unpaidDebtBillIds = new Set(
+      bills
+        .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
+        .map((b) => b.id)
+    );
+
+    const periodCashInstallments = debtPaymentsList
+      .filter(
+        (p) =>
+          p.paymentMethod === 'cash' &&
+          unpaidDebtBillIds.has(p.billId) &&
+          isDateInPeriod(p.paidDate)
+      )
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
+    const periodTransferInstallments = debtPaymentsList
+      .filter(
+        (p) =>
+          p.paymentMethod === 'transfer' &&
+          unpaidDebtBillIds.has(p.billId) &&
+          isDateInPeriod(p.paidDate)
+      )
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
+    const grossCash =
+      periodBills
+        .filter((b) => b.paymentType === 'cash')
+        .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0) +
+      periodCashInstallments;
+
+    const grossTransfer =
+      periodBills
+        .filter((b) => b.paymentType === 'transfer')
+        .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0) +
+      periodTransferInstallments;
 
     const totalDeductions = periodDeductions.reduce((s, d) => s + d.amount, 0);
 
     const totalDebt = periodBills
       .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
-      .reduce(
-        (s, b) =>
-          s + Math.max(0, (Number(b.totalAmount) || 0) - (Number(b.deductedAmount) || 0)),
-        0
-      );
+      .reduce((s, b) => {
+        const netOrig = Math.max(
+          0,
+          (Number(b.totalAmount) || 0) - (Number(b.deductedAmount) || 0)
+        );
+        const paidSoFar = paidByBillMap.get(b.id) || 0;
+        return s + Math.max(0, netOrig - paidSoFar);
+      }, 0);
 
     const netCashRevenue = grossCash - totalDeductions;
     const netTransferRevenue = grossTransfer;
@@ -1735,7 +1782,7 @@ export default function App() {
       netDayTotal,
       totalAllBillsGross,
     };
-  }, [periodBills, periodDeductions]);
+  }, [periodBills, periodDeductions, inventoryData.debtPayments, bills]);
 
   // Daily Chart Data Points
   const chartData = useMemo<DailyRevenuePoint[]>(() => {
@@ -2555,6 +2602,364 @@ export default function App() {
     );
   };
 
+  const handleRecordPartialDebtPayment = async (params: {
+    bill: BillRecord;
+    amount: number;
+    paymentMethod: 'cash' | 'transfer';
+    paidDate: string;
+    note: string;
+  }) => {
+    setWorkspaceInitialized(true);
+    const now = Date.now();
+    const newPayment: DebtPaymentRecord = {
+      id: sanitizeId(`dpay_${now}_${Math.random().toString(36).slice(2, 6)}`),
+      billId: params.bill.id,
+      billCode: params.bill.billCode,
+      debtorName: params.bill.debtorName || 'Khách nợ',
+      amount: Math.max(0, Math.round(Number(params.amount) || 0)),
+      paymentMethod: params.paymentMethod,
+      paidDate: params.paidDate || todayStr,
+      note: params.note,
+      createdAtMs: now,
+      createdBy: currentStaffAccount?.username || 'admin',
+    };
+
+    const existingPayments = inventoryData.debtPayments || [];
+    const nextPayments = [...existingPayments, newPayment];
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      debtPayments: nextPayments,
+      updatedAtMs: now,
+    };
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+
+    // Check if cumulative installments cover 100% of the net bill amount
+    const netOrig = Math.max(
+      0,
+      (Number(params.bill.totalAmount) || 0) - (Number(params.bill.deductedAmount) || 0)
+    );
+    const totalPaidForBill = nextPayments
+      .filter((p) => p.billId === params.bill.id)
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
+    if (netOrig > 0 && totalPaidForBill >= netOrig) {
+      const updatedBill: BillRecord = {
+        ...params.bill,
+        paymentType: params.paymentMethod,
+        debtStatus: 'paid',
+        note: `${params.bill.note ? params.bill.note + ' · ' : ''}Đã thu đủ công nợ (${nextPayments.filter((p) => p.billId === params.bill.id).length} đợt) từ ${params.bill.debtorName}`,
+        updatedAtMs: now,
+      };
+      const items = billItems.filter((it) => it.billId === params.bill.id);
+      await updateBillAndItemsInCloud({
+        ownerId,
+        bill: updatedBill,
+        oldItems: items,
+        newItems: items,
+      });
+      setBills((prev) =>
+        prev.map((b) => (b.id === params.bill.id ? updatedBill : b))
+      );
+      showToast(
+        `Khách ${params.bill.debtorName} đã trả đủ 100% công nợ (${formatVND(
+          netOrig
+        )}) — Hóa đơn ${params.bill.billCode} đã tự động tất toán!`
+      );
+    } else {
+      const remainingAfter = Math.max(0, netOrig - totalPaidForBill);
+      showToast(
+        `Đã ghi nhận trả nợ đợt này ${formatVND(newPayment.amount)} (${
+          PAYMENT_LABELS[params.paymentMethod]
+        }) — Dư nợ còn lại của ${params.bill.debtorName}: ${formatVND(remainingAfter)}!`
+      );
+    }
+  };
+
+  const handleDeletePartialDebtPayment = async (payment: DebtPaymentRecord) => {
+    setWorkspaceInitialized(true);
+    const now = Date.now();
+    const nextPayments = (inventoryData.debtPayments || []).filter(
+      (p) => p.id !== payment.id
+    );
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      debtPayments: nextPayments,
+      updatedAtMs: now,
+    };
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+
+    // If bill was marked paid via installments, revert to unpaid debt if remaining > 0
+    const parentBill = bills.find((b) => b.id === payment.billId);
+    if (parentBill && parentBill.debtStatus === 'paid') {
+      const netOrig = Math.max(
+        0,
+        (Number(parentBill.totalAmount) || 0) - (Number(parentBill.deductedAmount) || 0)
+      );
+      const paidRemaining = nextPayments
+        .filter((p) => p.billId === parentBill.id)
+        .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      if (paidRemaining < netOrig) {
+        const revertedBill: BillRecord = {
+          ...parentBill,
+          paymentType: 'debt',
+          debtStatus: 'unpaid',
+          updatedAtMs: now,
+        };
+        const items = billItems.filter((it) => it.billId === parentBill.id);
+        await updateBillAndItemsInCloud({
+          ownerId,
+          bill: revertedBill,
+          oldItems: items,
+          newItems: items,
+        });
+        setBills((prev) =>
+          prev.map((b) => (b.id === parentBill.id ? revertedBill : b))
+        );
+      }
+    }
+    showToast(
+      `Đã xóa đợt trả nợ ${formatVND(payment.amount)} của khách ${payment.debtorName}.`
+    );
+  };
+
+  // Split Bill / Merge Bills / Move Table Handlers
+  const handleMoveTable = async (
+    bill: BillRecord,
+    newTableName: string,
+    extraNote: string
+  ) => {
+    const cleanTable = newTableName.trim();
+    const cleanExtra = extraNote.trim();
+    const updatedNote = cleanExtra ? `${cleanTable} · ${cleanExtra}` : cleanTable;
+    const currentItems = effectiveBillItems.filter((it) => it.billId === bill.id);
+    const updatedBill: BillRecord = {
+      ...bill,
+      note: updatedNote,
+      updatedAtMs: Date.now(),
+    };
+    await handleSaveEditedBill(updatedBill, currentItems);
+    showToast(`Đã chuyển hóa đơn ${bill.billCode} sang ${cleanTable}!`);
+  };
+
+  const handleSplitBill = async (params: {
+    sourceBill: BillRecord;
+    remainingItems: BillItemRecord[];
+    splitItems: { item: BillItemRecord; splitQty: number }[];
+    newBillTableName: string;
+    newBillPaymentType: PaymentType;
+    newBillDebtorName: string;
+    newBillNote: string;
+  }) => {
+    setWorkspaceInitialized(true);
+    const now = Date.now();
+
+    // 1. Update sourceBill with remainingItems
+    const remSubtotal = params.remainingItems.reduce(
+      (sum, it) => sum + Math.round(it.quantity * it.unitPrice),
+      0
+    );
+    const remSummary = truncateStr(
+      params.remainingItems
+        .map(
+          (it) =>
+            `${it.productName}${it.note ? ` (${it.note})` : ''} x${it.quantity}`
+        )
+        .join(', '),
+      1000,
+      ''
+    );
+    const updatedSourceBill: BillRecord = {
+      ...params.sourceBill,
+      subtotalAmount: remSubtotal,
+      totalAmount: Math.max(0, remSubtotal - (params.sourceBill.discountAmount || 0)),
+      itemsSummary: remSummary,
+      updatedAtMs: now,
+    };
+    const oldSourceItems = effectiveBillItems.filter(
+      (it) => it.billId === params.sourceBill.id
+    );
+    await updateBillAndItemsInCloud({
+      ownerId,
+      bill: updatedSourceBill,
+      oldItems: oldSourceItems,
+      newItems: params.remainingItems,
+    });
+    setBills((prev) =>
+      prev.map((b) => (b.id === updatedSourceBill.id ? updatedSourceBill : b))
+    );
+    setBillItems((prev) => [
+      ...prev.filter((it) => it.billId !== updatedSourceBill.id),
+      ...params.remainingItems,
+    ]);
+
+    // 2. Create the new split bill
+    const extractedForNewBill: ExtractedBillItem[] = params.splitItems.map(
+      ({ item, splitQty }) => ({
+        productName: item.productName,
+        note: item.note,
+        category: item.category,
+        quantity: splitQty,
+        unitPrice: item.unitPrice,
+        subtotal: splitQty * item.unitPrice,
+        originalUnitPrice: item.originalUnitPrice,
+      })
+    );
+    const combinedNewNote = params.newBillNote
+      ? `${params.newBillTableName} · ${params.newBillNote}`
+      : params.newBillTableName;
+
+    const newBill = await handleSaveExtractedBill({
+      billDate: params.sourceBill.billDate,
+      rawDate: params.sourceBill.rawDate,
+      checkInTime: params.sourceBill.checkInTime,
+      checkOutTime: params.sourceBill.checkOutTime,
+      paymentType: params.newBillPaymentType,
+      debtorName: params.newBillDebtorName,
+      note: combinedNewNote,
+      subtotalAmount: extractedForNewBill.reduce((s, it) => s + it.subtotal, 0),
+      discountAmount: 0,
+      items: extractedForNewBill,
+    });
+
+    showToast(
+      `Đã tách thành công từ ${params.sourceBill.billCode} sang Bill mới ${
+        newBill?.billCode || ''
+      } (${params.newBillTableName})!`
+    );
+  };
+
+  const handleMergeBills = async (params: {
+    targetBill: BillRecord;
+    sourceBillsToMerge: BillRecord[];
+    mergedTableName: string;
+    mergedPaymentType: PaymentType;
+    mergedDebtorName: string;
+  }) => {
+    setWorkspaceInitialized(true);
+    const now = Date.now();
+    const mergeIds = new Set(params.sourceBillsToMerge.map((b) => b.id));
+
+    const targetItems = effectiveBillItems.filter(
+      (it) => it.billId === params.targetBill.id
+    );
+    const sourceItems = effectiveBillItems.filter((it) =>
+      mergeIds.has(it.billId)
+    );
+
+    // Combine items (merge identical productName + unitPrice + note, or append)
+    const combinedItems: BillItemRecord[] = targetItems.map((it) => ({ ...it }));
+    for (const sItem of sourceItems) {
+      const existingIdx = combinedItems.findIndex(
+        (c) =>
+          c.productName.trim().toLowerCase() ===
+            sItem.productName.trim().toLowerCase() &&
+          c.unitPrice === sItem.unitPrice &&
+          (c.note || '').trim().toLowerCase() ===
+            (sItem.note || '').trim().toLowerCase()
+      );
+      if (existingIdx >= 0) {
+        const cur = combinedItems[existingIdx];
+        const nextQty = (cur.quantity || 0) + (sItem.quantity || 0);
+        const nextRet = (cur.returnedQuantity || 0) + (sItem.returnedQuantity || 0);
+        combinedItems[existingIdx] = {
+          ...cur,
+          quantity: nextQty,
+          returnedQuantity: nextRet,
+          subtotal: nextQty * cur.unitPrice,
+          updatedAtMs: now,
+        };
+      } else {
+        combinedItems.push({
+          ...sItem,
+          id: sanitizeId(
+            `item_${params.targetBill.id}_${now}_${Math.random()
+              .toString(36)
+              .slice(2, 6)}`
+          ),
+          billId: params.targetBill.id,
+          billDate: params.targetBill.billDate,
+          updatedAtMs: now,
+        });
+      }
+    }
+
+    const mergedSubtotal = combinedItems.reduce(
+      (s, it) => s + Math.round(it.quantity * it.unitPrice),
+      0
+    );
+    const mergedDiscount =
+      (params.targetBill.discountAmount || 0) +
+      params.sourceBillsToMerge.reduce((s, b) => s + (b.discountAmount || 0), 0);
+    const mergedDeducted =
+      (params.targetBill.deductedAmount || 0) +
+      params.sourceBillsToMerge.reduce((s, b) => s + (b.deductedAmount || 0), 0);
+    const mergedTotal = Math.max(0, mergedSubtotal - mergedDiscount);
+    const mergedSummary = truncateStr(
+      combinedItems
+        .map(
+          (it) =>
+            `${it.productName}${it.note ? ` (${it.note})` : ''} x${it.quantity}`
+        )
+        .join(', '),
+      1000,
+      ''
+    );
+
+    const updatedTargetBill: BillRecord = {
+      ...params.targetBill,
+      paymentType: params.mergedPaymentType,
+      debtorName:
+        params.mergedPaymentType === 'debt' ? params.mergedDebtorName : '',
+      debtStatus: params.mergedPaymentType === 'debt' ? 'unpaid' : 'none',
+      subtotalAmount: mergedSubtotal,
+      discountAmount: mergedDiscount,
+      totalAmount: mergedTotal,
+      deductedAmount: mergedDeducted,
+      itemsSummary: mergedSummary,
+      note: `${params.mergedTableName} · Đã gộp từ ${params.sourceBillsToMerge
+        .map((b) => b.billCode)
+        .join(', ')}`,
+      updatedAtMs: now,
+    };
+
+    await updateBillAndItemsInCloud({
+      ownerId,
+      bill: updatedTargetBill,
+      oldItems: targetItems,
+      newItems: combinedItems,
+    });
+
+    setBills((prev) =>
+      prev.map((b) => (b.id === updatedTargetBill.id ? updatedTargetBill : b))
+    );
+    setBillItems((prev) => [
+      ...prev.filter((it) => it.billId !== updatedTargetBill.id),
+      ...combinedItems,
+    ]);
+
+    // Remove the merged source bills cleanly
+    await handleDeleteMultipleBills(params.sourceBillsToMerge);
+
+    showToast(
+      `Đã gộp ${params.sourceBillsToMerge.length + 1} bàn vào hóa đơn ${
+        updatedTargetBill.billCode
+      } (${params.mergedTableName} · Tổng: ${formatVND(mergedTotal)})!`
+    );
+  };
+
+  const handleSaveCalendarEvents = async (events: CalendarEventNote[]) => {
+    setWorkspaceInitialized(true);
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      calendarEvents: events,
+      updatedAtMs: Date.now(),
+    };
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+  };
+
   const effectiveDeductionCategories = useMemo(() => {
     const result: string[] = [];
     const seen = new Set<string>();
@@ -3329,7 +3734,11 @@ export default function App() {
           onToggleDarkMode={() => setDarkMode((d) => !d)}
           authError={authError}
         />
-        <LunarCalendarFloatingWidget />
+        <LunarCalendarFloatingWidget
+          calendarEvents={inventoryData.calendarEvents || []}
+          onSaveCalendarEvents={handleSaveCalendarEvents}
+          currentUsername="admin"
+        />
       </>
     );
   }
@@ -3461,6 +3870,8 @@ export default function App() {
 
         {/* Primary Actions */}
         <div className="flex items-center gap-1.5 sm:gap-2">
+          <PWAInstallButton variant="header" />
+
           <button
             type="button"
             onClick={handleToggleHideMoney}
@@ -4205,6 +4616,14 @@ export default function App() {
                                   <>
                                     <button
                                       type="button"
+                                      onClick={() => setSplitMergeBill(bill)}
+                                      className="px-2.5 py-1.5 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 text-[11px] font-semibold text-blue-700 dark:text-blue-300 inline-flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <Scissors className="w-3 h-3" />
+                                      <span>Tách/Gộp</span>
+                                    </button>
+                                    <button
+                                      type="button"
                                       onClick={() => setEditingBill(bill)}
                                       className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
                                     >
@@ -4350,6 +4769,15 @@ export default function App() {
                                     <>
                                       <button
                                         type="button"
+                                        onClick={() => setSplitMergeBill(bill)}
+                                        className="px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 text-[11px] font-semibold text-blue-700 dark:text-blue-300 inline-flex items-center gap-1 cursor-pointer align-middle"
+                                        title="Chia Bill / Gộp Bàn / Chuyển Bàn"
+                                      >
+                                        <Scissors className="w-3 h-3" />
+                                        <span>Tách/Gộp</span>
+                                      </button>
+                                      <button
+                                        type="button"
                                         onClick={() => setEditingBill(bill)}
                                         className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer align-middle"
                                       >
@@ -4399,6 +4827,7 @@ export default function App() {
               canWrite={canWrite}
               categories={effectiveCategories}
               products={products}
+              existingBills={bills}
               existingDebtors={effectiveDebtors}
               onDeleteDebtor={handleDeleteDebtor}
               autoAddProducts={autoAddProducts}
@@ -4516,6 +4945,7 @@ export default function App() {
               billItems={effectiveBillItems}
               products={products}
               debtors={effectiveDebtors}
+              debtPayments={inventoryData.debtPayments || []}
               onAddDebtor={handleAddDebtor}
               onDeleteDebtor={handleDeleteDebtor}
               canWrite={canWrite}
@@ -4527,6 +4957,8 @@ export default function App() {
                 handleSelectTab('returns');
               }}
               onSettleDebt={handleSettleDebt}
+              onRecordPartialDebtPayment={handleRecordPartialDebtPayment}
+              onDeletePartialDebtPayment={handleDeletePartialDebtPayment}
               onDeleteBill={handleDeleteBillDirect}
               onDeleteAllDebtBills={handleDeleteMultipleBills}
               onDeleteAllMenuProducts={handleRequestDeleteAllMenuProducts}
@@ -4891,9 +5323,29 @@ export default function App() {
                 handleSelectTab('returns');
               }}
               onDeleteBill={(b) => handleConfirmDeleteBill(b)}
+              onOpenSplitMerge={
+                canWrite ? (b) => setSplitMergeBill(b) : undefined
+              }
             />
           );
         })()}
+
+      {/* Split Bill / Merge Bills / Move Table Modal */}
+      {splitMergeBill && (
+        <BillSplitMergeModal
+          bill={splitMergeBill}
+          billItems={effectiveBillItems.filter(
+            (it) => it.billId === splitMergeBill.id
+          )}
+          allBills={bills}
+          allBillItems={effectiveBillItems}
+          debtors={effectiveDebtors}
+          onClose={() => setSplitMergeBill(null)}
+          onMoveTable={handleMoveTable}
+          onSplitBill={handleSplitBill}
+          onMergeBills={handleMergeBills}
+        />
+      )}
 
       {/* Edit Bill Modal */}
       {editingBill && (
@@ -4924,7 +5376,11 @@ export default function App() {
       />
 
       {/* Fixed Bottom-Right Solar & Lunar Calendar Widget */}
-      <LunarCalendarFloatingWidget />
+      <LunarCalendarFloatingWidget
+        calendarEvents={inventoryData.calendarEvents || []}
+        onSaveCalendarEvents={handleSaveCalendarEvents}
+        currentUsername={currentStaffAccount.username}
+      />
     </div>
   );
 }
