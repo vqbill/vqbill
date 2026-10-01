@@ -142,6 +142,11 @@ function normalizeExpenseCategory(ded: DeductionRecord): string {
   if (isReturnLinkedDeduction(ded)) {
     return 'Hoàn bia / món thừa';
   }
+  const idStr = String(ded.id || '');
+  const codeStr = String(ded.billCode || '');
+  if (idStr.startsWith('ded_sal_') || codeStr === 'UNG-LUONG') {
+    return 'Ứng lương nhân viên';
+  }
   const clean = String(ded.category || '').trim();
   return clean || EXPENSE_CATEGORIES[0];
 }
@@ -1153,178 +1158,189 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             </div>
           )}
 
-          {/* Quick Expense Presets */}
-          <div className="space-y-1.5">
-            <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
-              Chọn nhanh khoản chi trực tiếp phổ biến trong ngày:
-            </span>
-            <div className="flex flex-wrap gap-2">
-              {EXPENSE_PRESETS.map((preset) => (
-                <button
-                  key={preset.title}
-                  type="button"
-                  onClick={() => {
-                    setExpenseTitle(preset.title);
-                    setExpenseCategory(preset.category);
-                    setExpenseQuantity(1);
-                    setExpenseUnitPrice(preset.defaultAmount);
-                    setExpenseAmount(preset.defaultAmount);
-                    setExpensePriceMode('total');
-                  }}
-                  className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-rose-500 dark:hover:border-rose-500 bg-slate-50 dark:bg-slate-800/50 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
-                >
-                  + {preset.title}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <form
-            onSubmit={handleAddExpenseSubmit}
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800"
-          >
-            <div className="lg:col-span-2">
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Ngày chi (Khoản trừ)
-              </label>
-              <input
-                type="date"
-                value={deductionDate}
-                onChange={(e) => setDeductionDate(e.target.value)}
-                className="w-full h-10 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-              />
-            </div>
-
-            <div className="lg:col-span-2">
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Nội dung khoản chi *
-              </label>
-              <input
-                type="text"
-                value={expenseTitle}
-                onChange={(e) => setExpenseTitle(e.target.value)}
-                placeholder="VD: Mua 5 cây thuốc mèo nhỏ, mua rau..."
-                className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-              />
-            </div>
-
-            <div className="lg:col-span-2">
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Nhóm khoản trừ
-                </label>
-                {canWrite && (
-                  <button
-                    type="button"
-                    onClick={() => setShowDedCategoryManager((v) => !v)}
-                    className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
-                  >
-                    + Tạo nhóm
-                  </button>
-                )}
-              </div>
-              <select
-                value={expenseCategory}
-                onChange={(e) => setExpenseCategory(e.target.value)}
-                className="w-full h-10 px-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-              >
-                {effectiveDeductionCategories.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="lg:col-span-1">
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Số lượng
-              </label>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={expenseQuantity || ''}
-                onChange={(e) => handleExpenseQuantityChange(e.target.value)}
-                onBlur={() => {
-                  if (!expenseQuantity || expenseQuantity < 1) {
-                    handleExpenseQuantityChange('1');
-                  }
-                }}
-                placeholder="1"
-                className="w-full h-10 px-2.5 text-xs font-mono font-bold text-center text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-              />
-            </div>
-
-            <div className="lg:col-span-2">
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Số tiền chi (/ 1 SL) *
-              </label>
-              <input
-                type="number"
-                min={0}
-                step="any"
-                value={expenseUnitPrice || ''}
-                onChange={(e) => handleExpenseUnitPriceChange(e.target.value)}
-                placeholder="VD: 155000"
-                className="w-full h-10 px-3 text-xs font-mono font-semibold text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-              />
-            </div>
-
-            <div className="lg:col-span-3">
-              <label className="block text-xs font-medium text-rose-700 dark:text-rose-300 mb-1">
-                Tổng tiền chi (₫) *
-              </label>
-              <input
-                type="number"
-                min={0}
-                step="any"
-                value={expenseAmount || ''}
-                onChange={(e) => handleExpenseTotalAmountChange(e.target.value)}
-                placeholder="VD: 775000"
-                className="w-full h-10 px-3 text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50/40 dark:bg-rose-950/20"
-              />
-            </div>
-
-            <div className="sm:col-span-2 lg:col-span-12 flex flex-col sm:flex-row sm:items-end gap-2.5 pt-1">
-              <div className="flex-1">
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Ghi chú thêm
-                </label>
-                <input
-                  type="text"
-                  value={expenseNote}
-                  onChange={(e) => setExpenseNote(e.target.value)}
-                  placeholder="Ghi chú thêm (tùy chọn)..."
-                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                />
-              </div>
-              <div className="flex items-center justify-between sm:justify-end gap-3">
-                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                  SL:{' '}
-                  <strong className="text-slate-800 dark:text-slate-200">
-                    {Math.max(1, Math.round(Number(expenseQuantity) || 1))}
-                  </strong>{' '}
-                  ×{' '}
-                  <strong className="text-slate-800 dark:text-slate-200">
-                    {formatVND(Number(expenseUnitPrice) || 0)}
-                  </strong>{' '}
-                  ={' '}
-                  <strong className="text-rose-600 dark:text-rose-400 font-bold">
-                    -{formatVND(Number(expenseAmount) || 0)}
-                  </strong>
+          {canWrite ? (
+            <>
+              {/* Quick Expense Presets */}
+              <div className="space-y-1.5">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                  Chọn nhanh khoản chi trực tiếp phổ biến trong ngày:
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {EXPENSE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.title}
+                      type="button"
+                      onClick={() => {
+                        setExpenseTitle(preset.title);
+                        setExpenseCategory(preset.category);
+                        setExpenseQuantity(1);
+                        setExpenseUnitPrice(preset.defaultAmount);
+                        setExpenseAmount(preset.defaultAmount);
+                        setExpensePriceMode('total');
+                      }}
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-rose-500 dark:hover:border-rose-500 bg-slate-50 dark:bg-slate-800/50 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+                    >
+                      + {preset.title}
+                    </button>
+                  ))}
                 </div>
-                <button
-                  type="submit"
-                  disabled={isSubmitting || !canWrite}
-                  className="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shrink-0 shadow-xs"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Lưu Khoản Trừ</span>
-                </button>
               </div>
+
+              <form
+                onSubmit={handleAddExpenseSubmit}
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800"
+              >
+                <div className="lg:col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Ngày chi (Khoản trừ)
+                  </label>
+                  <input
+                    type="date"
+                    value={deductionDate}
+                    onChange={(e) => setDeductionDate(e.target.value)}
+                    className="w-full h-10 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="lg:col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Nội dung khoản chi *
+                  </label>
+                  <input
+                    type="text"
+                    value={expenseTitle}
+                    onChange={(e) => setExpenseTitle(e.target.value)}
+                    placeholder="VD: Mua 5 cây thuốc mèo nhỏ, mua rau..."
+                    className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="lg:col-span-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                      Nhóm khoản trừ
+                    </label>
+                    {canWrite && (
+                      <button
+                        type="button"
+                        onClick={() => setShowDedCategoryManager((v) => !v)}
+                        className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
+                      >
+                        + Tạo nhóm
+                      </button>
+                    )}
+                  </div>
+                  <select
+                    value={expenseCategory}
+                    onChange={(e) => setExpenseCategory(e.target.value)}
+                    className="w-full h-10 px-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  >
+                    {effectiveDeductionCategories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="lg:col-span-1">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Số lượng
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={expenseQuantity || ''}
+                    onChange={(e) => handleExpenseQuantityChange(e.target.value)}
+                    onBlur={() => {
+                      if (!expenseQuantity || expenseQuantity < 1) {
+                        handleExpenseQuantityChange('1');
+                      }
+                    }}
+                    placeholder="1"
+                    className="w-full h-10 px-2.5 text-xs font-mono font-bold text-center text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+
+                <div className="lg:col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Số tiền chi (/ 1 SL) *
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={expenseUnitPrice || ''}
+                    onChange={(e) => handleExpenseUnitPriceChange(e.target.value)}
+                    placeholder="VD: 155000"
+                    className="w-full h-10 px-3 text-xs font-mono font-semibold text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+
+                <div className="lg:col-span-3">
+                  <label className="block text-xs font-medium text-rose-700 dark:text-rose-300 mb-1">
+                    Tổng tiền chi (₫) *
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={expenseAmount || ''}
+                    onChange={(e) => handleExpenseTotalAmountChange(e.target.value)}
+                    placeholder="VD: 775000"
+                    className="w-full h-10 px-3 text-xs font-mono font-bold text-rose-600 dark:text-rose-400 rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50/40 dark:bg-rose-950/20"
+                  />
+                </div>
+
+                <div className="sm:col-span-2 lg:col-span-12 flex flex-col sm:flex-row sm:items-end gap-2.5 pt-1">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Ghi chú thêm
+                    </label>
+                    <input
+                      type="text"
+                      value={expenseNote}
+                      onChange={(e) => setExpenseNote(e.target.value)}
+                      placeholder="Ghi chú thêm (tùy chọn)..."
+                      className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between sm:justify-end gap-3">
+                    <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      SL:{' '}
+                      <strong className="text-slate-800 dark:text-slate-200">
+                        {Math.max(1, Math.round(Number(expenseQuantity) || 1))}
+                      </strong>{' '}
+                      ×{' '}
+                      <strong className="text-slate-800 dark:text-slate-200">
+                        {formatVND(Number(expenseUnitPrice) || 0)}
+                      </strong>{' '}
+                      ={' '}
+                      <strong className="text-rose-600 dark:text-rose-400 font-bold">
+                        -{formatVND(Number(expenseAmount) || 0)}
+                      </strong>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || !canWrite}
+                      className="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shrink-0 shadow-xs"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Lưu Khoản Trừ</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </>
+          ) : (
+            <div className="p-3.5 rounded-xl border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-950/30 text-xs font-medium text-amber-800 dark:text-amber-300 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span>
+                Tài khoản đang ở chế độ <strong>Chỉ xem (Không được Thêm / Sửa / Xóa)</strong>. Bạn có thể tra cứu lịch sử khoản trừ bên dưới nhưng không thể thêm, sửa hoặc xóa khoản trừ.
+              </span>
             </div>
-          </form>
+          )}
         </div>
 
         {/* Deductions Filter & History Section */}
@@ -2063,7 +2079,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             </p>
           </div>
 
-          {canWrite && menuProductsCount > 0 && (
+          {canWrite && canDelete && menuProductsCount > 0 && (
             <button
               type="button"
               onClick={onDeleteAllMenuProducts}
@@ -2092,305 +2108,316 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           </div>
         )}
 
-        {/* Step 1: Quick Date Picker Chips */}
-        <div className="space-y-2">
-          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            Bước 1: Chọn Ngày Hóa Đơn có bia / món khách trả lại
-          </label>
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
-            <button
-              type="button"
-              onClick={() => setSelectedBillDate('all')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
-                selectedBillDate === 'all'
-                  ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300'
-                  : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              Tất cả ({bills.length} bill)
-            </button>
-            {availableBillDates.slice(0, 6).map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => {
-                  setSelectedBillDate(d);
-                  setSelectedBillId('');
-                }}
-                className={`px-3 py-1.5 rounded-xl text-xs font-mono border transition-colors whitespace-nowrap cursor-pointer ${
-                  selectedBillDate === d
-                    ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-bold'
-                    : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
-                }`}
-              >
-                {formatDateDMY(d)}
-                {d === todayStr ? ' (Hôm nay)' : d === yesterdayStr ? ' (Hôm qua)' : ''}
-              </button>
-            ))}
-            <input
-              type="date"
-              value={selectedBillDate === 'all' ? '' : selectedBillDate}
-              onChange={(e) => {
-                setSelectedBillDate(e.target.value || 'all');
-                setSelectedBillId('');
-              }}
-              className="px-2.5 py-1.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 shrink-0"
-            />
-          </div>
-        </div>
-
-        <form
-          onSubmit={handleConfirmReturn}
-          className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 pt-1"
-        >
-          {/* Step 2 & 3: Select Bill (ordered: Ngày tháng — Số bàn — Mã Bill — ...) & Item */}
-          <div className="lg:col-span-7 space-y-4">
+        {canWrite ? (
+          <>
+            {/* Step 1: Quick Date Picker Chips */}
             <div className="space-y-2">
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Bước 2: Chọn Hóa Đơn (Trình tự: Ngày tháng — Số bàn — Mã Bill — Hình thức — Các món)
+                Bước 1: Chọn Ngày Hóa Đơn có bia / món khách trả lại
               </label>
-              <select
-                value={activeBill?.id || ''}
-                onChange={(e) => {
-                  setSelectedBillId(e.target.value);
-                  setSelectedItemId('');
-                }}
-                className="w-full px-3 py-2.5 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-              >
-                {filteredBillsForDate.map((b) => {
-                  const tableLabel = extractBillTableName(b, 'Bàn lẻ');
-                  const dateDMY = formatDateDMY(b.billDate);
-                  return (
-                    <option key={b.id} value={b.id}>
-                      {dateDMY} — {tableLabel} — {b.billCode} — {PAYMENT_LABELS[b.paymentType]} (
-                      {formatVND(b.totalAmount)}) — {b.itemsSummary.slice(0, 50)}
-                    </option>
-                  );
-                })}
-              </select>
-
-              {/* Quick Interactive Bill Cards ordered by Ngày tháng -> Số bàn -> ... */}
-              {filteredBillsForDate.length > 0 && (
-                <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5">
-                  {filteredBillsForDate.slice(0, 8).map((b) => {
-                    const isPickedBill = activeBill?.id === b.id;
-                    const tableLabel = extractBillTableName(b, 'Bàn lẻ');
-                    return (
-                      <button
-                        key={b.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedBillId(b.id);
-                          setSelectedItemId('');
-                        }}
-                        className={`px-3 py-2 rounded-xl border text-left transition-all shrink-0 cursor-pointer ${
-                          isPickedBill
-                            ? 'border-indigo-600 bg-indigo-50/80 dark:bg-indigo-950/50 shadow-2xs'
-                            : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 hover:border-indigo-400'
-                        }`}
-                      >
-                        <div className="flex items-center gap-1.5 text-[11px] font-mono">
-                          <span className="font-bold text-slate-700 dark:text-slate-300">
-                            {formatDateDMY(b.billDate)}
-                          </span>
-                          <span className="text-slate-400">•</span>
-                          <span className="px-1.5 py-0.5 rounded bg-indigo-600 text-white font-sans font-bold text-[10px]">
-                            {tableLabel}
-                          </span>
-                        </div>
-                        <div className="mt-1 text-[11px] text-slate-600 dark:text-slate-400 font-mono">
-                          {b.billCode} · {formatVND(b.totalAmount)}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Bước 3: Chọn bia / món khách trả lại trong Bill{' '}
-                {activeBill && (
-                  <span className="text-indigo-600 dark:text-indigo-400 font-mono">
-                    ({formatDateDMY(activeBill.billDate)} —{' '}
-                    {extractBillTableName(activeBill, 'Bàn lẻ')} — {activeBill.billCode})
-                  </span>
-                )}
-              </label>
-
-              <div className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      <th className="py-2.5 px-3">Chọn</th>
-                      <th className="py-2.5 px-3">Tên món trong Bill</th>
-                      <th className="py-2.5 px-2 text-right">Đã mua</th>
-                      <th className="py-2.5 px-2 text-right">Đã trả</th>
-                      <th className="py-2.5 px-2 text-right">Còn lại</th>
-                      <th className="py-2.5 px-3 text-right">Đơn giá</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono">
-                    {itemsInActiveBill.map((it) => {
-                      const remain = Math.max(0, it.quantity - it.returnedQuantity);
-                      const isPicked = activeBillItem?.id === it.id;
-                      return (
-                        <tr
-                          key={it.id}
-                          onClick={() => {
-                            setSelectedItemId(it.id);
-                            setReturnQty(Math.min(1, remain));
-                          }}
-                          className={`cursor-pointer transition-colors ${
-                            isPicked
-                              ? 'bg-indigo-50/70 dark:bg-indigo-950/30'
-                              : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                          }`}
-                        >
-                          <td className="py-2.5 px-3">
-                            <input
-                              type="radio"
-                              name="returnItem"
-                              checked={isPicked}
-                              onChange={() => setSelectedItemId(it.id)}
-                              className="text-indigo-600 focus:ring-indigo-500"
-                            />
-                          </td>
-                          <td className="py-2.5 px-3 font-sans font-semibold text-slate-900 dark:text-white">
-                            {it.productName}
-                          </td>
-                          <td className="py-2.5 px-2 text-right">{it.quantity}</td>
-                          <td className="py-2.5 px-2 text-right text-indigo-600 dark:text-indigo-400">
-                            {it.returnedQuantity}
-                          </td>
-                          <td className="py-2.5 px-2 text-right font-bold text-emerald-600 dark:text-emerald-400">
-                            {remain}
-                          </td>
-                          <td className="py-2.5 px-3 text-right">{formatVND(it.unitPrice)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          {/* Step 4: Table Number, Quantity & Single Cashflow Preview */}
-          <div className="lg:col-span-5 p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-slate-50/60 dark:bg-slate-950/40 flex flex-col justify-between space-y-4">
-            <div className="space-y-3.5">
-              <div className="pb-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
-                <div>
-                  <span className="text-[11px] text-slate-500 block">
-                    Món / Bia đang chọn hoàn trả:
-                  </span>
-                  <span className="text-sm font-bold text-slate-900 dark:text-white">
-                    {activeBillItem ? activeBillItem.productName : 'Chưa chọn món'}
-                  </span>
-                </div>
-                {activeBill && (
-                  <span className="px-2.5 py-1 rounded-lg bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 font-mono text-xs font-bold">
-                    {formatDateDMY(activeBill.billDate)}
-                  </span>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Số bàn hoàn trả (Tự động lấy từ Bill hoặc nhập bổ sung) *
-                </label>
-                <div className="relative">
-                  <MapPin className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={returnTableName}
-                    onChange={(e) => setReturnTableName(e.target.value)}
-                    placeholder="VD: Bàn 08, Bàn VIP 1..."
-                    className="w-full pl-8 pr-3 py-2 text-xs font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Số lượng trả (Tối đa: {maxReturnableQty})
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={Math.max(1, maxReturnableQty)}
-                    value={returnQty}
-                    onChange={(e) => setReturnQty(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Ngày hoàn trả (Tính vào Khoản trừ)
-                  </label>
-                  <input
-                    type="date"
-                    value={returnDate}
-                    onChange={(e) => setReturnDate(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              {/* Live Preview of Khoản Trừ Content (Số bàn - Tên món - SL hoàn trả) */}
-              <div className="p-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/60 dark:bg-rose-950/30 space-y-1">
-                <div className="flex items-center justify-between text-[11px] font-semibold text-rose-700 dark:text-rose-300">
-                  <span>Tự động ghi vào Khoản trừ ngày {formatDateDMY(returnDate)}:</span>
-                  <span className="font-mono">1 dòng tiền duy nhất</span>
-                </div>
-                <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <ArrowRight className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>{previewDeductionTitle}</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Ghi chú thêm (Tùy chọn)
-                </label>
-                <textarea
-                  rows={2}
-                  value={returnNote}
-                  onChange={(e) => setReturnNote(e.target.value)}
-                  placeholder="Ví dụ: Khách trả lại bia chưa khui cuối buổi..."
-                  className="w-full p-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBillDate('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
+                    selectedBillDate === 'all'
+                      ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300'
+                      : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  Tất cả ({bills.length} bill)
+                </button>
+                {availableBillDates.slice(0, 6).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => {
+                      setSelectedBillDate(d);
+                      setSelectedBillId('');
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-mono border transition-colors whitespace-nowrap cursor-pointer ${
+                      selectedBillDate === d
+                        ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-bold'
+                        : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {formatDateDMY(d)}
+                    {d === todayStr ? ' (Hôm nay)' : d === yesterdayStr ? ' (Hôm qua)' : ''}
+                  </button>
+                ))}
+                <input
+                  type="date"
+                  value={selectedBillDate === 'all' ? '' : selectedBillDate}
+                  onChange={(e) => {
+                    setSelectedBillDate(e.target.value || 'all');
+                    setSelectedBillId('');
+                  }}
+                  className="px-2.5 py-1.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 shrink-0"
                 />
               </div>
             </div>
 
-            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
-              <div className="flex items-center justify-between text-xs font-mono">
-                <span className="text-slate-500">
-                  Tiền hoàn trả (= Tính vào Khoản trừ ngày):
-                </span>
-                <span className="text-base font-bold text-rose-600 dark:text-rose-400">
-                  -{formatVND((activeBillItem?.unitPrice || 0) * (returnQty || 0))}
-                </span>
+            <form
+              onSubmit={handleConfirmReturn}
+              className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 pt-1"
+            >
+              {/* Step 2 & 3: Select Bill (ordered: Ngày tháng — Số bàn — Mã Bill — ...) & Item */}
+              <div className="lg:col-span-7 space-y-4">
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Bước 2: Chọn Hóa Đơn (Trình tự: Ngày tháng — Số bàn — Mã Bill — Hình thức — Các món)
+                  </label>
+                  <select
+                    value={activeBill?.id || ''}
+                    onChange={(e) => {
+                      setSelectedBillId(e.target.value);
+                      setSelectedItemId('');
+                    }}
+                    className="w-full px-3 py-2.5 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  >
+                    {filteredBillsForDate.map((b) => {
+                      const tableLabel = extractBillTableName(b, 'Bàn lẻ');
+                      const dateDMY = formatDateDMY(b.billDate);
+                      return (
+                        <option key={b.id} value={b.id}>
+                          {dateDMY} — {tableLabel} — {b.billCode} — {PAYMENT_LABELS[b.paymentType]} (
+                          {formatVND(b.totalAmount)}) — {b.itemsSummary.slice(0, 50)}
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  {/* Quick Interactive Bill Cards ordered by Ngày tháng -> Số bàn -> ... */}
+                  {filteredBillsForDate.length > 0 && (
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5">
+                      {filteredBillsForDate.slice(0, 8).map((b) => {
+                        const isPickedBill = activeBill?.id === b.id;
+                        const tableLabel = extractBillTableName(b, 'Bàn lẻ');
+                        return (
+                          <button
+                            key={b.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedBillId(b.id);
+                              setSelectedItemId('');
+                            }}
+                            className={`px-3 py-2 rounded-xl border text-left transition-all shrink-0 cursor-pointer ${
+                              isPickedBill
+                                ? 'border-indigo-600 bg-indigo-50/80 dark:bg-indigo-950/50 shadow-2xs'
+                                : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 hover:border-indigo-400'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 text-[11px] font-mono">
+                              <span className="font-bold text-slate-700 dark:text-slate-300">
+                                {formatDateDMY(b.billDate)}
+                              </span>
+                              <span className="text-slate-400">•</span>
+                              <span className="px-1.5 py-0.5 rounded bg-indigo-600 text-white font-sans font-bold text-[10px]">
+                                {tableLabel}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-600 dark:text-slate-400 font-mono">
+                              {b.billCode} · {formatVND(b.totalAmount)}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Bước 3: Chọn bia / món khách trả lại trong Bill{' '}
+                    {activeBill && (
+                      <span className="text-indigo-600 dark:text-indigo-400 font-mono">
+                        ({formatDateDMY(activeBill.billDate)} —{' '}
+                        {extractBillTableName(activeBill, 'Bàn lẻ')} — {activeBill.billCode})
+                      </span>
+                    )}
+                  </label>
+
+                  <div className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                          <th className="py-2.5 px-3">Chọn</th>
+                          <th className="py-2.5 px-3">Tên món trong Bill</th>
+                          <th className="py-2.5 px-2 text-right">Đã mua</th>
+                          <th className="py-2.5 px-2 text-right">Đã trả</th>
+                          <th className="py-2.5 px-2 text-right">Còn lại</th>
+                          <th className="py-2.5 px-3 text-right">Đơn giá</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono">
+                        {itemsInActiveBill.map((it) => {
+                          const remain = Math.max(0, it.quantity - it.returnedQuantity);
+                          const isPicked = activeBillItem?.id === it.id;
+                          return (
+                            <tr
+                              key={it.id}
+                              onClick={() => {
+                                setSelectedItemId(it.id);
+                                setReturnQty(Math.min(1, remain));
+                              }}
+                              className={`cursor-pointer transition-colors ${
+                                isPicked
+                                  ? 'bg-indigo-50/70 dark:bg-indigo-950/30'
+                                  : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                              }`}
+                            >
+                              <td className="py-2.5 px-3">
+                                <input
+                                  type="radio"
+                                  name="returnItem"
+                                  checked={isPicked}
+                                  onChange={() => setSelectedItemId(it.id)}
+                                  className="text-indigo-600 focus:ring-indigo-500"
+                                />
+                              </td>
+                              <td className="py-2.5 px-3 font-sans font-semibold text-slate-900 dark:text-white">
+                                {it.productName}
+                              </td>
+                              <td className="py-2.5 px-2 text-right">{it.quantity}</td>
+                              <td className="py-2.5 px-2 text-right text-indigo-600 dark:text-indigo-400">
+                                {it.returnedQuantity}
+                              </td>
+                              <td className="py-2.5 px-2 text-right font-bold text-emerald-600 dark:text-emerald-400">
+                                {remain}
+                              </td>
+                              <td className="py-2.5 px-3 text-right">{formatVND(it.unitPrice)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={isSubmitting || !canWrite || maxReturnableQty <= 0}
-                className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
-              >
-                <RotateCcw className="w-4 h-4" />
-                <span>
-                  {isSubmitting
-                    ? 'Đang lưu hoàn trả & khoản trừ...'
-                    : 'Xác Nhận Hoàn Trả & Tính Vào Khoản Trừ Ngày'}
-                </span>
-              </button>
-            </div>
+              {/* Step 4: Table Number, Quantity & Single Cashflow Preview */}
+              <div className="lg:col-span-5 p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-slate-50/60 dark:bg-slate-950/40 flex flex-col justify-between space-y-4">
+                <div className="space-y-3.5">
+                  <div className="pb-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">
+                        Món / Bia đang chọn hoàn trả:
+                      </span>
+                      <span className="text-sm font-bold text-slate-900 dark:text-white">
+                        {activeBillItem ? activeBillItem.productName : 'Chưa chọn món'}
+                      </span>
+                    </div>
+                    {activeBill && (
+                      <span className="px-2.5 py-1 rounded-lg bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 font-mono text-xs font-bold">
+                        {formatDateDMY(activeBill.billDate)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Số bàn hoàn trả (Tự động lấy từ Bill hoặc nhập bổ sung) *
+                    </label>
+                    <div className="relative">
+                      <MapPin className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={returnTableName}
+                        onChange={(e) => setReturnTableName(e.target.value)}
+                        placeholder="VD: Bàn 08, Bàn VIP 1..."
+                        className="w-full pl-8 pr-3 py-2 text-xs font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Số lượng trả (Tối đa: {maxReturnableQty})
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={Math.max(1, maxReturnableQty)}
+                        value={returnQty}
+                        onChange={(e) => setReturnQty(Number(e.target.value))}
+                        className="w-full px-3 py-2 text-sm font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Ngày hoàn trả (Tính vào Khoản trừ)
+                      </label>
+                      <input
+                        type="date"
+                        value={returnDate}
+                        onChange={(e) => setReturnDate(e.target.value)}
+                        className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Live Preview of Khoản Trừ Content (Số bàn - Tên món - SL hoàn trả) */}
+                  <div className="p-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/60 dark:bg-rose-950/30 space-y-1">
+                    <div className="flex items-center justify-between text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                      <span>Tự động ghi vào Khoản trừ ngày {formatDateDMY(returnDate)}:</span>
+                      <span className="font-mono">1 dòng tiền duy nhất</span>
+                    </div>
+                    <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <ArrowRight className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span>{previewDeductionTitle}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Ghi chú thêm (Tùy chọn)
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={returnNote}
+                      onChange={(e) => setReturnNote(e.target.value)}
+                      placeholder="Ví dụ: Khách trả lại bia chưa khui cuối buổi..."
+                      className="w-full p-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-slate-500">
+                      Tiền hoàn trả (= Tính vào Khoản trừ ngày):
+                    </span>
+                    <span className="text-base font-bold text-rose-600 dark:text-rose-400">
+                      -{formatVND((activeBillItem?.unitPrice || 0) * (returnQty || 0))}
+                    </span>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSubmitting || !canWrite || maxReturnableQty <= 0}
+                    className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    <span>
+                      {isSubmitting
+                        ? 'Đang lưu hoàn trả & khoản trừ...'
+                        : 'Xác Nhận Hoàn Trả & Tính Vào Khoản Trừ Ngày'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          </>
+        ) : (
+          <div className="p-3.5 rounded-xl border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-950/30 text-xs font-medium text-amber-800 dark:text-amber-300 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>
+              Tài khoản đang ở chế độ <strong>Chỉ xem (Không được Thêm / Sửa / Xóa)</strong>. Bạn có thể tra cứu lịch sử hoàn trả bên dưới nhưng không thể ghi nhận hoặc xóa phiếu hoàn trả.
+            </span>
           </div>
-        </form>
+        )}
       </div>
 
       {/* Returns History */}

@@ -30,6 +30,7 @@ import {
   InventoryItemConfig,
   DailyInventoryEntry,
   InventoryImportLog,
+  EmployeeRecord,
 } from '../types';
 import {
   sanitizeId,
@@ -110,13 +111,22 @@ export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
 export function normalizeStaffAccountsWithFixedAdmin(
   accounts?: StaffAccount[] | null
 ): StaffAccount[] {
+  const deletedStaff = getDeletedStaffAccountIds();
   const rawList =
     Array.isArray(accounts) && accounts.length > 0
       ? accounts
       : DEFAULT_STAFF_ACCOUNTS;
 
   let hasAdmin = false;
-  const normalized = rawList.map((acc) => {
+  const filteredRaw = rawList.filter((acc) => {
+    const isPrimaryAdmin =
+      acc.username?.trim().toLowerCase() === FIXED_ADMIN_USERNAME ||
+      acc.id === 'staff_admin';
+    if (isPrimaryAdmin) return true;
+    return !deletedStaff.has(acc.id) && !deletedStaff.has(sanitizeId(acc.id));
+  });
+
+  const normalized = filteredRaw.map((acc) => {
     const isPrimaryAdmin =
       acc.username?.trim().toLowerCase() === FIXED_ADMIN_USERNAME ||
       acc.id === 'staff_admin';
@@ -154,7 +164,89 @@ export function normalizeStaffAccountsWithFixedAdmin(
 const LOCAL_CACHE_KEY = 'vqbill_cloud_mirror_v2';
 const DELETED_BILLS_KEY = 'vqbill_deleted_bills_v1';
 const DELETED_DEBTORS_KEY = 'vqbill_deleted_debtors_v1';
+const DELETED_EMPLOYEES_KEY = 'vqbill_deleted_employees_v1';
+const DELETED_STAFF_ACCOUNTS_KEY = 'vqbill_deleted_staff_accounts_v1';
 export const SHARED_WORKSPACE_ID = 'vqbill_shared_workspace';
+
+export function getDeletedEmployeeIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_EMPLOYEES_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function markEmployeesDeletedLocally(empIds: string[]): void {
+  try {
+    const set = getDeletedEmployeeIds();
+    for (const id of empIds) {
+      if (id) {
+        set.add(id);
+        set.add(sanitizeId(id));
+      }
+    }
+    localStorage.setItem(DELETED_EMPLOYEES_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function unmarkEmployeeDeletedLocally(empId: string): void {
+  try {
+    const set = getDeletedEmployeeIds();
+    set.delete(empId);
+    set.delete(sanitizeId(empId));
+    localStorage.setItem(DELETED_EMPLOYEES_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function getDeletedStaffAccountIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_STAFF_ACCOUNTS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function markStaffAccountsDeletedLocally(accountIds: string[]): void {
+  try {
+    const set = getDeletedStaffAccountIds();
+    for (const id of accountIds) {
+      if (id && id !== 'staff_admin') {
+        set.add(id);
+        set.add(sanitizeId(id));
+      }
+    }
+    localStorage.setItem(
+      DELETED_STAFF_ACCOUNTS_KEY,
+      JSON.stringify(Array.from(set))
+    );
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function unmarkStaffAccountDeletedLocally(accountId: string): void {
+  try {
+    const set = getDeletedStaffAccountIds();
+    set.delete(accountId);
+    set.delete(sanitizeId(accountId));
+    localStorage.setItem(
+      DELETED_STAFF_ACCOUNTS_KEY,
+      JSON.stringify(Array.from(set))
+    );
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export function getDeletedBillIds(): Set<string> {
   try {
@@ -265,14 +357,49 @@ function filterSnapshotByTombstones(
     ? snap.debtors.filter((d) => !deletedDebtors.has((d || '').trim().toLowerCase()))
     : undefined;
 
+  let filteredInventoryData = snap.inventoryData;
+  if (filteredInventoryData) {
+    if (
+      Array.isArray(filteredInventoryData.deletedEmployeeIds) &&
+      filteredInventoryData.deletedEmployeeIds.length > 0
+    ) {
+      markEmployeesDeletedLocally(filteredInventoryData.deletedEmployeeIds);
+    }
+    const deletedEmps = getDeletedEmployeeIds();
+    const allDeletedEmpIds = Array.from(
+      new Set([
+        ...Array.from(deletedEmps),
+        ...(filteredInventoryData.deletedEmployeeIds || []),
+      ])
+    );
+    if (Array.isArray(filteredInventoryData.employees)) {
+      filteredInventoryData = {
+        ...filteredInventoryData,
+        deletedEmployeeIds: allDeletedEmpIds,
+        employees: filteredInventoryData.employees.filter(
+          (e) =>
+            !deletedEmps.has(e.id) &&
+            !deletedEmps.has(sanitizeId(e.id))
+        ),
+      };
+    } else if (allDeletedEmpIds.length > 0) {
+      filteredInventoryData = {
+        ...filteredInventoryData,
+        deletedEmployeeIds: allDeletedEmpIds,
+      };
+    }
+  }
+
   return {
     ...snap,
+    inventoryData: filteredInventoryData,
     products: filteredProducts,
     bills: filteredBills,
     billItems: filteredBillItems,
     deductions: filteredDeductions,
     returns: filteredReturns,
     debtors: filteredDebtors,
+    staffAccounts: normalizeStaffAccountsWithFixedAdmin(snap.staffAccounts),
   };
 }
 
@@ -1070,6 +1197,7 @@ export async function saveStaffAccountToFirebase(
 ): Promise<void> {
   const cleanOwner = sanitizeId(ownerId);
   const accId = sanitizeId(account.id);
+  unmarkStaffAccountDeletedLocally(accId);
   const isPrimaryAdmin =
     account.username.trim().toLowerCase() === FIXED_ADMIN_USERNAME ||
     accId === 'staff_admin';
@@ -1151,6 +1279,7 @@ export async function deleteStaffAccountsFromFirebase(
   accountIds: string[]
 ): Promise<void> {
   const cleanOwner = sanitizeId(ownerId);
+  markStaffAccountsDeletedLocally(accountIds);
   for (const id of accountIds) {
     const cleanId = sanitizeId(id);
     await removeFromRtdbSafe(`workspaces/${cleanOwner}/staff_accounts/${cleanId}`);
@@ -1161,7 +1290,7 @@ export async function deleteStaffAccountsFromFirebase(
   try {
     for (const id of accountIds) {
       const cleanId = sanitizeId(id);
-      await deleteDoc(doc(db, 'staff_accounts', cleanId));
+      await deleteDoc(doc(db, 'staff_accounts', cleanId)).catch(() => {});
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, 'staff_accounts');
@@ -1801,6 +1930,8 @@ export async function saveExpenseDeductionToCloud(params: {
   amount: number;
   billCode?: string;
   billDate?: string;
+  customId?: string;
+  customBillId?: string;
   note: string;
 }): Promise<DeductionRecord> {
   const {
@@ -1813,6 +1944,8 @@ export async function saveExpenseDeductionToCloud(params: {
     amount,
     billCode = 'CHI-TRONG-NGAY-V2',
     billDate,
+    customId,
+    customBillId,
     note,
   } = params;
 
@@ -1836,12 +1969,14 @@ export async function saveExpenseDeductionToCloud(params: {
     ? deductionDate
     : getCurrentBusinessDate();
 
-  const deductionId = sanitizeId(`ded_${now}_${Math.random().toString(36).slice(2, 6)}`);
+  const deductionId = sanitizeId(
+    customId || `ded_${now}_${Math.random().toString(36).slice(2, 6)}`
+  );
 
   const deduction: DeductionRecord = {
     id: deductionId,
     ownerId: cleanOwnerId,
-    billId: `expense_${now}`,
+    billId: sanitizeId(customBillId || `expense_${now}`),
     billCode: truncateStr(billCode || 'CHI-TRONG-NGAY', 64, 'CHI-TRONG-NGAY'),
     billDate: billDate && /^\d{4}-\d{2}-\d{2}$/.test(billDate) ? billDate : effDate,
     deductionDate: effDate,
@@ -2593,8 +2728,92 @@ export function buildInitialInventoryData(
     },
   ];
 
+  const deletedEmps = getDeletedEmployeeIds();
+  const defaultEmployees: EmployeeRecord[] = [
+    {
+      id: 'emp_seed_4',
+      fullName: 'Phạm Thị Mai',
+      roleOrPosition: 'Nhân viên phục vụ',
+      phone: '0933456789',
+      baseSalary: 6000000,
+      note: 'Phục vụ khu Sân vườn & VIP',
+      active: true,
+      hasLoginAccount: false,
+      createdAtMs: now - 86400000 * 10,
+      updatedAtMs: now - 86400000 * 10,
+    },
+    {
+      id: 'emp_seed_3',
+      fullName: 'Nguyễn Văn Hùng',
+      roleOrPosition: 'Nhân viên phục vụ',
+      phone: '0987654321',
+      baseSalary: 6500000,
+      note: 'Phục vụ bàn & tiếp thực ca tối',
+      active: true,
+      hasLoginAccount: false,
+      createdAtMs: now - 86400000 * 10,
+      updatedAtMs: now - 86400000 * 10,
+    },
+    {
+      id: 'emp_seed_1',
+      fullName: 'Lê Thu Hà',
+      roleOrPosition: 'Thu ngân',
+      phone: '0905123456',
+      baseSalary: 7500000,
+      note: 'Ca chính sáng & tối',
+      active: true,
+      hasLoginAccount: true,
+      systemRole: UserRole.CASHIER,
+      username: 'thungan',
+      password: '123456',
+      linkedStaffAccountId: 'staff_cashier',
+      allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.CASHIER].allowedTabs,
+      createdAtMs: now - 86400000 * 10,
+      updatedAtMs: now - 86400000 * 10,
+    },
+    {
+      id: 'emp_seed_2',
+      fullName: 'Trần Minh Quân',
+      roleOrPosition: 'Quản lý',
+      phone: '0918234567',
+      baseSalary: 11000000,
+      note: 'Quản lý chung',
+      active: true,
+      hasLoginAccount: true,
+      systemRole: UserRole.MANAGER,
+      username: 'quanly',
+      password: '123456',
+      linkedStaffAccountId: 'staff_manager',
+      allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.MANAGER].allowedTabs,
+      createdAtMs: now - 86400000 * 10,
+      updatedAtMs: now - 86400000 * 10,
+    },
+    {
+      id: 'emp_seed_5',
+      fullName: 'Hoàng Văn Nam',
+      roleOrPosition: 'Kiểm kho',
+      phone: '0977112233',
+      baseSalary: 6500000,
+      note: 'Phụ trách kho bia & nước ngọt',
+      active: true,
+      hasLoginAccount: true,
+      systemRole: UserRole.INVENTORY,
+      username: 'kiemkho',
+      password: '123456',
+      linkedStaffAccountId: 'staff_inventory',
+      allowedTabs: DEFAULT_ROLE_PERMISSIONS[UserRole.INVENTORY].allowedTabs,
+      createdAtMs: now - 86400000 * 10,
+      updatedAtMs: now - 86400000 * 10,
+    },
+  ].filter(
+    (e) => !deletedEmps.has(e.id) && !deletedEmps.has(sanitizeId(e.id))
+  );
+
   return {
     trackedCategories: ['Bia', 'Nước ngọt'],
+    employees: defaultEmployees,
+    deletedEmployeeIds: Array.from(deletedEmps),
+    salaryAdvances: [],
     itemConfigs,
     dailyEntries: {
       [yesterday]: yesterdayEntries,

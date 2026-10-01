@@ -44,6 +44,7 @@ import {
   Boxes,
   UserCheck,
   Scissors,
+  Wallet,
 } from 'lucide-react';
 import {
   auth,
@@ -78,6 +79,8 @@ import {
   DEFAULT_DEDUCTION_CATEGORIES,
   DebtPaymentRecord,
   CalendarEventNote,
+  EmployeeRecord,
+  SalaryAdvanceRecord,
 } from './types';
 import {
   formatVND,
@@ -137,6 +140,12 @@ import {
   getDeletedDebtors,
   markDebtorsDeletedLocally,
   unmarkDebtorDeletedLocally,
+  getDeletedEmployeeIds,
+  markEmployeesDeletedLocally,
+  unmarkEmployeeDeletedLocally,
+  getDeletedStaffAccountIds,
+  markStaffAccountsDeletedLocally,
+  unmarkStaffAccountDeletedLocally,
   dedupeRecordsById,
 } from './services/dataService';
 import { AuthScreen } from './components/AuthScreen';
@@ -149,6 +158,7 @@ import { BeverageInventoryTab } from './components/BeverageInventoryTab';
 import { OwnerConsumptionTab } from './components/OwnerConsumptionTab';
 import { DebtManagerTab } from './components/DebtManagerTab';
 import { ReturnsDeductionsTab } from './components/ReturnsDeductionsTab';
+import { SalaryAdvanceTab, EmployeeUpsertInput } from './components/SalaryAdvanceTab';
 import { ProductCatalogTab } from './components/ProductCatalogTab';
 import { AccountsManagerTab } from './components/AccountsManagerTab';
 import { BillEditModal } from './components/BillEditModal';
@@ -328,6 +338,7 @@ export default function App() {
       debts: '/cong-no',
       deductions: '/khoan-tru',
       returns: '/hoan-tra',
+      salary_advances: '/ung-luong',
       products: '/thuc-don',
       accounts: '/tai-khoan',
     }),
@@ -345,6 +356,7 @@ export default function App() {
       'debts',
       'deductions',
       'returns',
+      'salary_advances',
       'products',
       'accounts',
     ];
@@ -456,9 +468,12 @@ export default function App() {
   const activeRole = currentStaffAccount?.role || UserRole.VIEWER;
   const isAdminUser =
     activeRole === UserRole.ADMIN || allowedTabs.includes('accounts');
-  const canWrite = effectivePermissions.canWrite || isAdminUser;
+  const isCurrentTabReadOnly =
+    !isAdminUser && effectivePermissions.readOnlyTabs.includes(activeTab);
+  const canWrite =
+    isAdminUser || (!isCurrentTabReadOnly && effectivePermissions.canWrite);
   const canDelete =
-    effectivePermissions.canDelete || effectivePermissions.canWrite || isAdminUser;
+    isAdminUser || (!isCurrentTabReadOnly && effectivePermissions.canDelete);
 
   // Enforce activeTab to always be within allowedTabs for the logged-in account
   useEffect(() => {
@@ -610,7 +625,28 @@ export default function App() {
       setCategories(nextCats);
       setRolePermissions(nextRoles);
       if (remoteSnap.inventoryData) {
-        setInventoryData(remoteSnap.inventoryData);
+        const incomingInv = remoteSnap.inventoryData;
+        if (
+          Array.isArray(incomingInv.deletedEmployeeIds) &&
+          incomingInv.deletedEmployeeIds.length > 0
+        ) {
+          markEmployeesDeletedLocally(incomingInv.deletedEmployeeIds);
+        }
+        const delEmpSet = getDeletedEmployeeIds();
+        setInventoryData((prev) => {
+          if ((prev.updatedAtMs || 0) > (incomingInv.updatedAtMs || 0)) {
+            return prev;
+          }
+          return {
+            ...incomingInv,
+            deletedEmployeeIds: Array.from(delEmpSet),
+            employees: Array.isArray(incomingInv.employees)
+              ? incomingInv.employees.filter(
+                  (e) => !delEmpSet.has(e.id) && !delEmpSet.has(sanitizeId(e.id))
+                )
+              : prev.employees,
+          };
+        });
       }
       setProducts(nextProducts);
       setBills(nextBills);
@@ -1217,7 +1253,30 @@ export default function App() {
                 ...restRoles,
               }));
               if (_inventoryData && typeof _inventoryData === 'object') {
-                setInventoryData(_inventoryData as WorkspaceInventoryData);
+                const incomingInv = _inventoryData as WorkspaceInventoryData;
+                if (
+                  Array.isArray(incomingInv.deletedEmployeeIds) &&
+                  incomingInv.deletedEmployeeIds.length > 0
+                ) {
+                  markEmployeesDeletedLocally(incomingInv.deletedEmployeeIds);
+                }
+                const delEmpSet = getDeletedEmployeeIds();
+                setInventoryData((prev) => {
+                  if ((prev.updatedAtMs || 0) > (incomingInv.updatedAtMs || 0)) {
+                    return prev;
+                  }
+                  return {
+                    ...incomingInv,
+                    deletedEmployeeIds: Array.from(delEmpSet),
+                    employees: Array.isArray(incomingInv.employees)
+                      ? incomingInv.employees.filter(
+                          (e) =>
+                            !delEmpSet.has(e.id) &&
+                            !delEmpSet.has(sanitizeId(e.id))
+                        )
+                      : prev.employees,
+                  };
+                });
               }
             }
           } catch {
@@ -1649,13 +1708,72 @@ export default function App() {
       }
     }
 
+    // Ensure every SalaryAdvanceRecord is synchronized into effectiveDeductions (1 dòng tiền duy nhất)
+    const uniqueSalaryAdvances = dedupeRecordsById(
+      inventoryData.salaryAdvances || []
+    );
+    for (const adv of uniqueSalaryAdvances) {
+      const expectedDedId = sanitizeId(
+        adv.linkedDeductionId || `ded_${adv.id}`
+      );
+      const alreadyLinkedIdx = result.findIndex(
+        (d) =>
+          d.id === expectedDedId ||
+          d.id === adv.linkedDeductionId ||
+          d.id === `ded_${adv.id}` ||
+          d.billId === adv.id
+      );
+      const advTitle = `Ứng lương: ${adv.employeeName}${
+        adv.employeeRole ? ` (${adv.employeeRole})` : ''
+      }`;
+      const advDate = adv.advanceDate || todayStr;
+      const advAmt = Math.max(0, Math.round(Number(adv.amount) || 0));
+
+      if (alreadyLinkedIdx >= 0) {
+        const existing = result[alreadyLinkedIdx];
+        const advNewer = (adv.updatedAtMs || 0) >= (existing.updatedAtMs || 0);
+        if (advNewer) {
+          result[alreadyLinkedIdx] = {
+            ...existing,
+            deductionDate: advDate,
+            billDate: advDate,
+            billCode: 'UNG-LUONG',
+            productName: advTitle,
+            category: 'Ứng lương nhân viên',
+            quantity: 1,
+            unitPrice: advAmt,
+            amount: advAmt,
+            note: adv.note || existing.note || '',
+          };
+        }
+      } else {
+        const ts = adv.createdAtMs || Date.now();
+        result.push({
+          id: expectedDedId,
+          ownerId: adv.ownerId || ownerId,
+          billId: adv.id,
+          billCode: 'UNG-LUONG',
+          billDate: advDate,
+          deductionDate: advDate,
+          productName: advTitle,
+          category: 'Ứng lương nhân viên',
+          quantity: 1,
+          unitPrice: advAmt,
+          amount: advAmt,
+          note: adv.note || '',
+          createdAtMs: ts,
+          updatedAtMs: adv.updatedAtMs || ts,
+        });
+      }
+    }
+
     return result.sort(
       (a, b) =>
         String(b.deductionDate || b.billDate || '').localeCompare(
           String(a.deductionDate || a.billDate || '')
         ) || (b.createdAtMs || 0) - (a.createdAtMs || 0)
     );
-  }, [deductions, returns, bills, ownerId, todayStr]);
+  }, [deductions, returns, bills, ownerId, todayStr, inventoryData.salaryAdvances]);
 
   const periodDeductions = useMemo(() => {
     return effectiveDeductions.filter((d) => isDateInPeriod(d.deductionDate));
@@ -1876,10 +1994,15 @@ export default function App() {
     if (syncAccountsOfRoles) {
       const updatedStaffList = staffAccounts.map((acc) => {
         const roleCfg = updatedMap[acc.role] || DEFAULT_ROLE_PERMISSIONS[acc.role];
+        const isAccAdmin =
+          acc.username.toLowerCase() === 'admin' || acc.role === UserRole.ADMIN;
         return {
           ...acc,
           allowedTabs: roleCfg.allowedTabs,
           useCustomTabs: false,
+          actionMode: isAccAdmin
+            ? ('full_crud' as const)
+            : ('role_default' as const),
           useCustomProductCategories: false,
           restrictProductCategories: Boolean(roleCfg.restrictProductCategories),
           allowedProductCategories: roleCfg.allowedProductCategories || [],
@@ -1951,17 +2074,59 @@ export default function App() {
 
   const handleDeleteStaffAccount = async (accountId: string) => {
     setWorkspaceInitialized(true);
+    isApplyingRemoteSnapshotRef.current = false;
+    markStaffAccountsDeletedLocally([accountId]);
+    const removedAcc = staffAccounts.find((a) => a.id === accountId);
     setStaffAccounts((prev) => prev.filter((a) => a.id !== accountId));
+
+    // Also unlink any employee that was using this staff account so they revert to default Nhân viên phục vụ (no login account)
+    if (Array.isArray(inventoryData.employees)) {
+      const now = Date.now();
+      let changedEmp = false;
+      const nextEmps = inventoryData.employees.map((e) => {
+        if (
+          e.linkedStaffAccountId === accountId ||
+          (removedAcc &&
+            e.username &&
+            e.username.toLowerCase() === removedAcc.username.toLowerCase())
+        ) {
+          changedEmp = true;
+          return {
+            ...e,
+            hasLoginAccount: false,
+            systemRole: undefined,
+            username: undefined,
+            password: undefined,
+            linkedStaffAccountId: undefined,
+            roleOrPosition: 'Nhân viên phục vụ',
+            updatedAtMs: now,
+          };
+        }
+        return e;
+      });
+      if (changedEmp) {
+        const nextInv: WorkspaceInventoryData = {
+          ...inventoryData,
+          employees: nextEmps,
+          updatedAtMs: now,
+        };
+        setInventoryData(nextInv);
+        saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+      }
+    }
+
     await deleteStaffAccountsFromFirebase(ownerId, [accountId]);
     showToast('Đã xóa tài khoản khỏi hệ thống Firebase.');
   };
 
   const handleDeleteAllNonAdminAccounts = async () => {
     setWorkspaceInitialized(true);
+    isApplyingRemoteSnapshotRef.current = false;
     const toRemove = staffAccounts.filter(
       (a) => a.username !== 'admin' && a.id !== currentStaffAccount?.id
     );
     const ids = toRemove.map((a) => a.id);
+    markStaffAccountsDeletedLocally(ids);
     setStaffAccounts((prev) => prev.filter((a) => !ids.includes(a.id)));
     await deleteStaffAccountsFromFirebase(ownerId, ids);
     showToast(`Đã xóa ${ids.length} tài khoản nhân viên phụ khỏi Firebase.`);
@@ -3110,6 +3275,35 @@ export default function App() {
       );
     }
 
+    // Two-way sync: If this deduction is linked to a SalaryAdvanceRecord, update the salary advance too
+    const currentAdvances = inventoryData.salaryAdvances || [];
+    const linkedAdvIdx = currentAdvances.findIndex(
+      (adv) =>
+        adv.linkedDeductionId === params.deduction.id ||
+        sanitizeId(`ded_${adv.id}`) === params.deduction.id ||
+        adv.id === params.deduction.billId
+    );
+    if (linkedAdvIdx >= 0) {
+      const nextAdvances = currentAdvances.map((adv, idx) =>
+        idx === linkedAdvIdx
+          ? {
+              ...adv,
+              advanceDate: params.deductionDate,
+              amount: Math.max(0, Math.round(Number(params.amount) || 0)),
+              note: params.note,
+              updatedAtMs: Date.now(),
+            }
+          : adv
+      );
+      const nextInv: WorkspaceInventoryData = {
+        ...inventoryData,
+        salaryAdvances: nextAdvances,
+        updatedAtMs: Date.now(),
+      };
+      setInventoryData(nextInv);
+      saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+    }
+
     showToast(
       `Đã cập nhật khoản trừ "${params.expenseTitle}" (-${formatVND(
         params.amount
@@ -3222,9 +3416,675 @@ export default function App() {
       );
     }
 
+    // Check if any deleted deduction is linked to a SalaryAdvanceRecord
+    const currentAdvances = inventoryData.salaryAdvances || [];
+    const remainingAdvances = currentAdvances.filter(
+      (adv) =>
+        !idSet.has(adv.linkedDeductionId) &&
+        !idSet.has(sanitizeId(`ded_${adv.id}`)) &&
+        !idSet.has(`ded_${adv.id}`) &&
+        !idSet.has(adv.id)
+    );
+    if (remainingAdvances.length !== currentAdvances.length) {
+      const nextInv: WorkspaceInventoryData = {
+        ...inventoryData,
+        salaryAdvances: remainingAdvances,
+        updatedAtMs: Date.now(),
+      };
+      setInventoryData(nextInv);
+      saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+    }
+
     setDeductions((prev) => prev.filter((d) => !idSet.has(d.id)));
     await deleteDeductionsBatchFromCloud(ownerId, deductionIds);
     showToast(`Đã xóa ${deductionIds.length} khoản trừ khỏi hệ thống.`);
+  };
+
+  // ============================================================================
+  // EMPLOYEE & SALARY ADVANCE HANDLERS (AUTO-SYNCED WITH KHOẢN TRỪ & STAFF ACCOUNTS)
+  // ============================================================================
+  const effectiveEmployees = useMemo<EmployeeRecord[]>(() => {
+    const deletedSet = new Set<string>([
+      ...Array.from(getDeletedEmployeeIds()),
+      ...(inventoryData.deletedEmployeeIds || []),
+    ]);
+    const baseList = Array.isArray(inventoryData.employees)
+      ? inventoryData.employees
+      : buildInitialInventoryData(todayStr, yesterdayStr).employees || [];
+    return baseList.filter(
+      (emp) => !deletedSet.has(emp.id) && !deletedSet.has(sanitizeId(emp.id))
+    );
+  }, [
+    inventoryData.employees,
+    inventoryData.deletedEmployeeIds,
+    todayStr,
+    yesterdayStr,
+  ]);
+
+  const effectiveSalaryAdvances = useMemo<SalaryAdvanceRecord[]>(() => {
+    return dedupeRecordsById(inventoryData.salaryAdvances || []);
+  }, [inventoryData.salaryAdvances]);
+
+  const handleAddEmployee = async (
+    empInput: EmployeeUpsertInput
+  ): Promise<EmployeeRecord> => {
+    setWorkspaceInitialized(true);
+    isApplyingRemoteSnapshotRef.current = false;
+    const now = Date.now();
+    const empId = sanitizeId(
+      `emp_${now}_${Math.random().toString(36).slice(2, 6)}`
+    );
+    unmarkEmployeeDeletedLocally(empId);
+
+    const hasLogin = Boolean(
+      empInput.hasLoginAccount && empInput.systemRole && empInput.username
+    );
+    const cleanRolePos =
+      empInput.roleOrPosition.trim() || 'Nhân viên phục vụ';
+
+    let linkedStaffId: string | undefined;
+    let resolvedTabs: ManagementTabId[] | undefined;
+
+    if (hasLogin && empInput.systemRole && empInput.username) {
+      const cleanUname = empInput.username.trim().toLowerCase();
+      const cleanPass = empInput.password?.trim() || '123456';
+      const defaultTabs =
+        rolePermissions[empInput.systemRole]?.allowedTabs ||
+        DEFAULT_ROLE_PERMISSIONS[empInput.systemRole].allowedTabs;
+      resolvedTabs =
+        empInput.useCustomTabs && empInput.allowedTabs?.length
+          ? empInput.allowedTabs
+          : defaultTabs;
+
+      const existingAcc = staffAccounts.find(
+        (a) => a.username.trim().toLowerCase() === cleanUname
+      );
+      const staffAccId =
+        existingAcc?.id ||
+        sanitizeId(`staff_${now}_${Math.random().toString(36).slice(2, 6)}`);
+      linkedStaffId = staffAccId;
+      unmarkStaffAccountDeletedLocally(staffAccId);
+
+      const staffAccObj: StaffAccount = {
+        id: staffAccId,
+        ownerId,
+        username: cleanUname,
+        password: cleanPass,
+        displayName: `${empInput.fullName.trim()} (${cleanRolePos})`,
+        info: empInput.note?.trim() || `Nhân viên ${cleanRolePos}`,
+        role: empInput.systemRole,
+        active: true,
+        allowedTabs: resolvedTabs,
+        useCustomTabs: Boolean(empInput.useCustomTabs),
+        createdAtMs: existingAcc?.createdAtMs || now,
+        updatedAtMs: now,
+      };
+
+      setStaffAccounts((prev) =>
+        existingAcc
+          ? prev.map((a) => (a.id === staffAccId ? staffAccObj : a))
+          : [...prev, staffAccObj]
+      );
+      await saveStaffAccountToFirebase(ownerId, staffAccObj, !existingAcc);
+    }
+
+    const newEmp: EmployeeRecord = {
+      id: empId,
+      fullName: empInput.fullName.trim(),
+      roleOrPosition: cleanRolePos,
+      phone: empInput.phone?.trim() || '',
+      baseSalary: Math.max(0, Math.round(Number(empInput.baseSalary) || 0)),
+      note: empInput.note?.trim() || '',
+      active: true,
+      hasLoginAccount: hasLogin,
+      systemRole: hasLogin ? empInput.systemRole : undefined,
+      username: hasLogin ? empInput.username?.trim().toLowerCase() : undefined,
+      password: hasLogin ? empInput.password?.trim() || '123456' : undefined,
+      linkedStaffAccountId: linkedStaffId,
+      useCustomTabs: hasLogin ? Boolean(empInput.useCustomTabs) : false,
+      allowedTabs: hasLogin ? resolvedTabs : undefined,
+      createdAtMs: now,
+      updatedAtMs: now,
+    };
+
+    const nextEmployees = [...effectiveEmployees, newEmp];
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      employees: nextEmployees,
+      deletedEmployeeIds: Array.from(getDeletedEmployeeIds()),
+      updatedAtMs: now,
+    };
+    isApplyingRemoteSnapshotRef.current = false;
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+    showToast(
+      hasLogin
+        ? `Đã thêm nhân viên "${newEmp.fullName}" với Role "${
+            ROLE_LABELS[newEmp.systemRole!]
+          }" (TK: @${newEmp.username})!`
+        : `Đã thêm nhân viên "${newEmp.fullName}" (Mặc định: ${newEmp.roleOrPosition} — Không cần TK đăng nhập)!`
+    );
+    return newEmp;
+  };
+
+  const handleUpdateEmployee = async (
+    empId: string,
+    updates: EmployeeUpsertInput
+  ) => {
+    setWorkspaceInitialized(true);
+    isApplyingRemoteSnapshotRef.current = false;
+    const now = Date.now();
+    const cleanName = updates.fullName.trim();
+    const cleanRole = updates.roleOrPosition.trim() || 'Nhân viên phục vụ';
+    const targetEmp = effectiveEmployees.find((e) => e.id === empId);
+
+    const hasLogin = Boolean(
+      updates.hasLoginAccount && updates.systemRole && updates.username
+    );
+    let linkedStaffId = targetEmp?.linkedStaffAccountId;
+    let resolvedTabs: ManagementTabId[] | undefined;
+
+    if (hasLogin && updates.systemRole && updates.username) {
+      const cleanUname = updates.username.trim().toLowerCase();
+      const cleanPass = updates.password?.trim() || '123456';
+      const defaultTabs =
+        rolePermissions[updates.systemRole]?.allowedTabs ||
+        DEFAULT_ROLE_PERMISSIONS[updates.systemRole].allowedTabs;
+      resolvedTabs =
+        updates.useCustomTabs && updates.allowedTabs?.length
+          ? updates.allowedTabs
+          : defaultTabs;
+
+      const existingAcc = staffAccounts.find(
+        (a) =>
+          (linkedStaffId && a.id === linkedStaffId) ||
+          (targetEmp?.username &&
+            a.username.trim().toLowerCase() ===
+              targetEmp.username.trim().toLowerCase()) ||
+          a.username.trim().toLowerCase() === cleanUname
+      );
+      const staffAccId =
+        existingAcc?.id ||
+        linkedStaffId ||
+        sanitizeId(`staff_${now}_${Math.random().toString(36).slice(2, 6)}`);
+      linkedStaffId = staffAccId;
+      unmarkStaffAccountDeletedLocally(staffAccId);
+
+      const staffAccObj: StaffAccount = {
+        id: staffAccId,
+        ownerId,
+        username: cleanUname,
+        password: cleanPass,
+        displayName: `${cleanName} (${cleanRole})`,
+        info: updates.note?.trim() || `Nhân viên ${cleanRole}`,
+        role: updates.systemRole,
+        active: true,
+        allowedTabs: resolvedTabs,
+        useCustomTabs: Boolean(updates.useCustomTabs),
+        createdAtMs: existingAcc?.createdAtMs || now,
+        updatedAtMs: now,
+      };
+
+      setStaffAccounts((prev) => {
+        const exists = prev.some((a) => a.id === staffAccId);
+        return exists
+          ? prev.map((a) => (a.id === staffAccId ? staffAccObj : a))
+          : [...prev, staffAccObj];
+      });
+      await saveStaffAccountToFirebase(ownerId, staffAccObj, !existingAcc);
+    } else {
+      // If switched back to default (no login account), remove any previously linked non-admin StaffAccount
+      const oldLinkedAcc = staffAccounts.find(
+        (a) =>
+          a.username !== 'admin' &&
+          a.id !== 'staff_admin' &&
+          ((linkedStaffId && a.id === linkedStaffId) ||
+            (targetEmp?.username &&
+              a.username.trim().toLowerCase() ===
+                targetEmp.username.trim().toLowerCase()))
+      );
+      if (oldLinkedAcc) {
+        markStaffAccountsDeletedLocally([oldLinkedAcc.id]);
+        setStaffAccounts((prev) => prev.filter((a) => a.id !== oldLinkedAcc.id));
+        await deleteStaffAccountsFromFirebase(ownerId, [oldLinkedAcc.id]);
+      }
+      linkedStaffId = undefined;
+    }
+
+    const nextEmployees = effectiveEmployees.map((emp) =>
+      emp.id === empId
+        ? {
+            ...emp,
+            fullName: cleanName,
+            roleOrPosition: cleanRole,
+            phone: updates.phone?.trim() || '',
+            baseSalary: Math.max(0, Math.round(Number(updates.baseSalary) || 0)),
+            note: updates.note?.trim() || '',
+            hasLoginAccount: hasLogin,
+            systemRole: hasLogin ? updates.systemRole : undefined,
+            username: hasLogin
+              ? updates.username?.trim().toLowerCase()
+              : undefined,
+            password: hasLogin
+              ? updates.password?.trim() || '123456'
+              : undefined,
+            linkedStaffAccountId: linkedStaffId,
+            useCustomTabs: hasLogin ? Boolean(updates.useCustomTabs) : false,
+            allowedTabs: hasLogin ? resolvedTabs : undefined,
+            updatedAtMs: now,
+          }
+        : emp
+    );
+
+    // Sync employeeName & employeeRole to any existing salary advances of this employee
+    const updatedAdvancesToSync: SalaryAdvanceRecord[] = [];
+    const nextSalaryAdvances = effectiveSalaryAdvances.map((adv) => {
+      if (adv.employeeId === empId) {
+        const updatedAdv: SalaryAdvanceRecord = {
+          ...adv,
+          employeeName: cleanName,
+          employeeRole: cleanRole,
+          updatedAtMs: now,
+        };
+        updatedAdvancesToSync.push(updatedAdv);
+        return updatedAdv;
+      }
+      return adv;
+    });
+
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      employees: nextEmployees,
+      deletedEmployeeIds: Array.from(getDeletedEmployeeIds()),
+      salaryAdvances: nextSalaryAdvances,
+      updatedAtMs: now,
+    };
+    isApplyingRemoteSnapshotRef.current = false;
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+
+    // Also update linked deductions in Firestore if employee name/role changed
+    for (const adv of updatedAdvancesToSync) {
+      const targetDed = effectiveDeductions.find(
+        (d) =>
+          d.id === adv.linkedDeductionId ||
+          d.id === sanitizeId(`ded_${adv.id}`) ||
+          d.billId === adv.id
+      );
+      if (targetDed) {
+        const newTitle = `Ứng lương: ${cleanName}${
+          cleanRole ? ` (${cleanRole})` : ''
+        }`;
+        const res = await updateExpenseDeductionInCloud({
+          ownerId,
+          deduction: targetDed,
+          updates: {
+            deductionDate: adv.advanceDate,
+            expenseTitle: newTitle,
+            category: 'Ứng lương nhân viên',
+            quantity: 1,
+            unitPrice: adv.amount,
+            amount: adv.amount,
+            note: adv.note,
+          },
+        });
+        setDeductions((prev) =>
+          prev.map((d) =>
+            d.id === res.updatedDeduction.id ? res.updatedDeduction : d
+          )
+        );
+      }
+    }
+
+    showToast(`Đã cập nhật thông tin nhân viên "${cleanName}"!`);
+  };
+
+  const handleDeleteEmployee = async (
+    emp: EmployeeRecord,
+    deleteAdvancesToo: boolean
+  ) => {
+    setWorkspaceInitialized(true);
+    isApplyingRemoteSnapshotRef.current = false;
+    const now = Date.now();
+
+    // 1. Mark tombstone so this employee never resurrects from stale remote mirrors
+    markEmployeesDeletedLocally([emp.id]);
+    const allDeletedEmpIds = Array.from(
+      new Set([
+        ...Array.from(getDeletedEmployeeIds()),
+        ...(inventoryData.deletedEmployeeIds || []),
+        emp.id,
+        sanitizeId(emp.id),
+      ])
+    );
+
+    const nextEmployees = effectiveEmployees.filter(
+      (e) => e.id !== emp.id && sanitizeId(e.id) !== sanitizeId(emp.id)
+    );
+
+    let nextAdvances = effectiveSalaryAdvances;
+    const dedIdsToDelete: string[] = [];
+
+    if (deleteAdvancesToo) {
+      const removedAdvances = effectiveSalaryAdvances.filter(
+        (a) =>
+          a.employeeId === emp.id ||
+          a.employeeName.trim().toLowerCase() ===
+            emp.fullName.trim().toLowerCase()
+      );
+      const removedAdvIds = new Set(removedAdvances.map((a) => a.id));
+      nextAdvances = effectiveSalaryAdvances.filter(
+        (a) => !removedAdvIds.has(a.id)
+      );
+      for (const adv of removedAdvances) {
+        if (adv.linkedDeductionId) dedIdsToDelete.push(adv.linkedDeductionId);
+        dedIdsToDelete.push(sanitizeId(`ded_${adv.id}`));
+      }
+    }
+
+    // 2. Also remove any linked non-admin login account from staffAccounts
+    const linkedAccToRemove = staffAccounts.find(
+      (a) =>
+        a.username !== 'admin' &&
+        a.id !== 'staff_admin' &&
+        ((emp.linkedStaffAccountId && a.id === emp.linkedStaffAccountId) ||
+          (emp.username &&
+            a.username.trim().toLowerCase() ===
+              emp.username.trim().toLowerCase()))
+    );
+    let nextStaffList = staffAccounts;
+    if (linkedAccToRemove) {
+      markStaffAccountsDeletedLocally([linkedAccToRemove.id]);
+      nextStaffList = staffAccounts.filter((a) => a.id !== linkedAccToRemove.id);
+      setStaffAccounts(nextStaffList);
+      deleteStaffAccountsFromFirebase(ownerId, [linkedAccToRemove.id]).catch(
+        () => {}
+      );
+    }
+
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      employees: nextEmployees,
+      deletedEmployeeIds: allDeletedEmpIds,
+      salaryAdvances: nextAdvances,
+      updatedAtMs: now,
+    };
+
+    const dedIdSet = new Set(dedIdsToDelete);
+    const nextDedsList =
+      dedIdsToDelete.length > 0
+        ? deductions.filter((d) => !dedIdSet.has(d.id))
+        : deductions;
+
+    if (dedIdsToDelete.length > 0) {
+      setDeductions(nextDedsList);
+    }
+
+    isApplyingRemoteSnapshotRef.current = false;
+    setInventoryData(nextInventoryData);
+
+    // 3. Immediately persist to LocalStorage mirror AND Express Cloud Server AND Firestore
+    const updatedSnapshot: WorkspaceCacheSnapshot = {
+      version: lastKnownServerVersionRef.current + 1,
+      updatedAtMs: now,
+      cloudSyncedOnce: true,
+      initialized: true,
+      categories,
+      rolePermissions,
+      inventoryData: nextInventoryData,
+      products,
+      bills,
+      billItems,
+      deductions: nextDedsList,
+      returns,
+      debtors,
+      staffAccounts: nextStaffList,
+    };
+    saveLocalMirror(ownerId, updatedSnapshot);
+
+    await Promise.all([
+      pushWorkspaceToServer(
+        updatedSnapshot,
+        'replace',
+        currentStaffAccount?.username || 'admin'
+      ).then((res) => {
+        if (res && res.ok) {
+          lastKnownServerVersionRef.current = Math.max(
+            lastKnownServerVersionRef.current,
+            res.version
+          );
+          setCloudVersion(lastKnownServerVersionRef.current);
+        }
+      }),
+      saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions),
+      dedIdsToDelete.length > 0
+        ? deleteDeductionsBatchFromCloud(ownerId, dedIdsToDelete)
+        : Promise.resolve(),
+    ]);
+
+    showToast(`Đã xóa nhân viên "${emp.fullName}" khỏi hệ thống thành công!`);
+  };
+
+  const handleAddSalaryAdvance = async (params: {
+    employeeId: string;
+    employeeName: string;
+    employeeRole?: string;
+    amount: number;
+    advanceDate: string;
+    note: string;
+  }) => {
+    setWorkspaceInitialized(true);
+    const now = Date.now();
+    const safeAmount = Math.max(0, Math.round(Number(params.amount) || 0));
+    const effDate = params.advanceDate || todayStr;
+    const salId = sanitizeId(
+      `sal_${now}_${Math.random().toString(36).slice(2, 6)}`
+    );
+    const linkedDeductionId = sanitizeId(`ded_${salId}`);
+    const dedTitle = `Ứng lương: ${params.employeeName}${
+      params.employeeRole ? ` (${params.employeeRole})` : ''
+    }`;
+
+    const newAdvance: SalaryAdvanceRecord = {
+      id: salId,
+      ownerId,
+      employeeId: params.employeeId,
+      employeeName: params.employeeName,
+      employeeRole: params.employeeRole || '',
+      amount: safeAmount,
+      advanceDate: effDate,
+      note: params.note,
+      linkedDeductionId,
+      createdAtMs: now,
+      updatedAtMs: now,
+      createdBy: currentStaffAccount?.username || 'admin',
+    };
+
+    const nextAdvances = [newAdvance, ...effectiveSalaryAdvances];
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      employees: effectiveEmployees,
+      salaryAdvances: nextAdvances,
+      updatedAtMs: now,
+    };
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+
+    // Automatically record linked DeductionRecord in Khoản trừ (Chi trong ngày)
+    const createdDed = await saveExpenseDeductionToCloud({
+      ownerId,
+      deductionDate: effDate,
+      billDate: effDate,
+      billCode: 'UNG-LUONG',
+      customId: linkedDeductionId,
+      customBillId: salId,
+      expenseTitle: dedTitle,
+      category: 'Ứng lương nhân viên',
+      quantity: 1,
+      unitPrice: safeAmount,
+      amount: safeAmount,
+      note: params.note,
+    });
+
+    isApplyingRemoteSnapshotRef.current = false;
+    setDeductions((prev) =>
+      dedupeRecordsById([
+        createdDed,
+        ...prev.filter((d) => d.id !== createdDed.id),
+      ])
+    );
+
+    showToast(
+      `Đã ghi nhận "${params.employeeName}" ứng lương -${formatVND(
+        safeAmount
+      )} (Ngày ${effDate}) và tự động trừ qua Khoản trừ!`
+    );
+  };
+
+  const handleUpdateSalaryAdvance = async (params: {
+    advance: SalaryAdvanceRecord;
+    employeeId: string;
+    employeeName: string;
+    employeeRole?: string;
+    amount: number;
+    advanceDate: string;
+    note: string;
+  }) => {
+    setWorkspaceInitialized(true);
+    const now = Date.now();
+    const safeAmount = Math.max(0, Math.round(Number(params.amount) || 0));
+    const effDate = params.advanceDate || todayStr;
+    const linkedDedId = sanitizeId(
+      params.advance.linkedDeductionId || `ded_${params.advance.id}`
+    );
+
+    const updatedAdvance: SalaryAdvanceRecord = {
+      ...params.advance,
+      employeeId: params.employeeId,
+      employeeName: params.employeeName,
+      employeeRole: params.employeeRole || '',
+      amount: safeAmount,
+      advanceDate: effDate,
+      note: params.note,
+      linkedDeductionId: linkedDedId,
+      updatedAtMs: now,
+    };
+
+    const nextAdvances = effectiveSalaryAdvances.map((a) =>
+      a.id === updatedAdvance.id ? updatedAdvance : a
+    );
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      employees: effectiveEmployees,
+      salaryAdvances: nextAdvances,
+      updatedAtMs: now,
+    };
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+
+    const dedTitle = `Ứng lương: ${params.employeeName}${
+      params.employeeRole ? ` (${params.employeeRole})` : ''
+    }`;
+    const existingDed = effectiveDeductions.find(
+      (d) =>
+        d.id === linkedDedId ||
+        d.id === params.advance.linkedDeductionId ||
+        d.billId === params.advance.id
+    );
+
+    if (existingDed) {
+      const res = await updateExpenseDeductionInCloud({
+        ownerId,
+        deduction: existingDed,
+        updates: {
+          deductionDate: effDate,
+          expenseTitle: dedTitle,
+          category: 'Ứng lương nhân viên',
+          quantity: 1,
+          unitPrice: safeAmount,
+          amount: safeAmount,
+          note: params.note,
+        },
+      });
+      setDeductions((prev) => {
+        const exists = prev.some((d) => d.id === res.updatedDeduction.id);
+        return exists
+          ? prev.map((d) =>
+              d.id === res.updatedDeduction.id ? res.updatedDeduction : d
+            )
+          : [res.updatedDeduction, ...prev];
+      });
+    } else {
+      const createdDed = await saveExpenseDeductionToCloud({
+        ownerId,
+        deductionDate: effDate,
+        billDate: effDate,
+        billCode: 'UNG-LUONG',
+        customId: linkedDedId,
+        customBillId: updatedAdvance.id,
+        expenseTitle: dedTitle,
+        category: 'Ứng lương nhân viên',
+        quantity: 1,
+        unitPrice: safeAmount,
+        amount: safeAmount,
+        note: params.note,
+      });
+      setDeductions((prev) =>
+        dedupeRecordsById([
+          createdDed,
+          ...prev.filter((d) => d.id !== createdDed.id),
+        ])
+      );
+    }
+
+    showToast(
+      `Đã cập nhật phiếu ứng lương của "${params.employeeName}" (-${formatVND(
+        safeAmount
+      )}, ngày ${effDate}) và đồng bộ sang Khoản trừ!`
+    );
+  };
+
+  const handleDeleteSalaryAdvancesBatch = async (advanceIds: string[]) => {
+    if ((!canDelete && !canWrite) || advanceIds.length === 0) return;
+    setWorkspaceInitialized(true);
+    const advIdSet = new Set(advanceIds);
+    const removedAdvances = effectiveSalaryAdvances.filter((a) =>
+      advIdSet.has(a.id)
+    );
+    const nextAdvances = effectiveSalaryAdvances.filter(
+      (a) => !advIdSet.has(a.id)
+    );
+
+    const nextInventoryData: WorkspaceInventoryData = {
+      ...inventoryData,
+      employees: effectiveEmployees,
+      salaryAdvances: nextAdvances,
+      updatedAtMs: Date.now(),
+    };
+    setInventoryData(nextInventoryData);
+    await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+
+    const linkedDedIds = Array.from(
+      new Set(
+        removedAdvances.flatMap((a) => [
+          a.linkedDeductionId,
+          sanitizeId(`ded_${a.id}`),
+          `ded_${a.id}`,
+        ])
+      )
+    ).filter(Boolean);
+
+    if (linkedDedIds.length > 0) {
+      const dedSet = new Set(linkedDedIds);
+      setDeductions((prev) =>
+        prev.filter((d) => !dedSet.has(d.id) && !advIdSet.has(d.billId))
+      );
+      await deleteDeductionsBatchFromCloud(ownerId, linkedDedIds);
+    }
+
+    showToast(
+      `Đã xóa ${advanceIds.length} phiếu ứng lương và xóa khoản trừ đi kèm khỏi hệ thống.`
+    );
   };
 
   const handleDeleteReturnsBatch = async (returnIds: string[]) => {
@@ -3804,6 +4664,12 @@ export default function App() {
       icon: <RotateCcw className="w-4 h-4" />,
     },
     {
+      id: 'salary_advances',
+      label: 'Nhân viên Ứng lương',
+      shortLabel: 'Ứng lương NV',
+      icon: <Wallet className="w-4 h-4" />,
+    },
+    {
       id: 'products',
       label: 'Upload Sản phẩm / Menu',
       shortLabel: 'Thực đơn',
@@ -4193,6 +5059,23 @@ export default function App() {
               >
                 Về danh mục được cấp quyền
               </button>
+            </div>
+          )}
+
+          {/* Read-Only Mode Banner when Role or Account is set to "Chỉ xem (Không được Thêm / Sửa / Xóa)" */}
+          {isCurrentTabAllowed && !canWrite && !canDelete && (
+            <div className="p-3 sm:p-3.5 rounded-2xl border border-amber-300 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/40 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200 shadow-2xs">
+              <div className="flex items-center gap-2">
+                <Eye className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span>
+                  <strong>Chế độ Chỉ xem (Không được Thêm / Sửa / Xóa):</strong>{' '}
+                  Tài khoản <strong>@{currentStaffAccount.username}</strong> (
+                  {ROLE_LABELS[currentStaffAccount.role]}) hiện chỉ được phép xem dữ liệu và báo cáo, không được phép thêm mới, chỉnh sửa hoặc xóa.
+                </span>
+              </div>
+              <span className="px-2.5 py-0.5 rounded-lg bg-amber-200/80 dark:bg-amber-900/70 text-[11px] font-bold text-amber-900 dark:text-amber-200 shrink-0">
+                Chỉ xem
+              </span>
             </div>
           )}
 
@@ -5016,6 +5899,32 @@ export default function App() {
               requestConfirm={requestConfirm}
             />
           )}
+
+          {/* TAB 5C: EMPLOYEE SALARY ADVANCES (AUTO-SYNCED TO DEDUCTIONS) */}
+          {activeTab === 'salary_advances' &&
+            allowedTabs.includes('salary_advances') && (
+              <SalaryAdvanceTab
+                employees={effectiveEmployees}
+                salaryAdvances={effectiveSalaryAdvances}
+                staffAccounts={staffAccounts}
+                rolePermissions={rolePermissions}
+                isAdminUser={isAdminUser}
+                canWrite={canWrite}
+                canDelete={canDelete}
+                onAddEmployee={handleAddEmployee}
+                onUpdateEmployee={handleUpdateEmployee}
+                onDeleteEmployee={handleDeleteEmployee}
+                onAddSalaryAdvance={handleAddSalaryAdvance}
+                onUpdateSalaryAdvance={handleUpdateSalaryAdvance}
+                onDeleteSalaryAdvancesBatch={handleDeleteSalaryAdvancesBatch}
+                onOpenDeductionsTab={
+                  allowedTabs.includes('deductions')
+                    ? () => handleSelectTab('deductions')
+                    : undefined
+                }
+                requestConfirm={requestConfirm}
+              />
+            )}
 
           {/* TAB 6: PRODUCT CATALOG & MENU UPLOAD */}
           {activeTab === 'products' && allowedTabs.includes('products') && (

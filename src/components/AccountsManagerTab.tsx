@@ -24,6 +24,8 @@ import {
   MANAGEMENT_TABS,
   ManagementTabId,
   RolePermissionsMap,
+  RoleActionMode,
+  AccountActionMode,
   DEFAULT_ROLE_PERMISSIONS,
   STANDARD_CATEGORIES,
   getEffectiveRolePermissions,
@@ -117,6 +119,8 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   const [newUseCustomProdCats, setNewUseCustomProdCats] = useState<boolean>(false);
   const [newRestrictProdCats, setNewRestrictProdCats] = useState<boolean>(false);
   const [newAllowedProdCats, setNewAllowedProdCats] = useState<string[]>([]);
+  const [newActionMode, setNewActionMode] =
+    useState<AccountActionMode>('role_default');
 
   useEffect(() => {
     const roleCfg =
@@ -176,13 +180,76 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     value: boolean
   ) => {
     if (role === UserRole.ADMIN) return;
-    setDraftRolePerms((prev) => ({
-      ...prev,
-      [role]: {
-        ...(prev[role] || DEFAULT_ROLE_PERMISSIONS[role]),
-        [field]: value,
-      },
-    }));
+    setDraftRolePerms((prev) => {
+      const current = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const nextCanWrite = field === 'canWrite' ? value : current.canWrite;
+      const nextCanDelete = field === 'canDelete' ? value : current.canDelete;
+      const nextActionMode: RoleActionMode =
+        !nextCanWrite && !nextCanDelete ? 'read_only' : 'full_crud';
+      return {
+        ...prev,
+        [role]: {
+          ...current,
+          canWrite: nextCanWrite,
+          canDelete: nextCanDelete,
+          actionMode: nextActionMode,
+        },
+      };
+    });
+  };
+
+  // Chọn nhanh chế độ quyền thao tác cho Role:
+  // 1) 'read_only' -> Chỉ xem (Không được Thêm / Sửa / Xóa)
+  // 2) 'full_crud' -> Có thể Thêm / Sửa / Xóa
+  const handleSetRoleActionMode = (role: UserRole, mode: RoleActionMode) => {
+    if (role === UserRole.ADMIN) return;
+    setDraftRolePerms((prev) => {
+      const current = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      if (mode === 'read_only') {
+        return {
+          ...prev,
+          [role]: {
+            ...current,
+            canWrite: false,
+            canDelete: false,
+            actionMode: 'read_only',
+          },
+        };
+      }
+      return {
+        ...prev,
+        [role]: {
+          ...current,
+          canWrite: true,
+          canDelete: true,
+          actionMode: 'full_crud',
+          readOnlyTabs: [],
+        },
+      };
+    });
+  };
+
+  // Bật / tắt chế độ "Chỉ xem" cho từng Tab riêng lẻ trong Role
+  const handleToggleRoleTabReadOnly = (
+    role: UserRole,
+    tabId: ManagementTabId
+  ) => {
+    if (role === UserRole.ADMIN || tabId === 'home') return;
+    setDraftRolePerms((prev) => {
+      const current = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const currentReadOnly = current.readOnlyTabs || [];
+      const isReadOnly = currentReadOnly.includes(tabId);
+      const nextReadOnly = isReadOnly
+        ? currentReadOnly.filter((t) => t !== tabId)
+        : [...currentReadOnly, tabId];
+      return {
+        ...prev,
+        [role]: {
+          ...current,
+          readOnlyTabs: nextReadOnly,
+        },
+      };
+    });
   };
 
   // Toggle or set product categories allowed in "Số lượng theo Danh mục" for a Role
@@ -344,6 +411,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           active: true,
           allowedTabs: assignedTabs,
           useCustomTabs: newUseCustomTabs,
+          actionMode: newRole === UserRole.ADMIN ? 'full_crud' : newActionMode,
           useCustomProductCategories: newUseCustomProdCats,
           restrictProductCategories: newUseCustomProdCats
             ? newRestrictProdCats
@@ -357,6 +425,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
         setNewDisplayName('');
         setNewInfo('');
         setNewUseCustomTabs(false);
+        setNewActionMode('role_default');
         setNewUseCustomProdCats(false);
         setNewAllowedTabs(
           rolePermissions[newRole]?.allowedTabs ||
@@ -373,6 +442,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
       password: acc.username.toLowerCase() === 'admin' ? 'admin123' : acc.password,
       allowedTabs: eff.allowedTabs,
       useCustomTabs: Boolean(acc.useCustomTabs),
+      actionMode: acc.actionMode || 'role_default',
       useCustomProductCategories: Boolean(acc.useCustomProductCategories),
       restrictProductCategories: eff.restrictProductCategories,
       allowedProductCategories: eff.allowedProductCategories,
@@ -480,6 +550,10 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           info: editingAcc.info.trim(),
           allowedTabs: finalTabs,
           useCustomTabs: Boolean(editingAcc.useCustomTabs),
+          actionMode:
+            u === 'admin' || editingAcc.role === UserRole.ADMIN
+              ? 'full_crud'
+              : editingAcc.actionMode || 'role_default',
           useCustomProductCategories: Boolean(
             editingAcc.useCustomProductCategories
           ),
@@ -596,60 +670,267 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           </div>
         </div>
 
+        {/* SUB-PANEL 1A: CHỌN QUYỀN THAO TÁC CHO CÁC ROLE (CHỈ XEM vs CÓ THỂ THÊM / SỬA / XÓA) */}
+        <div className="p-4 rounded-2xl border-2 border-emerald-500/40 dark:border-emerald-800/70 bg-emerald-50/40 dark:bg-emerald-950/20 space-y-3.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-emerald-200/70 dark:border-emerald-900/50">
+            <div>
+              <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>
+                  Lựa Chọn Quyền Thao Tác Cho Các Role: &ldquo;Chỉ Xem (Không Được Thêm / Sửa / Xóa)&rdquo; Hoặc &ldquo;Có Thể Thêm / Sửa / Xóa&rdquo;
+                </span>
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                Admin chọn trực tiếp cho từng Role: <strong>Chỉ xem (Không được Thêm / Sửa / Xóa)</strong> để khóa mọi nút nhập/sửa/xóa chỉ cho phép xem báo cáo, hoặc <strong>Có thể Thêm / Sửa / Xóa</strong> để cho phép thao tác dữ liệu. Sau khi chọn, bấm <strong>&ldquo;Lưu Phân Quyền Role&rdquo;</strong> để áp dụng ngay.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveRoleMatrixClick}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Lưu Quyền Role</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            {NON_ADMIN_ROLES.map((roleKey) => {
+              const cfg =
+                draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
+              const isReadOnlyMode =
+                cfg.actionMode === 'read_only' ||
+                (!cfg.canWrite && !cfg.canDelete);
+              const isFullCrudMode =
+                !isReadOnlyMode && cfg.canWrite && cfg.canDelete;
+              const isWriteNoDeleteMode =
+                !isReadOnlyMode && cfg.canWrite && !cfg.canDelete;
+
+              return (
+                <div
+                  key={roleKey}
+                  className={`p-3.5 rounded-xl border transition-all space-y-2.5 shadow-2xs ${
+                    isReadOnlyMode
+                      ? 'border-amber-300 dark:border-amber-800/80 bg-white dark:bg-slate-900'
+                      : 'border-emerald-300 dark:border-emerald-800/80 bg-white dark:bg-slate-900'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                    <div>
+                      <div className="text-xs font-bold text-slate-900 dark:text-white">
+                        Role: {ROLE_LABELS[roleKey]}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        Đang mở {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} mục quản lý
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold shrink-0 ${
+                        isReadOnlyMode
+                          ? 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                          : 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                      }`}
+                    >
+                      {isReadOnlyMode
+                        ? 'Chỉ xem'
+                        : isWriteNoDeleteMode
+                        ? 'Thêm/Sửa (Khóa Xóa)'
+                        : 'Thêm / Sửa / Xóa'}
+                    </span>
+                  </div>
+
+                  {/* 2 Main Radio Choice Buttons requested by Admin */}
+                  <div className="space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleSetRoleActionMode(roleKey, 'read_only')}
+                      className={`w-full p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-2 ${
+                        isReadOnlyMode
+                          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/50 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/20'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 text-slate-600 dark:text-slate-300 hover:border-amber-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name={`role-mode-${roleKey}`}
+                        checked={isReadOnlyMode}
+                        onChange={() =>
+                          handleSetRoleActionMode(roleKey, 'read_only')
+                        }
+                        className="mt-0.5 text-amber-600 focus:ring-amber-500 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold flex items-center gap-1">
+                          <Eye className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Chỉ xem (Không được Thêm / Sửa / Xóa)</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          Chỉ được xem dữ liệu, hóa đơn & báo cáo; khóa toàn bộ thao tác Thêm, Sửa, Xóa
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSetRoleActionMode(roleKey, 'full_crud')}
+                      className={`w-full p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-2 ${
+                        !isReadOnlyMode
+                          ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 text-slate-600 dark:text-slate-300 hover:border-emerald-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name={`role-mode-${roleKey}`}
+                        checked={!isReadOnlyMode}
+                        onChange={() =>
+                          handleSetRoleActionMode(roleKey, 'full_crud')
+                        }
+                        className="mt-0.5 text-emerald-600 focus:ring-emerald-500 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold flex items-center gap-1">
+                          <Edit3 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>Có thể Thêm / Sửa / Xóa</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          Cho phép nhập mới, chỉnh sửa và xóa dữ liệu trong các mục được phân quyền
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+
+                  {/* Sub-checkboxes for fine-tuning Thêm/Sửa vs Xóa when in CRUD mode */}
+                  <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-300">
+                    <span className="font-medium text-slate-500">Chi tiết quyền:</span>
+                    <div className="flex items-center gap-3">
+                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={cfg.canWrite}
+                          onChange={(e) =>
+                            handleToggleRoleCapability(
+                              roleKey,
+                              'canWrite',
+                              e.target.checked
+                            )
+                          }
+                          className="w-3.5 h-3.5 rounded text-emerald-600"
+                        />
+                        <span className="font-semibold">Thêm / Sửa</span>
+                      </label>
+                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={cfg.canDelete}
+                          onChange={(e) =>
+                            handleToggleRoleCapability(
+                              roleKey,
+                              'canDelete',
+                              e.target.checked
+                            )
+                          }
+                          className="w-3.5 h-3.5 rounded text-rose-600"
+                        />
+                        <span className="font-semibold">Xóa</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Mobile Role Cards (< lg) */}
         <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
           {ROLE_ORDER.map((roleKey) => {
             const cfg =
               draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
             const isAdminRole = roleKey === UserRole.ADMIN;
+            const isRoleReadOnly =
+              !isAdminRole &&
+              (cfg.actionMode === 'read_only' ||
+                (!cfg.canWrite && !cfg.canDelete));
             return (
               <div
                 key={roleKey}
                 className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/20 space-y-3"
               >
-                <div className="flex items-center justify-between border-b border-slate-200/70 dark:border-slate-800 pb-2">
-                  <div>
-                    <div className="text-xs font-bold text-slate-900 dark:text-white">
-                      {ROLE_LABELS[roleKey]}
+                <div className="flex flex-col gap-2 border-b border-slate-200/70 dark:border-slate-800 pb-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-slate-900 dark:text-white">
+                        {ROLE_LABELS[roleKey]}
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-500">
+                        {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} mục quản lý
+                      </div>
                     </div>
-                    <div className="text-[11px] font-mono text-slate-500">
-                      {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} mục quản lý
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isAdminRole ? true : cfg.canWrite}
+                          disabled={isAdminRole}
+                          onChange={(e) =>
+                            handleToggleRoleCapability(
+                              roleKey,
+                              'canWrite',
+                              e.target.checked
+                            )
+                          }
+                          className="w-3.5 h-3.5 rounded text-emerald-600"
+                        />
+                        <span>Thêm/Sửa</span>
+                      </label>
+                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isAdminRole ? true : cfg.canDelete}
+                          disabled={isAdminRole}
+                          onChange={(e) =>
+                            handleToggleRoleCapability(
+                              roleKey,
+                              'canDelete',
+                              e.target.checked
+                            )
+                          }
+                          className="w-3.5 h-3.5 rounded text-rose-600"
+                        />
+                        <span>Xóa</span>
+                      </label>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 text-[11px]">
-                    <label className="inline-flex items-center gap-1 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isAdminRole ? true : cfg.canWrite}
-                        disabled={isAdminRole}
-                        onChange={(e) =>
-                          handleToggleRoleCapability(
-                            roleKey,
-                            'canWrite',
-                            e.target.checked
-                          )
-                        }
-                        className="w-3.5 h-3.5 rounded text-emerald-600"
-                      />
-                      <span>Ghi/Sửa</span>
-                    </label>
-                    <label className="inline-flex items-center gap-1 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isAdminRole ? true : cfg.canDelete}
-                        disabled={isAdminRole}
-                        onChange={(e) =>
-                          handleToggleRoleCapability(
-                            roleKey,
-                            'canDelete',
-                            e.target.checked
-                          )
-                        }
-                        className="w-3.5 h-3.5 rounded text-rose-600"
-                      />
-                      <span>Xóa</span>
-                    </label>
-                  </div>
+
+                  {!isAdminRole && (
+                    <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => handleSetRoleActionMode(roleKey, 'read_only')}
+                        className={`px-2 py-1.5 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer flex items-center justify-center gap-1 ${
+                          isRoleReadOnly
+                            ? 'border-amber-500 bg-amber-500 text-white'
+                            : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                        }`}
+                      >
+                        <Eye className="w-3 h-3 shrink-0" />
+                        <span>Chỉ xem (Khóa Sửa/Xóa)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSetRoleActionMode(roleKey, 'full_crud')}
+                        className={`px-2 py-1.5 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer flex items-center justify-center gap-1 ${
+                          !isRoleReadOnly
+                            ? 'border-emerald-600 bg-emerald-600 text-white'
+                            : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                        }`}
+                      >
+                        <Edit3 className="w-3 h-3 shrink-0" />
+                        <span>Có thể Thêm/Sửa/Xóa</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-1.5">
@@ -700,7 +981,9 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                     </div>
                   </th>
                 ))}
-                <th className="py-2.5 px-3 text-center">Quyền Dữ Liệu</th>
+                <th className="py-2.5 px-3 text-center min-w-[210px]">
+                  Quyền Thao Tác (Chỉ Xem / Thêm Sửa Xóa)
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -708,6 +991,11 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 const cfg =
                   draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
                 const isAdminRole = roleKey === UserRole.ADMIN;
+                const isRoleReadOnly =
+                  !isAdminRole &&
+                  (cfg.actionMode === 'read_only' ||
+                    (!cfg.canWrite && !cfg.canDelete));
+                const roleReadOnlyTabs = cfg.readOnlyTabs || [];
                 return (
                   <tr
                     key={roleKey}
@@ -726,81 +1014,145 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                       const checked = cfg.allowedTabs.includes(tab.id);
                       const isLockedAdminTab =
                         isAdminRole && tab.id === 'accounts';
+                      const isTabReadOnly =
+                        isRoleReadOnly || roleReadOnlyTabs.includes(tab.id);
                       return (
                         <td
                           key={tab.id}
                           className="py-3 px-2 text-center align-middle"
                         >
-                          <label
-                            className={`inline-flex flex-col items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl border transition-colors ${
-                              checked
-                                ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
-                                : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900 text-slate-400'
-                            } ${
-                              isLockedAdminTab
-                                ? 'opacity-80 cursor-not-allowed'
-                                : 'cursor-pointer'
-                            }`}
-                            title={tab.description}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              disabled={isLockedAdminTab}
-                              onChange={() => handleToggleRoleTab(roleKey, tab.id)}
-                              className="w-4 h-4 rounded border-slate-300 text-emerald-600"
-                            />
-                            <span className="text-[10px] font-semibold">
-                              {checked ? 'Mở' : 'Khóa'}
-                            </span>
-                          </label>
+                          <div className="inline-flex flex-col items-center gap-1">
+                            <label
+                              className={`inline-flex flex-col items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl border transition-colors ${
+                                checked
+                                  ? isTabReadOnly && !isAdminRole
+                                    ? 'border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300'
+                                    : 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
+                                  : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900 text-slate-400'
+                              } ${
+                                isLockedAdminTab
+                                  ? 'opacity-80 cursor-not-allowed'
+                                  : 'cursor-pointer'
+                              }`}
+                              title={tab.description}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={isLockedAdminTab}
+                                onChange={() =>
+                                  handleToggleRoleTab(roleKey, tab.id)
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-emerald-600"
+                              />
+                              <span className="text-[10px] font-semibold">
+                                {checked ? 'Mở' : 'Khóa'}
+                              </span>
+                            </label>
+                            {checked && !isAdminRole && tab.id !== 'home' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isRoleReadOnly) {
+                                    handleSetRoleActionMode(roleKey, 'full_crud');
+                                  } else {
+                                    handleToggleRoleTabReadOnly(roleKey, tab.id);
+                                  }
+                                }}
+                                title={
+                                  isTabReadOnly
+                                    ? 'Đang ở chế độ Chỉ xem (Không được Thêm/Sửa/Xóa). Bấm để cho phép Thêm/Sửa/Xóa.'
+                                    : 'Đang cho phép Thêm/Sửa/Xóa. Bấm để chuyển riêng mục này sang Chỉ xem.'
+                                }
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                                  isTabReadOnly
+                                    ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                                    : 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                                }`}
+                              >
+                                {isTabReadOnly ? 'Chỉ xem' : 'Thêm/Sửa/Xóa'}
+                              </button>
+                            )}
+                          </div>
                         </td>
                       );
                     })}
 
                     <td className="py-3 px-3 text-center">
-                      <div className="flex flex-col items-start gap-1.5 text-[11px]">
-                        <label
-                          className={`inline-flex items-center gap-1.5 ${
-                            isAdminRole ? 'opacity-80' : 'cursor-pointer'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isAdminRole ? true : cfg.canWrite}
-                            disabled={isAdminRole}
-                            onChange={(e) =>
-                              handleToggleRoleCapability(
-                                roleKey,
-                                'canWrite',
-                                e.target.checked
-                              )
-                            }
-                            className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
-                          />
-                          <span>Thêm / Sửa</span>
-                        </label>
-                        <label
-                          className={`inline-flex items-center gap-1.5 ${
-                            isAdminRole ? 'opacity-80' : 'cursor-pointer'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isAdminRole ? true : cfg.canDelete}
-                            disabled={isAdminRole}
-                            onChange={(e) =>
-                              handleToggleRoleCapability(
-                                roleKey,
-                                'canDelete',
-                                e.target.checked
-                              )
-                            }
-                            className="w-3.5 h-3.5 rounded border-slate-300 text-rose-600"
-                          />
-                          <span>Xóa</span>
-                        </label>
-                      </div>
+                      {isAdminRole ? (
+                        <div className="inline-flex flex-col items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+                          <span>Toàn quyền Admin</span>
+                          <span className="text-[10px] font-normal text-slate-500">
+                            (Thêm / Sửa / Xóa)
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1.5 text-[11px]">
+                          <div className="flex flex-col gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSetRoleActionMode(roleKey, 'read_only')
+                              }
+                              className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 whitespace-nowrap ${
+                                isRoleReadOnly
+                                  ? 'border-amber-500 bg-amber-500 text-white shadow-2xs'
+                                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:border-amber-400'
+                              }`}
+                            >
+                              <Eye className="w-3 h-3 shrink-0" />
+                              <span>Chỉ xem (Không thêm/sửa/xóa)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSetRoleActionMode(roleKey, 'full_crud')
+                              }
+                              className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 whitespace-nowrap ${
+                                !isRoleReadOnly
+                                  ? 'border-emerald-600 bg-emerald-600 text-white shadow-2xs'
+                                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:border-emerald-400'
+                              }`}
+                            >
+                              <Edit3 className="w-3 h-3 shrink-0" />
+                              <span>Có thể Thêm / Sửa / Xóa</span>
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-center gap-2.5 pt-1 border-t border-slate-100 dark:border-slate-800">
+                            <label className="inline-flex items-center gap-1 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={cfg.canWrite}
+                                onChange={(e) =>
+                                  handleToggleRoleCapability(
+                                    roleKey,
+                                    'canWrite',
+                                    e.target.checked
+                                  )
+                                }
+                                className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
+                              />
+                              <span>Thêm / Sửa</span>
+                            </label>
+                            <label className="inline-flex items-center gap-1 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={cfg.canDelete}
+                                onChange={(e) =>
+                                  handleToggleRoleCapability(
+                                    roleKey,
+                                    'canDelete',
+                                    e.target.checked
+                                  )
+                                }
+                                className="w-3.5 h-3.5 rounded border-slate-300 text-rose-600"
+                              />
+                              <span>Xóa</span>
+                            </label>
+                          </div>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
@@ -1137,6 +1489,54 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               );
             })}
           </div>
+
+          {/* Per-Account Action Permission Mode (Chỉ xem vs Có thể Thêm / Sửa / Xóa) */}
+          {newRole !== UserRole.ADMIN && (
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                  Quyền thao tác dữ liệu (Chỉ xem hoặc Có thể Thêm / Sửa / Xóa):
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setNewActionMode('role_default')}
+                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                      newActionMode === 'role_default'
+                        ? 'border-emerald-600 bg-emerald-600 text-white'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    Theo mặc định Role ({ROLE_LABELS[newRole]})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewActionMode('read_only')}
+                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1 ${
+                      newActionMode === 'read_only'
+                        ? 'border-amber-500 bg-amber-500 text-white'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    <Eye className="w-3 h-3" />
+                    <span>Chỉ xem (Không được Thêm / Sửa / Xóa)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewActionMode('full_crud')}
+                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1 ${
+                      newActionMode === 'full_crud'
+                        ? 'border-emerald-600 bg-emerald-600 text-white'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    <Edit3 className="w-3 h-3" />
+                    <span>Có thể Thêm / Sửa / Xóa</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Per-Account Product Category Filter when 'categories' tab is enabled */}
           {newRole !== UserRole.ADMIN && newAllowedTabs.includes('categories') && (
@@ -1502,6 +1902,76 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 })}
               </div>
 
+              {/* Per-account Action Permission Mode in Edit Drawer */}
+              {editingAcc.username.toLowerCase() !== 'admin' &&
+                editingAcc.role !== UserRole.ADMIN && (
+                  <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-bold text-slate-900 dark:text-white">
+                          Quyền thao tác dữ liệu cho @{editingAcc.username}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          Chọn Chỉ xem (Không được Thêm / Sửa / Xóa) hoặc Có thể Thêm / Sửa / Xóa
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingAcc({
+                              ...editingAcc,
+                              actionMode: 'role_default',
+                            })
+                          }
+                          className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                            !editingAcc.actionMode ||
+                            editingAcc.actionMode === 'role_default'
+                              ? 'border-emerald-600 bg-emerald-600 text-white'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          Theo Role ({ROLE_LABELS[editingAcc.role]})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingAcc({
+                              ...editingAcc,
+                              actionMode: 'read_only',
+                            })
+                          }
+                          className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1 ${
+                            editingAcc.actionMode === 'read_only'
+                              ? 'border-amber-500 bg-amber-500 text-white'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          <Eye className="w-3 h-3" />
+                          <span>Chỉ xem (Không thêm/sửa/xóa)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingAcc({
+                              ...editingAcc,
+                              actionMode: 'full_crud',
+                            })
+                          }
+                          className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1 ${
+                            editingAcc.actionMode === 'full_crud'
+                              ? 'border-emerald-600 bg-emerald-600 text-white'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          <span>Có thể Thêm / Sửa / Xóa</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
               {/* Per-account Product Category Permissions in Edit Drawer */}
               {editingAcc.username.toLowerCase() !== 'admin' &&
                 editingAcc.role !== UserRole.ADMIN && (
@@ -1695,8 +2165,26 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         </span>
                       )}
                     </div>
-                    <div className="font-mono text-slate-500">
-                      @{acc.username} · {ROLE_LABELS[acc.role]}
+                    <div className="font-mono text-slate-500 flex flex-wrap items-center gap-1.5 mt-0.5">
+                      <span>
+                        @{acc.username} · {ROLE_LABELS[acc.role]}
+                      </span>
+                      {!eff.canWrite && !eff.canDelete ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 font-sans text-[10px] font-bold">
+                          <Eye className="w-2.5 h-2.5" />
+                          <span>Chỉ xem</span>
+                        </span>
+                      ) : eff.canWrite && eff.canDelete ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-sans text-[10px] font-bold">
+                          <Edit3 className="w-2.5 h-2.5" />
+                          <span>Thêm / Sửa / Xóa</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/70 text-blue-800 dark:text-blue-300 font-sans text-[10px] font-bold">
+                          <Edit3 className="w-2.5 h-2.5" />
+                          <span>Thêm / Sửa</span>
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -1864,9 +2352,23 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                       <div className="font-semibold text-slate-900 dark:text-white">
                         {ROLE_LABELS[acc.role]}
                       </div>
-                      <div className="text-[11px] text-slate-500">
-                        {eff.canWrite ? 'Được Ghi/Sửa' : 'Chỉ xem'} ·{' '}
-                        {eff.canDelete ? 'Được Xóa' : 'Không xóa'}
+                      <div className="mt-1">
+                        {!eff.canWrite && !eff.canDelete ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-[10px] font-bold">
+                            <Eye className="w-3 h-3" />
+                            <span>Chỉ xem (Không thêm/sửa/xóa)</span>
+                          </span>
+                        ) : eff.canWrite && eff.canDelete ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-[10px] font-bold">
+                            <Edit3 className="w-3 h-3" />
+                            <span>Có thể Thêm / Sửa / Xóa</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-950/70 text-blue-800 dark:text-blue-300 border border-blue-300 dark:border-blue-800 text-[10px] font-bold">
+                            <Edit3 className="w-3 h-3" />
+                            <span>Thêm / Sửa (Không xóa)</span>
+                          </span>
+                        )}
                       </div>
                     </td>
 

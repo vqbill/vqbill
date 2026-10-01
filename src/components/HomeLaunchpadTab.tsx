@@ -16,6 +16,7 @@ import {
   ArrowRight,
   FileText,
   CheckCircle2,
+  Wallet,
 } from 'lucide-react';
 import {
   ManagementTabId,
@@ -191,6 +192,17 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       accentClass:
         'border-indigo-200/90 dark:border-indigo-900/60 hover:border-indigo-500 dark:hover:border-indigo-500',
       btnClass: 'text-indigo-700 dark:text-indigo-300',
+    },
+    {
+      id: 'salary_advances',
+      title: 'Nhân Viên Ứng Lương',
+      pathLabel: '/ung-luong',
+      desc: 'Quản lý danh sách nhân viên (thêm/sửa/xóa), nhập tiền ứng & ngày ứng, tự động trừ qua Khoản trừ trong ngày.',
+      statText: `Đồng bộ trực tiếp sang Khoản trừ (1 dòng tiền duy nhất)`,
+      icon: <Wallet className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />,
+      accentClass:
+        'border-emerald-200/90 dark:border-emerald-900/60 hover:border-emerald-500 dark:hover:border-emerald-500',
+      btnClass: 'text-emerald-700 dark:text-emerald-300',
     },
     {
       id: 'inventory',

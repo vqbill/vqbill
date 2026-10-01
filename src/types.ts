@@ -16,6 +16,7 @@ export type ManagementTabId =
   | 'debts'
   | 'deductions'
   | 'returns'
+  | 'salary_advances'
   | 'products'
   | 'accounts';
 
@@ -93,6 +94,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
       'Chọn hóa đơn theo Ngày tháng - Số bàn để ghi nhận trả bia/món thừa, tự động tính vào Khoản trừ trong ngày (1 dòng tiền duy nhất) và hoàn lại tồn kho',
   },
   {
+    id: 'salary_advances',
+    label: 'Nhân viên Ứng lương',
+    shortLabel: 'Ứng lương NV',
+    description:
+      'Quản lý danh sách nhân viên (thêm/sửa/xóa), ghi nhận tiền ứng lương, ngày ứng và tự động trừ trực tiếp qua Khoản trừ trong ngày (1 dòng tiền duy nhất)',
+  },
+  {
     id: 'products',
     label: 'Upload Sản phẩm / Menu',
     shortLabel: 'Thực đơn',
@@ -108,11 +116,16 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
   },
 ];
 
+export type RoleActionMode = 'read_only' | 'full_crud';
+export type AccountActionMode = 'role_default' | 'read_only' | 'full_crud';
+
 export interface RolePermissionConfig {
   role: UserRole;
   allowedTabs: ManagementTabId[];
   canWrite: boolean;
   canDelete: boolean;
+  actionMode?: RoleActionMode; // 'read_only': Chỉ xem (Không được Thêm / Sửa / Xóa) | 'full_crud': Có thể Thêm / Sửa / Xóa
+  readOnlyTabs?: ManagementTabId[]; // Danh sách các tab cụ thể chỉ cho phép Xem (nếu Role đang ở chế độ Có thể Thêm/Sửa/Xóa)
   restrictProductCategories?: boolean;
   allowedProductCategories?: string[];
 }
@@ -132,11 +145,14 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'debts',
       'deductions',
       'returns',
+      'salary_advances',
       'products',
       'accounts',
     ],
     canWrite: true,
     canDelete: true,
+    actionMode: 'full_crud',
+    readOnlyTabs: [],
     restrictProductCategories: false,
     allowedProductCategories: [],
   },
@@ -152,10 +168,13 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'debts',
       'deductions',
       'returns',
+      'salary_advances',
       'products',
     ],
     canWrite: true,
     canDelete: true,
+    actionMode: 'full_crud',
+    readOnlyTabs: [],
     restrictProductCategories: false,
     allowedProductCategories: [],
   },
@@ -170,9 +189,12 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'debts',
       'deductions',
       'returns',
+      'salary_advances',
     ],
     canWrite: true,
-    canDelete: false,
+    canDelete: true,
+    actionMode: 'full_crud',
+    readOnlyTabs: [],
     restrictProductCategories: false,
     allowedProductCategories: [],
   },
@@ -187,9 +209,12 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'debts',
       'deductions',
       'returns',
+      'salary_advances',
     ],
     canWrite: false,
     canDelete: false,
+    actionMode: 'read_only',
+    readOnlyTabs: [],
     restrictProductCategories: false,
     allowedProductCategories: [],
   },
@@ -197,7 +222,9 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     role: UserRole.INVENTORY,
     allowedTabs: ['home', 'categories', 'inventory', 'owner_use'],
     canWrite: true,
-    canDelete: false,
+    canDelete: true,
+    actionMode: 'full_crud',
+    readOnlyTabs: [],
     restrictProductCategories: false,
     allowedProductCategories: [],
   },
@@ -377,9 +404,45 @@ export const DEFAULT_DEDUCTION_CATEGORIES = [
   'Vật tư / Đá / Gas',
   'Vật tư / Tạp phẩm quán',
   'Chi phí vận hành trong ngày',
+  'Ứng lương nhân viên',
   'Hoàn bia / món thừa',
   'Khác',
 ] as const;
+
+export interface EmployeeRecord {
+  id: string;
+  fullName: string;
+  roleOrPosition: string; // Mặc định: 'Nhân viên phục vụ'
+  phone?: string;
+  baseSalary?: number;
+  note?: string;
+  active: boolean;
+  // Phân role & Quyền đăng nhập hệ thống (nếu không phân role thì mặc định là Nhân viên phục vụ và không cần tài khoản đăng nhập)
+  hasLoginAccount?: boolean;
+  systemRole?: UserRole;
+  username?: string;
+  password?: string;
+  linkedStaffAccountId?: string;
+  useCustomTabs?: boolean;
+  allowedTabs?: ManagementTabId[];
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface SalaryAdvanceRecord {
+  id: string;
+  ownerId: string;
+  employeeId: string;
+  employeeName: string;
+  employeeRole?: string;
+  amount: number;
+  advanceDate: string; // YYYY-MM-DD
+  note: string;
+  linkedDeductionId: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  createdBy?: string;
+}
 
 export interface DebtPaymentRecord {
   id: string;
@@ -409,6 +472,9 @@ export interface WorkspaceInventoryData {
   deductionCategories?: string[]; // Danh sách nhóm khoản trừ tùy chỉnh & mặc định
   debtPayments?: DebtPaymentRecord[]; // Lịch sử trả nợ từng phần (trả góp công nợ)
   calendarEvents?: CalendarEventNote[]; // Ghi chú sự kiện trên Lịch Âm Dương
+  employees?: EmployeeRecord[]; // Danh sách nhân viên của quán
+  deletedEmployeeIds?: string[]; // Tombstone danh sách ID nhân viên đã xóa để không bị hồi sinh khi đồng bộ
+  salaryAdvances?: SalaryAdvanceRecord[]; // Lịch sử ứng lương nhân viên (đồng bộ sang Khoản trừ)
   itemConfigs: Record<string, InventoryItemConfig>; // key = lowercase productName
   dailyEntries: Record<string, Record<string, DailyInventoryEntry>>; // date -> lowercase productName
   importLogs: InventoryImportLog[];
@@ -426,6 +492,9 @@ export interface StaffAccount {
   active: boolean;
   allowedTabs?: ManagementTabId[];
   useCustomTabs?: boolean;
+  actionMode?: AccountActionMode; // 'role_default' | 'read_only' (Chỉ xem) | 'full_crud' (Có thể Thêm/Sửa/Xóa)
+  canWrite?: boolean;
+  canDelete?: boolean;
   restrictProductCategories?: boolean;
   allowedProductCategories?: string[];
   useCustomProductCategories?: boolean;
@@ -503,6 +572,8 @@ export function getEffectiveRolePermissions(
   allowedTabs: ManagementTabId[];
   canWrite: boolean;
   canDelete: boolean;
+  actionMode: RoleActionMode;
+  readOnlyTabs: ManagementTabId[];
   isCustomAccountTabs: boolean;
   restrictProductCategories: boolean;
   allowedProductCategories: string[];
@@ -513,6 +584,8 @@ export function getEffectiveRolePermissions(
       allowedTabs: ['dashboard'],
       canWrite: false,
       canDelete: false,
+      actionMode: 'read_only',
+      readOnlyTabs: [],
       isCustomAccountTabs: false,
       restrictProductCategories: false,
       allowedProductCategories: [],
@@ -550,6 +623,9 @@ export function getEffectiveRolePermissions(
     if (!tabs.includes('owner_use')) {
       tabs = [...tabs, 'owner_use'];
     }
+    if (!tabs.includes('salary_advances')) {
+      tabs = [...tabs, 'salary_advances'];
+    }
   } else if (
     !useCustom &&
     (tabs.includes('categories') ||
@@ -558,12 +634,15 @@ export function getEffectiveRolePermissions(
       account.role === UserRole.INVENTORY ||
       account.role === UserRole.VIEWER)
   ) {
-    // Ensure existing cached roles automatically receive the new 'inventory' and 'owner_use' tabs
+    // Ensure existing cached roles automatically receive the new 'inventory', 'owner_use', and 'salary_advances' tabs
     if (!tabs.includes('inventory')) {
       tabs = [...tabs, 'inventory'];
     }
     if (!tabs.includes('owner_use')) {
       tabs = [...tabs, 'owner_use'];
+    }
+    if (account.role !== UserRole.INVENTORY && !tabs.includes('salary_advances')) {
+      tabs = [...tabs, 'salary_advances'];
     }
   }
 
@@ -602,18 +681,55 @@ export function getEffectiveRolePermissions(
     }
   }
 
+  // Resolve Write / Delete / Action Mode (Chỉ xem vs Có thể Thêm / Sửa / Xóa)
+  let resolvedWrite = true;
+  let resolvedDelete = true;
+  let resolvedActionMode: RoleActionMode = 'full_crud';
+  let resolvedReadOnlyTabs: ManagementTabId[] = [];
+
+  if (!isAdminAccount) {
+    resolvedReadOnlyTabs = sanitizeTabList(roleConfig.readOnlyTabs);
+
+    if (account.actionMode === 'read_only') {
+      resolvedWrite = false;
+      resolvedDelete = false;
+      resolvedActionMode = 'read_only';
+    } else if (account.actionMode === 'full_crud') {
+      resolvedWrite = true;
+      resolvedDelete = true;
+      resolvedActionMode = 'full_crud';
+    } else {
+      // Follow Role's configured permission mode
+      if (roleConfig.actionMode === 'read_only') {
+        resolvedWrite = false;
+        resolvedDelete = false;
+        resolvedActionMode = 'read_only';
+      } else if (roleConfig.actionMode === 'full_crud') {
+        resolvedWrite =
+          typeof roleConfig.canWrite === 'boolean' ? roleConfig.canWrite : true;
+        resolvedDelete =
+          typeof roleConfig.canDelete === 'boolean' ? roleConfig.canDelete : true;
+        resolvedActionMode = resolvedWrite ? 'full_crud' : 'read_only';
+      } else {
+        resolvedWrite =
+          typeof roleConfig.canWrite === 'boolean'
+            ? roleConfig.canWrite
+            : account.role !== UserRole.VIEWER;
+        resolvedDelete =
+          typeof roleConfig.canDelete === 'boolean'
+            ? roleConfig.canDelete
+            : resolvedWrite;
+        resolvedActionMode = resolvedWrite ? 'full_crud' : 'read_only';
+      }
+    }
+  }
+
   return {
     allowedTabs: orderedTabs,
-    canWrite: isAdminAccount
-      ? true
-      : typeof roleConfig.canWrite === 'boolean'
-      ? roleConfig.canWrite
-      : account.role !== UserRole.VIEWER && account.role !== UserRole.INVENTORY,
-    canDelete: isAdminAccount
-      ? true
-      : typeof roleConfig.canDelete === 'boolean'
-      ? roleConfig.canDelete
-      : account.role === UserRole.MANAGER,
+    canWrite: resolvedWrite,
+    canDelete: resolvedDelete,
+    actionMode: resolvedActionMode,
+    readOnlyTabs: resolvedReadOnlyTabs,
     isCustomAccountTabs: useCustom,
     restrictProductCategories,
     allowedProductCategories,
