@@ -138,6 +138,7 @@ import {
   saveNewBillToCloud,
   updateBillAndItemsInCloud,
   deleteBillsBatchFromCloud,
+  listenToKiotVietInbox,
   saveExpenseDeductionToCloud,
   updateExpenseDeductionInCloud,
   deleteDeductionsBatchFromCloud,
@@ -2563,6 +2564,73 @@ export default function App() {
     );
     return res.bill;
   };
+
+  // Tự động nhận hóa đơn KiotViet POS bắn qua Firebase Realtime Database
+  useEffect(() => {
+    const unsub = listenToKiotVietInbox(async (incoming) => {
+      try {
+        const rawItems = Array.isArray(incoming.items)
+          ? incoming.items
+          : Array.isArray(incoming.InvoiceDetails)
+          ? incoming.InvoiceDetails
+          : [];
+
+        const itemsToSave: ExtractedBillItem[] = rawItems.map((it: any) => ({
+          productName: it.productName || it.name || it.ProductName || 'Món',
+          quantity: Math.max(1, Math.round(Number(it.quantity || it.Quantity || 1))),
+          unitPrice: Math.max(0, Math.round(Number(it.unitPrice || it.Price || 0))),
+          subtotal: Math.max(0, Math.round(Number(it.subtotal || it.SubTotal || 0))),
+          note: it.note || it.Note || '',
+          category: it.category || 'Khác',
+        }));
+
+        if (itemsToSave.length === 0 && (Number(incoming.totalAmount) || 0) > 0) {
+          const total = Math.max(0, Math.round(Number(incoming.totalAmount) || 0));
+          itemsToSave.push({
+            productName: `Thanh toán ${incoming.tableName || 'KiotViet'}`,
+            quantity: 1,
+            unitPrice: total,
+            subtotal: total,
+            note: 'Đồng bộ từ KiotViet POS',
+            category: 'Khác',
+          });
+        }
+
+        if (itemsToSave.length > 0) {
+          const subtotal = itemsToSave.reduce((s, it) => s + it.subtotal, 0);
+          await handleSaveExtractedBill({
+            billDate: incoming.billDate || getCurrentBusinessDate(),
+            rawDate: incoming.rawDate || incoming.billDate || getCurrentBusinessDate(),
+            paymentType:
+              incoming.paymentType === 'transfer'
+                ? 'transfer'
+                : incoming.paymentType === 'debt'
+                ? 'debt'
+                : 'cash',
+            debtorName: incoming.debtorName || '',
+            note: incoming.tableName || 'Bàn KiotViet',
+            subtotalAmount: subtotal,
+            discountAmount: Math.max(
+              0,
+              Math.round(Number(incoming.discountAmount) || 0)
+            ),
+            items: itemsToSave,
+          });
+          showToast(
+            `⚡ Đã tự động nhận hóa đơn ${
+              incoming.tableName || 'KiotViet'
+            } (${formatVND(incoming.totalAmount || subtotal)})!`
+          );
+        }
+      } catch (err) {
+        console.error('[KiotViet Sync Processing Error]:', err);
+      }
+    });
+
+    return () => {
+      unsub();
+    };
+  }, []);
 
   const handleSaveOwnerUseBill = async (payload: {
     billDate: string;
@@ -6596,6 +6664,7 @@ export default function App() {
         isOpen={showKiotVietSyncModal}
         onClose={() => setShowKiotVietSyncModal(false)}
         onSyncSuccess={() => handlePullFromCloud(true)}
+        onDirectCreateBill={handleSaveExtractedBill}
       />
 
       {/* Gemini API Key Popup Modal */}

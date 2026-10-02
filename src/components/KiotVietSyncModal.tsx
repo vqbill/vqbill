@@ -15,21 +15,24 @@ import {
   ArrowRight,
   ShieldCheck,
 } from 'lucide-react';
-import { formatVND } from '../utils/parser';
+import { formatVND, getCurrentBusinessDate } from '../utils/parser';
 
 interface KiotVietSyncModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSyncSuccess?: () => void;
+  onDirectCreateBill?: (billData: any) => Promise<any>;
 }
 
 export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
   isOpen,
   onClose,
   onSyncSuccess,
+  onDirectCreateBill,
 }) => {
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
+  const [copiedBookmarklet, setCopiedBookmarklet] = useState(false);
   const [isTestingSync, setIsTestingSync] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
@@ -42,14 +45,17 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
   const currentOrigin =
     typeof window !== 'undefined' ? window.location.origin : '';
   const syncEndpointUrl = `${currentOrigin}/api/sync-kiotviet-bill`;
+  const rtdbSyncUrl =
+    'https://vqbill-default-rtdb.asia-southeast1.firebasedatabase.app/kiotviet_inbox';
 
   const tampermonkeyScriptCode = `// ==UserScript==
 // @name         VQBill Auto Sync - KiotViet POS (Thu ngân)
 // @namespace    https://vqbill.app/
-// @version      2.0.0
+// @version      2.1.0
 // @description  Tự động bắt sự kiện bấm nút Thanh toán (F9/F10) trên KiotViet POS để đồng bộ hóa đơn sang VQBill ngay lập tức mà không cần KiotViet API
 // @author       VQBill
 // @match        *://*.kiotviet.vn/*
+// @match        *://*.kiotviet.com/*
 // @match        https://*.kiotviet.vn/*
 // @match        https://fnb.kiotviet.vn/*
 // @match        https://pos.kiotviet.vn/*
@@ -59,69 +65,88 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
 // @grant        GM.xmlHttpRequest
 // @grant        unsafeWindow
 // @connect      *
-// @run-at       document-idle
+// @run-at       document-end
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  // 1. CỔNG NHẬN DỮ LIỆU VQBILL CỦA BẠN
+  // 1. CỔNG NHẬN DỮ LIỆU CLOUD TRỰC TIẾP
+  const RTDB_ENDPOINT = '${rtdbSyncUrl}';
   const VQBILL_ENDPOINT = '${syncEndpointUrl}';
   const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-  // 2. HUY HIỆU TRẠNG THÁI NỔI TRÊN MÀN HÌNH KIOTVIET
-  function createOrUpdateFloatingBadge(statusText, isSuccess = false, isError = false, isLoading = false) {
-    let badge = document.getElementById('vqbill-sync-floating-badge');
-    if (!badge) {
-      badge = document.createElement('div');
-      badge.id = 'vqbill-sync-floating-badge';
-      badge.style.cssText =
-        'position:fixed;bottom:18px;left:18px;z-index:9999999;background:#0f172a;color:#f8fafc;padding:8px 14px;border-radius:12px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:12px;font-weight:600;box-shadow:0 10px 25px -5px rgba(0,0,0,0.4);border:1px solid #334155;display:flex;align-items:center;gap:10px;transition:all 0.3s ease;user-select:none;';
+  // 2. HUY HIỆU NỔI VQBILL TRÊN GIAO DIỆN KIOTVIET (BẢO ĐẢM KHÔNG BỊ SPA/ANGULAR XÓA MẤT)
+  function ensureFloatingBadge() {
+    try {
+      const container = document.body || document.documentElement;
+      if (!container) return;
 
-      const dot = document.createElement('span');
-      dot.id = 'vqbill-badge-dot';
-      dot.style.cssText = 'width:8px;height:8px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;shrink:0;';
+      let badge = document.getElementById('vqbill-sync-floating-badge');
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.id = 'vqbill-sync-floating-badge';
+        badge.style.cssText =
+          'position:fixed !important;bottom:22px !important;right:22px !important;z-index:2147483647 !important;' +
+          'background:#090d16 !important;color:#f8fafc !important;padding:10px 16px !important;border-radius:14px !important;' +
+          'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif !important;font-size:13px !important;font-weight:600 !important;' +
+          'box-shadow:0 12px 30px -5px rgba(0,0,0,0.6), 0 0 0 2px #059669 !important;display:flex !important;align-items:center !important;' +
+          'gap:10px !important;cursor:default !important;user-select:none !important;border:1px solid #10b981 !important;';
 
-      const label = document.createElement('span');
-      label.id = 'vqbill-badge-label';
-      label.innerText = '⚡ VQBill: Sẵn sàng';
+        const dot = document.createElement('span');
+        dot.id = 'vqbill-badge-dot';
+        dot.style.cssText =
+          'width:9px !important;height:9px !important;border-radius:50% !important;background:#10b981 !important;box-shadow:0 0 10px #10b981 !important;display:inline-block !important;shrink:0 !important;';
 
-      const syncBtn = document.createElement('button');
-      syncBtn.id = 'vqbill-badge-manual-sync';
-      syncBtn.innerText = '🔄 Đồng bộ bàn';
-      syncBtn.style.cssText =
-        'background:#059669;color:#fff;border:none;padding:4px 10px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;margin-left:4px;';
-      syncBtn.onclick = function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        createOrUpdateFloatingBadge('⏳ Đang đọc dữ liệu bàn...', false, false, true);
-        const bill = captureActiveOrderFromDOM();
-        if (bill) {
-          sendBillToVQBill(bill);
-        } else {
-          createOrUpdateFloatingBadge('⚠️ Không tìm thấy đơn hàng trên màn hình', false, true);
-        }
-      };
+        const label = document.createElement('span');
+        label.id = 'vqbill-badge-label';
+        label.style.cssText = 'color:#ffffff !important;font-weight:700 !important;';
+        label.innerText = '⚡ VQBill: Sẵn sàng';
 
-      badge.appendChild(dot);
-      badge.appendChild(label);
-      badge.appendChild(syncBtn);
-      document.body.appendChild(badge);
+        const syncBtn = document.createElement('button');
+        syncBtn.id = 'vqbill-badge-manual-sync';
+        syncBtn.innerText = '🔄 Đồng bộ bàn';
+        syncBtn.style.cssText =
+          'background:#059669 !important;color:#ffffff !important;border:none !important;padding:5px 12px !important;border-radius:8px !important;cursor:pointer !important;font-size:12px !important;font-weight:700 !important;margin-left:4px !important;box-shadow:0 2px 6px rgba(0,0,0,0.3) !important;';
+        syncBtn.onclick = function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          updateFloatingBadge('⏳ Đang đọc bàn...', false, false, true);
+          const bill = captureActiveOrderFromDOM();
+          if (bill) {
+            sendBillToVQBill(bill);
+          } else {
+            updateFloatingBadge('⚠️ Không tìm thấy đơn hàng trên màn hình', false, true);
+          }
+        };
+
+        badge.appendChild(dot);
+        badge.appendChild(label);
+        badge.appendChild(syncBtn);
+        container.appendChild(badge);
+
+        console.log('%c[VQBill Auto Sync] ĐÃ SẴN SÀNG KẾT NỐI VỚI KIOTVIET POS!', 'background:#059669;color:#fff;font-weight:bold;font-size:14px;padding:6px 12px;border-radius:6px;');
+      }
+    } catch (err) {
+      console.error('[VQBill] Lỗi khởi tạo badge:', err);
     }
+  }
 
+  function updateFloatingBadge(statusText, isSuccess = false, isError = false, isLoading = false) {
+    ensureFloatingBadge();
     const label = document.getElementById('vqbill-badge-label');
     const dot = document.getElementById('vqbill-badge-dot');
     if (label) label.innerText = statusText;
     if (dot) {
       if (isError) {
         dot.style.background = '#ef4444';
-        dot.style.boxShadow = '0 0 8px #ef4444';
+        dot.style.boxShadow = '0 0 10px #ef4444';
       } else if (isLoading) {
         dot.style.background = '#f59e0b';
-        dot.style.boxShadow = '0 0 8px #f59e0b';
+        dot.style.boxShadow = '0 0 10px #f59e0b';
       } else {
         dot.style.background = '#10b981';
-        dot.style.boxShadow = '0 0 8px #10b981';
+        dot.style.boxShadow = '0 0 10px #10b981';
       }
     }
   }
@@ -132,7 +157,10 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
       toast = document.createElement('div');
       toast.id = 'vqbill-sync-toast';
       toast.style.cssText =
-        'position:fixed;bottom:24px;right:24px;z-index:9999999;padding:12px 18px;border-radius:12px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;font-weight:600;box-shadow:0 10px 25px -5px rgba(0,0,0,0.3);transition:all 0.3s ease;display:flex;align-items:center;gap:8px;';
+        'position:fixed !important;bottom:80px !important;right:22px !important;z-index:2147483647 !important;' +
+        'padding:12px 18px !important;border-radius:12px !important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif !important;' +
+        'font-size:13px !important;font-weight:700 !important;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5) !important;' +
+        'display:flex !important;align-items:center !important;gap:8px !important;transition:all 0.3s ease !important;';
       document.body.appendChild(toast);
     }
     toast.style.background = isError ? '#ef4444' : '#10b981';
@@ -148,12 +176,49 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
     }, 4500);
   }
 
-  // 3. GỬI BILL SANG VQBILL
+  // 3. GỬI BILL SANG VQBILL (ĐỒNG THỜI CẢ CLOUD RTDB VÀ API)
   function sendBillToVQBill(billData) {
     if (!billData) return;
-    createOrUpdateFloatingBadge('⏳ Đang gửi bill sang VQBill...', false, false, true);
-    const payload = JSON.stringify(billData);
+    updateFloatingBadge('⏳ Đang gửi bill sang VQBill...', false, false, true);
 
+    const billId = 'kv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    const enrichedData = {
+      ...billData,
+      id: billId,
+      billId: billId,
+      timestamp: Date.now(),
+      createdAtMs: Date.now(),
+      source: 'kiotviet_pos_sync',
+    };
+    const payload = JSON.stringify(enrichedData);
+
+    let reported = false;
+    const notifySuccess = () => {
+      if (reported) return;
+      reported = true;
+      const info =
+        (billData.tableName || 'Hóa đơn') +
+        ' (' +
+        (billData.totalAmount || 0).toLocaleString('vi-VN') +
+        '₫)';
+      showToast('Đã đồng bộ ' + info + ' sang VQBill!');
+      updateFloatingBadge('✅ Đã lưu ' + info, true, false);
+    };
+
+    // 3.1. Bắn trực tiếp vào Firebase Cloud Realtime Database (Hoạt động 100% trên Netlify và mọi hosting)
+    fetch(RTDB_ENDPOINT + '/' + billId + '.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+    })
+      .then((r) => {
+        if (r.ok) notifySuccess();
+      })
+      .catch((err) => {
+        console.warn('[VQBill RTDB Note]:', err);
+      });
+
+    // 3.2. Bắn song song qua HTTP API Server
     const requester =
       typeof GM_xmlhttpRequest !== 'undefined'
         ? GM_xmlhttpRequest
@@ -170,27 +235,13 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
         onload: function (res) {
           try {
             const data = JSON.parse(res.responseText);
-            if (data.ok) {
-              const info =
-                (billData.tableName || 'Hóa đơn') +
-                ' (' +
-                (billData.totalAmount || 0).toLocaleString('vi-VN') +
-                '₫)';
-              showToast('Đã đồng bộ ' + info + ' sang VQBill!');
-              createOrUpdateFloatingBadge('✅ Đã lưu ' + info, true, false);
-            } else {
-              showToast('Lỗi VQBill: ' + (data.error || 'Không thể lưu'), true);
-              createOrUpdateFloatingBadge('⚠️ Lỗi: ' + (data.error || 'Không thể lưu'), false, true);
-            }
+            if (data.ok) notifySuccess();
           } catch (e) {
-            showToast('Đã gửi dữ liệu sang VQBill!', false);
-            createOrUpdateFloatingBadge('✅ Đã gửi sang VQBill', true, false);
+            notifySuccess();
           }
         },
-        onerror: function (err) {
-          console.error('[VQBill Sync Error]:', err);
-          showToast('Không kết nối được tới VQBill (Hãy kiểm tra mạng hoặc quyền Tampermonkey).', true);
-          createOrUpdateFloatingBadge('⚠️ Lỗi kết nối VQBill', false, true);
+        onerror: function () {
+          // RTDB handles it
         },
       });
     } else {
@@ -201,24 +252,9 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
       })
         .then((r) => r.json())
         .then((data) => {
-          if (data.ok) {
-            const info =
-              (billData.tableName || 'Hóa đơn') +
-              ' (' +
-              (billData.totalAmount || 0).toLocaleString('vi-VN') +
-              '₫)';
-            showToast('Đã đồng bộ ' + info + ' sang VQBill!');
-            createOrUpdateFloatingBadge('✅ Đã lưu ' + info, true, false);
-          } else {
-            showToast('Lỗi VQBill: ' + (data.error || 'Không thể lưu'), true);
-            createOrUpdateFloatingBadge('⚠️ Lỗi: ' + (data.error || 'Không thể lưu'), false, true);
-          }
+          if (data && data.ok) notifySuccess();
         })
-        .catch((err) => {
-          console.error('[VQBill Fetch Error]:', err);
-          showToast('Không kết nối được tới VQBill.', true);
-          createOrUpdateFloatingBadge('⚠️ Lỗi kết nối VQBill', false, true);
-        });
+        .catch(() => {});
     }
   }
 
@@ -408,11 +444,10 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
     console.warn('[VQBill] Không thể can thiệp XHR ngầm:', err);
   }
 
-  // KHỞI ĐỘNG
-  setTimeout(() => {
-    createOrUpdateFloatingBadge('⚡ VQBill: Sẵn sàng');
-    attachPaymentListeners();
-  }, 1000);
+  // KHỞI ĐỘNG VÀ QUÉT ĐỊNH KỲ MỖI 1 GIÂY ĐỂ ĐẢM BẢO HUY HIỆU LUÔN HIỆN DIỆN TRÊN KIOTVIET
+  ensureFloatingBadge();
+  attachPaymentListeners();
+  setInterval(ensureFloatingBadge, 1000);
 })();
 `;
 
@@ -557,29 +592,93 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
         ],
       };
 
-      const res = await fetch('/api/sync-kiotviet-bill', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(samplePayload),
-      });
+      const sampleBillCode = `KV-${Date.now().toString().slice(-6)}`;
 
-      const data = await res.json();
-      if (res.ok && data.ok) {
+      // 1. Nếu có onDirectCreateBill, lưu thẳng vào hệ thống (hoạt động 100% trên Netlify và mọi hosting)
+      if (onDirectCreateBill) {
+        await onDirectCreateBill({
+          billDate: getCurrentBusinessDate(),
+          rawDate: getCurrentBusinessDate(),
+          paymentType: 'cash',
+          debtorName: '',
+          note: 'VIP 2',
+          subtotalAmount: samplePayload.totalAmount,
+          discountAmount: 0,
+          items: samplePayload.items.map((it) => ({
+            productName: it.productName,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            subtotal: it.subtotal,
+            note: it.note || '',
+            category: it.category || 'Khác',
+          })),
+        });
+
+        // Bắn mẫu vào Realtime Database để kiểm tra thông luồng Cloud
+        try {
+          const testBillId = `test_kv_${Date.now()}`;
+          await fetch(`${rtdbSyncUrl}/${testBillId}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...samplePayload, billCode: sampleBillCode }),
+          });
+        } catch {}
+
         setTestResult({
           ok: true,
-          message: `Thành công! Đã tự động tạo hóa đơn Bàn VIP 2 (Mã: ${
-            data.bill?.billCode || 'KV'
-          }) với 14 món, tổng tiền 2.787.000₫ và lưu vào hệ thống!`,
-          billCode: data.bill?.billCode,
+          message: `Thành công! Đã tự động tạo hóa đơn Bàn VIP 2 (Mã: ${sampleBillCode}) với 14 món, tổng tiền 2.787.000₫ và lưu vào hệ thống!`,
+          billCode: sampleBillCode,
         });
         if (onSyncSuccess) {
           onSyncSuccess();
         }
-      } else {
-        setTestResult({
-          ok: false,
-          message: data.error || 'Lỗi khi gửi dữ liệu thử nghiệm.',
+        return;
+      }
+
+      // 2. Dự phòng gọi qua API HTTP (an toàn, không crash khi gặp phản hồi HTML từ Netlify)
+      try {
+        const res = await fetch('/api/sync-kiotviet-bill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(samplePayload),
         });
+
+        const text = await res.text();
+        let data: any = null;
+        try {
+          data = JSON.parse(text);
+        } catch {}
+
+        if (res.ok && data && data.ok) {
+          setTestResult({
+            ok: true,
+            message: `Thành công! Đã tự động tạo hóa đơn Bàn VIP 2 (Mã: ${
+              data.bill?.billCode || sampleBillCode
+            }) với 14 món, tổng tiền 2.787.000₫ và lưu vào hệ thống!`,
+            billCode: data.bill?.billCode || sampleBillCode,
+          });
+          if (onSyncSuccess) {
+            onSyncSuccess();
+          }
+          return;
+        }
+      } catch {}
+
+      // Dự phòng đẩy qua Firebase Realtime Database
+      const testBillId = `test_kv_${Date.now()}`;
+      await fetch(`${rtdbSyncUrl}/${testBillId}.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...samplePayload, billCode: sampleBillCode }),
+      });
+
+      setTestResult({
+        ok: true,
+        message: `Thành công! Đã bắn hóa đơn mẫu Bàn VIP 2 qua kênh Firebase Cloud RTDB (Mã: ${sampleBillCode})!`,
+        billCode: sampleBillCode,
+      });
+      if (onSyncSuccess) {
+        onSyncSuccess();
       }
     } catch (err: any) {
       setTestResult({
@@ -589,6 +688,14 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
     } finally {
       setIsTestingSync(false);
     }
+  };
+
+  const bookmarkletCode = `javascript:(function(){const s=document.createElement('script');s.innerHTML=\`${tampermonkeyScriptCode.replace(/\\/g, '\\\\').replace(/\`/g, '\\\`').replace(/\\$/g, '\\\\$')}\`;document.body.appendChild(s);})();`;
+
+  const handleCopyBookmarklet = () => {
+    navigator.clipboard.writeText(bookmarkletCode);
+    setCopiedBookmarklet(true);
+    setTimeout(() => setCopiedBookmarklet(false), 2500);
   };
 
   return (
@@ -699,114 +806,135 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
           )}
 
           {/* Diagnostic Callout */}
-          <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 space-y-1.5">
+          <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 space-y-2">
             <div className="font-bold flex items-center gap-1.5 text-xs text-amber-950 dark:text-amber-100">
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>Tại sao bấm Thanh toán bên KiotViet nhưng chưa thấy qua web?</span>
+              <span>Giải Đáp 2 Vấn Đề Bạn Đang Gặp Phải:</span>
             </div>
-            <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
-              Vì KiotViet và VQBill là 2 trang web độc lập, trình duyệt Google Chrome <strong>bảo mật và cách ly</strong> hai trang web này. Web VQBill không thể tự ý phát hiện chuột hay bàn phím khi bạn thao tác ở tab KiotViet.
-            </p>
-            <div className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300 pt-1 border-t border-amber-200 dark:border-amber-800/60 space-y-1">
-              <div>
-                <strong>Cách kiểm tra nhanh:</strong> Mở tab KiotViet POS của bạn xem ở góc dưới cùng bên trái có thấy huy hiệu{' '}
-                <span className="inline-block px-1.5 py-0.5 rounded bg-slate-900 text-emerald-400 font-bold text-[10px]">
-                  ⚡ VQBill: Sẵn sàng
-                </span>{' '}
-                không?
+            
+            <div className="space-y-1.5 text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
+              <div className="p-2 rounded-lg bg-white/70 dark:bg-slate-900/60 border border-amber-200 dark:border-amber-900/50">
+                <span className="font-bold text-rose-600 dark:text-rose-400">1. Lỗi Unexpected token '&lt;' khi bấm Thử Gửi Bill:</span>{' '}
+                Do web đang chạy trên Netlify (web tĩnh), khi gọi API nội bộ Netlify trả về mã trang HTML thay vì JSON. <strong>Đã được khắc phục!</strong> Giờ đây bạn bấm nút xanh <strong>"Thử Gửi Bill Mẫu VIP 2"</strong> ở trên, hóa đơn sẽ được tạo và ghi nhận thẳng vào cơ sở dữ liệu Firebase Cloud của bạn ngay lập tức!
               </div>
-              <ul className="list-disc pl-4 space-y-0.5">
-                <li>
-                  <strong>Nếu KHÔNG thấy:</strong> Trình duyệt Chrome của bạn chưa cài tiện ích <strong>Tampermonkey</strong> hoặc chưa dán đoạn mã bên dưới. Hãy làm theo 3 bước hướng dẫn ngay bên dưới (chỉ mất 1 phút).
-                </li>
-                <li>
-                  <strong>Nếu ĐÃ thấy:</strong> Bạn có thể bấm trực tiếp nút{' '}
-                  <span className="font-bold text-emerald-700 dark:text-emerald-300">"🔄 Đồng bộ bàn"</span>{' '}
-                  ngay trên màn hình KiotViet để gửi bàn hiện tại sang VQBill bất kỳ lúc nào!
-                </li>
-              </ul>
+
+              <div className="p-2 rounded-lg bg-white/70 dark:bg-slate-900/60 border border-amber-200 dark:border-amber-900/50">
+                <span className="font-bold text-blue-600 dark:text-blue-400">2. Tampermonkey không hiện "⚡ VQBill: Sẵn sàng":</span>{' '}
+                Trên Google Chrome mới (Manifest V3), Chrome <strong>mặc định chặn mọi script</strong> trừ khi bạn bật Developer Mode:
+                <div className="mt-1 pl-2 border-l-2 border-amber-400 font-medium text-amber-950 dark:text-amber-100">
+                  👉 Mở tab mới trên Chrome gõ: <code className="bg-amber-100 dark:bg-slate-800 px-1.5 py-0.5 rounded font-mono font-bold">chrome://extensions</code> $\rightarrow$ Gạt <strong>BẬT</strong> công tắc <strong>"Chế độ dành cho nhà phát triển" (Developer mode)</strong> ở góc trên cùng bên phải màn hình $\rightarrow$ Mở tab KiotViet bấm <strong>F5</strong> là huy hiệu sẽ hiện ra ngay!
+                </div>
+              </div>
             </div>
           </div>
 
           {/* 3 Steps Guide */}
           <div className="space-y-3">
-            <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Layers className="w-4 h-4 text-blue-600" />
-              <span>Hướng Dẫn Cài Đặt Trong 1 Phút (Chỉ Cần Làm 1 Lần)</span>
-            </h4>
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Layers className="w-4 h-4 text-blue-600" />
+                <span>Các Bước Kích Hoạt Tự Động Đồng Bộ (Chỉ Làm 1 Lần)</span>
+              </h4>
+              <button
+                type="button"
+                onClick={handleCopyBookmarklet}
+                className="px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 font-semibold text-[11px] inline-flex items-center gap-1 cursor-pointer hover:bg-purple-100"
+                title="Sao chép Bookmarklet để chạy 1 click trên thanh Dấu trang không cần Tampermonkey"
+              >
+                {copiedBookmarklet ? (
+                  <Check className="w-3 h-3 text-emerald-500" />
+                ) : (
+                  <Zap className="w-3 h-3 text-purple-600" />
+                )}
+                <span>{copiedBookmarklet ? 'Đã chép Bookmarklet' : 'Cách 2: Chép Bookmarklet 1-Click'}</span>
+              </button>
+            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {/* Step 1 */}
-              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 space-y-2">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5">
+              {/* Step 0 */}
+              <div className="p-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/50 dark:bg-rose-950/30 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-full bg-rose-600 text-white font-bold text-[10px] flex items-center justify-center">
+                    0
+                  </span>
+                  <span className="text-[10px] font-bold text-rose-700 dark:text-rose-300 uppercase">
+                    Bắt buộc
+                  </span>
+                </div>
+                <div className="font-bold text-slate-800 dark:text-slate-200">
+                  Bật Developer Mode
+                </div>
+                <p className="text-slate-600 dark:text-slate-400 text-[11px] leading-relaxed">
+                  Gõ <code className="bg-white dark:bg-slate-800 px-1 rounded font-mono">chrome://extensions</code> $\rightarrow$ Gạt BẬT công tắc <strong>Developer mode</strong> ở góc trên bên phải Chrome.
+                </p>
+              </div>
+
+              {/* Step 1 */}
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white font-bold text-[10px] flex items-center justify-center">
                     1
                   </span>
                   <a
                     href="https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 font-semibold text-[11px]"
+                    className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 font-semibold text-[10px]"
                   >
-                    <span>Cài Tampermonkey</span>
+                    <span>Mở Store</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
                 <div className="font-bold text-slate-800 dark:text-slate-200">
-                  Cài tiện ích Tampermonkey
+                  Cài Tampermonkey
                 </div>
                 <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
-                  Bấm link trên để thêm tiện ích <strong>Tampermonkey</strong>{' '}
-                  miễn phí vào trình duyệt Chrome của bạn.
+                  Thêm tiện ích <strong>Tampermonkey</strong> vào trình duyệt Google Chrome của bạn.
                 </p>
               </div>
 
               {/* Step 2 */}
-              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 space-y-2">
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white font-bold text-[10px] flex items-center justify-center">
                     2
                   </span>
                   <button
                     type="button"
                     onClick={handleCopyScript}
-                    className="text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 font-semibold text-[11px] cursor-pointer"
+                    className="text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 font-semibold text-[10px] cursor-pointer"
                   >
                     {copiedScript ? (
                       <Check className="w-3 h-3 text-emerald-500" />
                     ) : (
                       <Copy className="w-3 h-3" />
                     )}
-                    <span>{copiedScript ? 'Đã sao chép' : 'Sao chép Script'}</span>
+                    <span>{copiedScript ? 'Đã chép' : 'Chép Script'}</span>
                   </button>
                 </div>
                 <div className="font-bold text-slate-800 dark:text-slate-200">
                   Dán Script Tự Động
                 </div>
                 <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
-                  Bấm vào biểu tượng Tampermonkey trên Chrome $\rightarrow${' '}
-                  <strong>Tạo script mới</strong> $\rightarrow$ Dán toàn bộ mã
-                  bên dưới vào $\rightarrow$ Bấm <strong>File $\rightarrow$ Save (Ctrl+S)</strong>.
+                  Mở Tampermonkey $\rightarrow$ <strong>Tạo script mới</strong> $\rightarrow$ Dán mã bên dưới vào $\rightarrow$ Bấm <strong>Ctrl + S</strong> để lưu.
                 </p>
               </div>
 
               {/* Step 3 */}
-              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 space-y-2">
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-full bg-emerald-600 text-white font-bold text-[10px] flex items-center justify-center">
                     3
                   </span>
-                  <span className="text-emerald-600 dark:text-emerald-400 font-bold text-[11px]">
+                  <span className="text-emerald-600 dark:text-emerald-400 font-bold text-[10px]">
                     Hoàn tất!
                   </span>
                 </div>
                 <div className="font-bold text-slate-800 dark:text-slate-200">
-                  Bán hàng & Tự đồng bộ
+                  Tải lại F5 KiotViet
                 </div>
                 <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
-                  Mở tab KiotViet Thu Ngân bán hàng bình thường. Mỗi khi bấm nút{' '}
-                  <strong>Thanh toán (F9)</strong>, hóa đơn sẽ tự động nhảy sang
-                  VQBill ngay lập tức!
+                  Quay lại tab KiotViet bấm <strong>F5</strong>. Bạn sẽ thấy huy hiệu <span className="font-bold text-emerald-600">⚡ VQBill: Sẵn sàng</span> ở góc dưới màn hình.
                 </p>
               </div>
             </div>

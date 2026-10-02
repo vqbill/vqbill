@@ -11,7 +11,13 @@ import {
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
-import { ref, set as rtdbSet, remove as rtdbRemove, get as rtdbGet } from 'firebase/database';
+import {
+  ref,
+  set as rtdbSet,
+  remove as rtdbRemove,
+  get as rtdbGet,
+  onChildAdded,
+} from 'firebase/database';
 import { db, rtdb, auth, handleFirestoreError, OperationType } from '../firebase';
 import {
   BillRecord,
@@ -1105,6 +1111,38 @@ function removeFromRtdbSafe(path: string): Promise<void> {
     // Ignore
   }
   return Promise.resolve();
+}
+
+export function listenToKiotVietInbox(
+  onBillReceived: (payload: any) => Promise<void>
+): () => void {
+  try {
+    const inboxRef = ref(rtdb, 'kiotviet_inbox');
+    const unsub = onChildAdded(inboxRef, async (snap) => {
+      if (!snap || !snap.exists()) return;
+      const val = snap.val();
+      const key = snap.key;
+      if (!val || typeof val !== 'object') return;
+      // Remove immediately from inbox so it won't be processed again
+      if (key) {
+        removeFromRtdbSafe(`kiotviet_inbox/${key}`).catch(() => {});
+      }
+      try {
+        await onBillReceived(val);
+      } catch (err) {
+        console.error('[KiotViet Inbox Error]:', err);
+      }
+    });
+
+    return () => {
+      try {
+        if (typeof unsub === 'function') unsub();
+      } catch {}
+    };
+  } catch (err) {
+    console.warn('[KiotViet Inbox Setup Warning]:', err);
+    return () => {};
+  }
 }
 
 export async function fetchRtdbWorkspaceOnce(
