@@ -2565,10 +2565,14 @@ export default function App() {
     return res.bill;
   };
 
+  const handleSaveExtractedBillRef = useRef(handleSaveExtractedBill);
+  handleSaveExtractedBillRef.current = handleSaveExtractedBill;
+
   // Tự động nhận hóa đơn KiotViet POS bắn qua Firebase Realtime Database
   useEffect(() => {
-    const unsub = listenToKiotVietInbox(async (incoming) => {
+    const processIncomingBill = async (incoming: any) => {
       try {
+        if (!incoming || typeof incoming !== 'object') return;
         const rawItems = Array.isArray(incoming.items)
           ? incoming.items
           : Array.isArray(incoming.InvoiceDetails)
@@ -2598,8 +2602,9 @@ export default function App() {
 
         if (itemsToSave.length > 0) {
           const subtotal = itemsToSave.reduce((s, it) => s + it.subtotal, 0);
-          await handleSaveExtractedBill({
-            billDate: incoming.billDate || getCurrentBusinessDate(),
+          const effectiveDate = incoming.billDate || getCurrentBusinessDate();
+          await handleSaveExtractedBillRef.current({
+            billDate: effectiveDate,
             rawDate: incoming.rawDate || incoming.billDate || getCurrentBusinessDate(),
             paymentType:
               incoming.paymentType === 'transfer'
@@ -2617,7 +2622,7 @@ export default function App() {
             items: itemsToSave,
           });
           showToast(
-            `⚡ Đã tự động nhận hóa đơn ${
+            `⚡ [KiotViet POS] Đã tự động nhận hóa đơn ${
               incoming.tableName || 'KiotViet'
             } (${formatVND(incoming.totalAmount || subtotal)})!`
           );
@@ -2625,10 +2630,36 @@ export default function App() {
       } catch (err) {
         console.error('[KiotViet Sync Processing Error]:', err);
       }
-    });
+    };
+
+    // 1. Kênh WebSocket realtime từ Firebase SDK
+    const unsub = listenToKiotVietInbox(processIncomingBill);
+
+    // 2. Kênh Polling HTTP dự phòng (chạy mỗi 3.5s đảm bảo không bao giờ sót bill dù mạng chập chờn)
+    const pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(
+          'https://vqbill-default-rtdb.asia-southeast1.firebasedatabase.app/kiotviet_inbox.json'
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data || typeof data !== 'object') return;
+        const entries = Object.entries(data);
+        for (const [key, val] of entries) {
+          if (!val || typeof val !== 'object') continue;
+          // Xóa ngay trên RTDB inbox để không bị xử lý trùng
+          fetch(
+            `https://vqbill-default-rtdb.asia-southeast1.firebasedatabase.app/kiotviet_inbox/${key}.json`,
+            { method: 'DELETE' }
+          ).catch(() => {});
+          await processIncomingBill(val);
+        }
+      } catch {}
+    }, 3500);
 
     return () => {
       unsub();
+      clearInterval(pollTimer);
     };
   }, []);
 

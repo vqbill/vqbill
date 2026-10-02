@@ -51,15 +51,15 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
   const tampermonkeyScriptCode = `// ==UserScript==
 // @name         VQBill Auto Sync - KiotViet POS (Thu ngân)
 // @namespace    https://vqbill.app/
-// @version      2.1.0
+// @version      2.2.0
 // @description  Tự động bắt sự kiện bấm nút Thanh toán (F9/F10) trên KiotViet POS để đồng bộ hóa đơn sang VQBill ngay lập tức mà không cần KiotViet API
 // @author       VQBill
 // @match        *://*.kiotviet.vn/*
 // @match        *://*.kiotviet.com/*
-// @match        https://*.kiotviet.vn/*
-// @match        https://fnb.kiotviet.vn/*
-// @match        https://pos.kiotviet.vn/*
-// @match        https://*.kiotviet.com/*
+// @match        *://*/*kiotviet*/*
+// @match        *://*/*pos*/*
+// @include      *kiotviet*
+// @allFrames    true
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=kiotviet.vn
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
@@ -76,7 +76,7 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
   const VQBILL_ENDPOINT = '${syncEndpointUrl}';
   const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-  // 2. HUY HIỆU NỔI VQBILL TRÊN GIAO DIỆN KIOTVIET (BẢO ĐẢM KHÔNG BỊ SPA/ANGULAR XÓA MẤT)
+  // 2. HUY HIỆU NỔI VQBILL Ở GÓC DƯỚI BÊN TRÁI (TRÁNH NÚT THANH TOÁN BÊN PHẢI)
   function ensureFloatingBadge() {
     try {
       const container = document.body || document.documentElement;
@@ -87,11 +87,11 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
         badge = document.createElement('div');
         badge.id = 'vqbill-sync-floating-badge';
         badge.style.cssText =
-          'position:fixed !important;bottom:22px !important;right:22px !important;z-index:2147483647 !important;' +
+          'position:fixed !important;bottom:22px !important;left:22px !important;z-index:2147483647 !important;' +
           'background:#090d16 !important;color:#f8fafc !important;padding:10px 16px !important;border-radius:14px !important;' +
           'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif !important;font-size:13px !important;font-weight:600 !important;' +
-          'box-shadow:0 12px 30px -5px rgba(0,0,0,0.6), 0 0 0 2px #059669 !important;display:flex !important;align-items:center !important;' +
-          'gap:10px !important;cursor:default !important;user-select:none !important;border:1px solid #10b981 !important;';
+          'box-shadow:0 12px 30px -5px rgba(0,0,0,0.6), 0 0 16px rgba(16,185,129,0.5) !important;display:flex !important;align-items:center !important;' +
+          'gap:10px !important;cursor:grab !important;user-select:none !important;border:1.5px solid #10b981 !important;';
 
         const dot = document.createElement('span');
         dot.id = 'vqbill-badge-dot';
@@ -157,7 +157,7 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
       toast = document.createElement('div');
       toast.id = 'vqbill-sync-toast';
       toast.style.cssText =
-        'position:fixed !important;bottom:80px !important;right:22px !important;z-index:2147483647 !important;' +
+        'position:fixed !important;bottom:80px !important;left:22px !important;z-index:2147483647 !important;' +
         'padding:12px 18px !important;border-radius:12px !important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif !important;' +
         'font-size:13px !important;font-weight:700 !important;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5) !important;' +
         'display:flex !important;align-items:center !important;gap:8px !important;transition:all 0.3s ease !important;';
@@ -217,6 +217,46 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
       .catch((err) => {
         console.warn('[VQBill RTDB Note]:', err);
       });
+
+    // 3.2. Bắn song song qua HTTP API Server
+    const requester =
+      typeof GM_xmlhttpRequest !== 'undefined'
+        ? GM_xmlhttpRequest
+        : typeof GM !== 'undefined' && GM.xmlHttpRequest
+        ? GM.xmlHttpRequest
+        : null;
+
+    if (requester) {
+      requester({
+        method: 'POST',
+        url: VQBILL_ENDPOINT,
+        headers: { 'Content-Type': 'application/json' },
+        data: payload,
+        onload: function (res) {
+          try {
+            const data = JSON.parse(res.responseText);
+            if (data.ok) notifySuccess();
+          } catch (e) {
+            notifySuccess();
+          }
+        },
+        onerror: function () {
+          // RTDB handles it
+        },
+      });
+    } else {
+      fetch(VQBILL_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data && data.ok) notifySuccess();
+        })
+        .catch(() => {});
+    }
+  }
 
     // 3.2. Bắn song song qua HTTP API Server
     const requester =
@@ -806,23 +846,56 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
           )}
 
           {/* Diagnostic Callout */}
-          <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 space-y-2">
+          <div className="p-4 rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50/90 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 space-y-3">
             <div className="font-bold flex items-center gap-1.5 text-xs text-amber-950 dark:text-amber-100">
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>Giải Đáp 2 Vấn Đề Bạn Đang Gặp Phải:</span>
+              <span>Giải Đáp 3 Câu Hỏi Quan Trọng Của Bạn:</span>
             </div>
             
-            <div className="space-y-1.5 text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
-              <div className="p-2 rounded-lg bg-white/70 dark:bg-slate-900/60 border border-amber-200 dark:border-amber-900/50">
-                <span className="font-bold text-rose-600 dark:text-rose-400">1. Lỗi Unexpected token '&lt;' khi bấm Thử Gửi Bill:</span>{' '}
-                Do web đang chạy trên Netlify (web tĩnh), khi gọi API nội bộ Netlify trả về mã trang HTML thay vì JSON. <strong>Đã được khắc phục!</strong> Giờ đây bạn bấm nút xanh <strong>"Thử Gửi Bill Mẫu VIP 2"</strong> ở trên, hóa đơn sẽ được tạo và ghi nhận thẳng vào cơ sở dữ liệu Firebase Cloud của bạn ngay lập tức!
+            <div className="space-y-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
+              <div className="p-2.5 rounded-lg bg-white/80 dark:bg-slate-900/70 border border-amber-200 dark:border-amber-900/50">
+                <div className="font-bold text-rose-600 dark:text-rose-400 mb-0.5">
+                  1. Tại sao bấm "Thử Gửi Bill Mẫu VIP 2" trước đó bị báo lỗi?
+                </div>
+                <div>
+                  Do trang web đang chạy trên Netlify (hosting tĩnh không có Node server), đường dẫn API nội bộ cũ trả về mã HTML thay vì JSON. <strong>Đã được sửa triệt để!</strong> Bây giờ bạn bấm nút <strong>"Thử Gửi Bill Mẫu VIP 2"</strong> ở trên, hóa đơn mẫu 2.787.000₫ (14 món) sẽ được tạo trực tiếp và lưu ngay vào danh sách hóa đơn của bạn.
+                </div>
               </div>
 
-              <div className="p-2 rounded-lg bg-white/70 dark:bg-slate-900/60 border border-amber-200 dark:border-amber-900/50">
-                <span className="font-bold text-blue-600 dark:text-blue-400">2. Tampermonkey không hiện "⚡ VQBill: Sẵn sàng":</span>{' '}
-                Trên Google Chrome mới (Manifest V3), Chrome <strong>mặc định chặn mọi script</strong> trừ khi bạn bật Developer Mode:
-                <div className="mt-1 pl-2 border-l-2 border-amber-400 font-medium text-amber-950 dark:text-amber-100">
-                  👉 Mở tab mới trên Chrome gõ: <code className="bg-amber-100 dark:bg-slate-800 px-1.5 py-0.5 rounded font-mono font-bold">chrome://extensions</code> $\rightarrow$ Gạt <strong>BẬT</strong> công tắc <strong>"Chế độ dành cho nhà phát triển" (Developer mode)</strong> ở góc trên cùng bên phải màn hình $\rightarrow$ Mở tab KiotViet bấm <strong>F5</strong> là huy hiệu sẽ hiện ra ngay!
+              <div className="p-2.5 rounded-lg bg-white/80 dark:bg-slate-900/70 border border-amber-200 dark:border-amber-900/50">
+                <div className="font-bold text-blue-600 dark:text-blue-400 mb-0.5">
+                  2. Tại sao cài Tampermonkey rồi nhưng KiotViet không hiện "⚡ VQBill: Sẵn sàng"?
+                </div>
+                <div>
+                  Có 3 nguyên nhân phổ biến trong Google Chrome:
+                  <ul className="list-disc pl-4 mt-1 space-y-0.5 font-medium text-amber-950 dark:text-amber-100">
+                    <li>
+                      <strong>Chưa bật Developer Mode:</strong> Chrome chặn UserScripts trừ khi bạn vào <code className="bg-amber-100 dark:bg-slate-800 px-1 py-0.5 rounded font-mono font-bold">chrome://extensions</code> và gạt <strong>BẬT "Chế độ dành cho nhà phát triển" (Developer mode)</strong> ở góc trên bên phải.
+                    </li>
+                    <li>
+                      <strong>Chưa bấm Lưu (Ctrl + S) trong Tampermonkey:</strong> Sau khi dán mã script vào Tampermonkey, bạn phải bấm phím <strong>Ctrl + S</strong> (hoặc Menu File $\rightarrow$ Save) thì script mới được lưu lại.
+                    </li>
+                    <li>
+                      <strong>Chưa F5 lại KiotViet:</strong> Cần bấm phím <strong>F5</strong> trên tab KiotViet để tiện ích nạp script mới. Huy hiệu VQBill hiện nằm ở <strong>GÓC DƯỚI BÊN TRÁI</strong> màn hình KiotViet (để không che nút Thanh toán F9 bên phải).
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white/80 dark:bg-slate-900/70 border border-amber-200 dark:border-amber-900/50">
+                <div className="font-bold text-emerald-700 dark:text-emerald-400 mb-0.5">
+                  3. Câu hỏi: "Làm tất cả các bước rồi, sao không thấy gì nhỉ?"
+                </div>
+                <div>
+                  Hãy kiểm tra 2 điểm mấu chốt sau:
+                  <ul className="list-decimal pl-4 mt-1 space-y-1 font-medium text-amber-950 dark:text-amber-100">
+                    <li>
+                      <strong>Kiểm tra tab KiotViet:</strong> Nhìn xuống <strong>góc dưới bên TRÁI</strong> màn hình KiotViet. Nếu đã có huy hiệu màu xanh <code className="bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 px-1 py-0.5 rounded font-bold">⚡ VQBill: Sẵn sàng</code>, bạn chỉ cần bấm thử nút <strong>[🔄 Đồng bộ bàn]</strong> ngay trên huy hiệu đó hoặc bấm <strong>Thanh toán (F9)</strong> một đơn bất kỳ.
+                    </li>
+                    <li>
+                      <strong>Kiểm tra Bộ Lọc Ngày trên VQBill:</strong> Khi bill từ KiotViet gửi sang, hệ thống tự động ghi nhận vào <strong>Ca ngày hôm nay</strong>. Nếu trên VQBill bạn đang chọn xem ngày cũ ("Hôm qua"), bill mới sẽ không nằm trong bảng đó. Bạn chỉ cần nhấn vào nút <strong>"Hôm nay"</strong> hoặc <strong>"Tất cả"</strong> trên thanh chọn thời gian của VQBill là sẽ thấy hóa đơn xuất hiện ngay tức khắc!
+                    </li>
+                  </ul>
                 </div>
               </div>
             </div>
