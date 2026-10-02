@@ -894,6 +894,13 @@ app.post('/api/workspace', (req, res) => {
 app.post('/api/sync-kiotviet-bill', (req, res) => {
   try {
     const payload = req.body || {};
+    console.log('[KiotViet POS Sync API] Nhận yêu cầu đồng bộ:', {
+      tableName: payload.tableName || payload.table,
+      totalAmount: payload.totalAmount || payload.Total,
+      itemsCount: Array.isArray(payload.items) ? payload.items.length : 0,
+      hasRawText: Boolean(payload.rawText),
+    });
+
     const now = Date.now();
     const todayStr = getCurrentBusinessDate();
 
@@ -1028,9 +1035,44 @@ app.post('/api/sync-kiotviet-bill', (req, res) => {
       }
     }
 
+    // Fallback if items list is empty but rawText was supplied
+    if (billItemsPayload.length === 0 && payload.rawText && typeof payload.rawText === 'string') {
+      const fallbackParsed = parseInvoiceText(
+        payload.rawText,
+        todayStr,
+        cloudWorkspace.products,
+        cloudWorkspace.categories
+      );
+      if (fallbackParsed.items.length > 0) {
+        billItemsPayload = fallbackParsed.items.map((it) => ({
+          productName: it.productName,
+          note: it.note || '',
+          category: it.category || inferCategory(it.productName, cloudWorkspace.categories),
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          subtotal: it.subtotal,
+        }));
+        if (!extractedTotal || extractedTotal <= 0) {
+          extractedTotal = fallbackParsed.billInfo.totalAmount || 0;
+        }
+      }
+    }
+
+    // Safety fallback: If items list is still empty but totalAmount > 0, create a generic item to preserve the bill
     if (billItemsPayload.length === 0) {
-      res.status(400).json({ ok: false, error: 'Không có món nào trong hóa đơn KiotViet.' });
-      return;
+      if (extractedTotal > 0) {
+        billItemsPayload.push({
+          productName: `Thanh toán ${extractedTableName}`,
+          note: 'Đồng bộ từ KiotViet POS',
+          category: 'Khác',
+          quantity: 1,
+          unitPrice: extractedTotal,
+          subtotal: extractedTotal,
+        });
+      } else {
+        res.status(400).json({ ok: false, error: 'Không có món hoặc tổng tiền nào trong hóa đơn KiotViet.' });
+        return;
+      }
     }
 
     if (extractedTotal <= 0) {

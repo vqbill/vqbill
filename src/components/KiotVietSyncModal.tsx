@@ -46,12 +46,18 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
   const tampermonkeyScriptCode = `// ==UserScript==
 // @name         VQBill Auto Sync - KiotViet POS (Thu ngân)
 // @namespace    https://vqbill.app/
-// @version      1.0.0
-// @description  Tự động bắt sự kiện bấm nút Thanh toán (F9) trên KiotViet POS để đồng bộ hóa đơn sang VQBill ngay lập tức mà không cần KiotViet API
+// @version      2.0.0
+// @description  Tự động bắt sự kiện bấm nút Thanh toán (F9/F10) trên KiotViet POS để đồng bộ hóa đơn sang VQBill ngay lập tức mà không cần KiotViet API
 // @author       VQBill
+// @match        *://*.kiotviet.vn/*
+// @match        https://*.kiotviet.vn/*
 // @match        https://fnb.kiotviet.vn/*
+// @match        https://pos.kiotviet.vn/*
+// @match        https://*.kiotviet.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=kiotviet.vn
 // @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @grant        unsafeWindow
 // @connect      *
 // @run-at       document-idle
 // ==/UserScript==
@@ -61,6 +67,64 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
 
   // 1. CỔNG NHẬN DỮ LIỆU VQBILL CỦA BẠN
   const VQBILL_ENDPOINT = '${syncEndpointUrl}';
+  const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+
+  // 2. HUY HIỆU TRẠNG THÁI NỔI TRÊN MÀN HÌNH KIOTVIET
+  function createOrUpdateFloatingBadge(statusText, isSuccess = false, isError = false, isLoading = false) {
+    let badge = document.getElementById('vqbill-sync-floating-badge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.id = 'vqbill-sync-floating-badge';
+      badge.style.cssText =
+        'position:fixed;bottom:18px;left:18px;z-index:9999999;background:#0f172a;color:#f8fafc;padding:8px 14px;border-radius:12px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:12px;font-weight:600;box-shadow:0 10px 25px -5px rgba(0,0,0,0.4);border:1px solid #334155;display:flex;align-items:center;gap:10px;transition:all 0.3s ease;user-select:none;';
+
+      const dot = document.createElement('span');
+      dot.id = 'vqbill-badge-dot';
+      dot.style.cssText = 'width:8px;height:8px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;shrink:0;';
+
+      const label = document.createElement('span');
+      label.id = 'vqbill-badge-label';
+      label.innerText = '⚡ VQBill: Sẵn sàng';
+
+      const syncBtn = document.createElement('button');
+      syncBtn.id = 'vqbill-badge-manual-sync';
+      syncBtn.innerText = '🔄 Đồng bộ bàn';
+      syncBtn.style.cssText =
+        'background:#059669;color:#fff;border:none;padding:4px 10px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;margin-left:4px;';
+      syncBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        createOrUpdateFloatingBadge('⏳ Đang đọc dữ liệu bàn...', false, false, true);
+        const bill = captureActiveOrderFromDOM();
+        if (bill) {
+          sendBillToVQBill(bill);
+        } else {
+          createOrUpdateFloatingBadge('⚠️ Không tìm thấy đơn hàng trên màn hình', false, true);
+        }
+      };
+
+      badge.appendChild(dot);
+      badge.appendChild(label);
+      badge.appendChild(syncBtn);
+      document.body.appendChild(badge);
+    }
+
+    const label = document.getElementById('vqbill-badge-label');
+    const dot = document.getElementById('vqbill-badge-dot');
+    if (label) label.innerText = statusText;
+    if (dot) {
+      if (isError) {
+        dot.style.background = '#ef4444';
+        dot.style.boxShadow = '0 0 8px #ef4444';
+      } else if (isLoading) {
+        dot.style.background = '#f59e0b';
+        dot.style.boxShadow = '0 0 8px #f59e0b';
+      } else {
+        dot.style.background = '#10b981';
+        dot.style.boxShadow = '0 0 8px #10b981';
+      }
+    }
+  }
 
   function showToast(message, isError = false) {
     let toast = document.getElementById('vqbill-sync-toast');
@@ -81,16 +145,24 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
         toast.style.opacity = '0';
         toast.style.transform = 'translateY(10px)';
       }
-    }, 4000);
+    }, 4500);
   }
 
-  // 2. GỬI BILL SANG VQBILL
+  // 3. GỬI BILL SANG VQBILL
   function sendBillToVQBill(billData) {
     if (!billData) return;
+    createOrUpdateFloatingBadge('⏳ Đang gửi bill sang VQBill...', false, false, true);
     const payload = JSON.stringify(billData);
 
-    if (typeof GM_xmlhttpRequest !== 'undefined') {
-      GM_xmlhttpRequest({
+    const requester =
+      typeof GM_xmlhttpRequest !== 'undefined'
+        ? GM_xmlhttpRequest
+        : typeof GM !== 'undefined' && GM.xmlHttpRequest
+        ? GM.xmlHttpRequest
+        : null;
+
+    if (requester) {
+      requester({
         method: 'POST',
         url: VQBILL_ENDPOINT,
         headers: { 'Content-Type': 'application/json' },
@@ -99,22 +171,26 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
           try {
             const data = JSON.parse(res.responseText);
             if (data.ok) {
-              showToast(
-                'Đã đồng bộ ' +
-                  (billData.tableName || 'Bill') +
-                  ' (' +
-                  (billData.totalAmount || 0).toLocaleString('vi-VN') +
-                  '₫) sang VQBill!'
-              );
+              const info =
+                (billData.tableName || 'Hóa đơn') +
+                ' (' +
+                (billData.totalAmount || 0).toLocaleString('vi-VN') +
+                '₫)';
+              showToast('Đã đồng bộ ' + info + ' sang VQBill!');
+              createOrUpdateFloatingBadge('✅ Đã lưu ' + info, true, false);
             } else {
-              showToast('Lỗi: ' + (data.error || 'Không thể lưu'), true);
+              showToast('Lỗi VQBill: ' + (data.error || 'Không thể lưu'), true);
+              createOrUpdateFloatingBadge('⚠️ Lỗi: ' + (data.error || 'Không thể lưu'), false, true);
             }
           } catch (e) {
-            showToast('Đã gửi hóa đơn sang VQBill!', false);
+            showToast('Đã gửi dữ liệu sang VQBill!', false);
+            createOrUpdateFloatingBadge('✅ Đã gửi sang VQBill', true, false);
           }
         },
-        onerror: function () {
-          showToast('Không kết nối được tới VQBill.', true);
+        onerror: function (err) {
+          console.error('[VQBill Sync Error]:', err);
+          showToast('Không kết nối được tới VQBill (Hãy kiểm tra mạng hoặc quyền Tampermonkey).', true);
+          createOrUpdateFloatingBadge('⚠️ Lỗi kết nối VQBill', false, true);
         },
       });
     } else {
@@ -126,30 +202,37 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
         .then((r) => r.json())
         .then((data) => {
           if (data.ok) {
-            showToast(
-              'Đã đồng bộ ' +
-                (billData.tableName || 'Bill') +
-                ' (' +
-                (billData.totalAmount || 0).toLocaleString('vi-VN') +
-                '₫) sang VQBill!'
-            );
+            const info =
+              (billData.tableName || 'Hóa đơn') +
+              ' (' +
+              (billData.totalAmount || 0).toLocaleString('vi-VN') +
+              '₫)';
+            showToast('Đã đồng bộ ' + info + ' sang VQBill!');
+            createOrUpdateFloatingBadge('✅ Đã lưu ' + info, true, false);
+          } else {
+            showToast('Lỗi VQBill: ' + (data.error || 'Không thể lưu'), true);
+            createOrUpdateFloatingBadge('⚠️ Lỗi: ' + (data.error || 'Không thể lưu'), false, true);
           }
         })
-        .catch(() => {
+        .catch((err) => {
+          console.error('[VQBill Fetch Error]:', err);
           showToast('Không kết nối được tới VQBill.', true);
+          createOrUpdateFloatingBadge('⚠️ Lỗi kết nối VQBill', false, true);
         });
     }
   }
 
-  // 3. ĐỌC DỮ LIỆU TỪ MÀN HÌNH GIAO DIỆN KIOTVIET (DOM SCRAPER)
+  // 4. ĐỌC DỮ LIỆU TỪ MÀN HÌNH GIAO DIỆN KIOTVIET (DOM SCRAPER)
   function captureActiveOrderFromDOM() {
     try {
       let tableName = '';
+
+      // Tìm tên bàn / phòng
       const activeTableEl =
         document.querySelector(
-          '.room-active, .table-active, .order-tab-active, [ng-bind*="TableName"], [ng-bind*="table.Name"]'
+          '.room-active, .table-active, .order-tab-active, [ng-bind*="TableName"], [ng-bind*="table.Name"], [ng-bind*="RoomName"], .table-title, .name-table, .title-table'
         ) ||
-        Array.from(document.querySelectorAll('span, div, button, h3')).find((el) =>
+        Array.from(document.querySelectorAll('span, div, button, h3, h2, h4, b, strong')).find((el) =>
           /^(?:VIP\\s*\\d+|BÀN\\s*\\d+|MANG\\s*VỀ|MANG\\s*ĐI|MV\\s*\\d+)/i.test(
             (el.innerText || '').trim()
           )
@@ -159,25 +242,25 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
         tableName = (activeTableEl.innerText || '').trim().split('\\n')[0].trim();
       }
 
+      // Tìm danh sách món
       const items = [];
       const itemRows = document.querySelectorAll(
-        '.cart-item, .order-item, tr.item-row, .order-detail-row, [ng-repeat*="item in currentOrder"]'
+        '.cart-item, .order-item, tr.item-row, .order-detail-row, [ng-repeat*="currentOrder"], [ng-repeat*="invoiceDetail"], [ng-repeat*="item in order"], #tableCart tbody tr, .cart-table tbody tr, .table-cart tbody tr, tbody.list-cart tr'
       );
 
       if (itemRows.length > 0) {
         itemRows.forEach((row) => {
           const nameEl =
-            row.querySelector('.item-name, .product-name, [ng-bind*="ProductName"]') ||
+            row.querySelector('.item-name, .product-name, [ng-bind*="ProductName"], .name, .pro-name') ||
             row.querySelector('td:nth-child(2)');
           const qtyEl =
-            row.querySelector('.item-quantity, .qty, input.quantity, [ng-bind*="Quantity"]') ||
+            row.querySelector('.item-quantity, .qty, input.quantity, [ng-bind*="Quantity"], .quantity') ||
             row.querySelector('td:nth-child(3)');
           const priceEl =
             row.querySelector('.item-price, .price, [ng-bind*="Price"]') ||
             row.querySelector('td:nth-child(4)');
           const noteEl =
-            row.querySelector('.item-note, .note, [ng-bind*="Note"]') ||
-            row.querySelector('.txt-note');
+            row.querySelector('.item-note, .note, [ng-bind*="Note"], .txt-note');
 
           const name = nameEl ? (nameEl.innerText || nameEl.value || '').trim() : '';
           const qty = qtyEl
@@ -188,7 +271,7 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
             : 0;
           const note = noteEl ? (noteEl.innerText || noteEl.value || '').trim() : '';
 
-          if (name) {
+          if (name && name.length > 1 && !/^(?:thêm|xóa|tên món|stt)/i.test(name)) {
             items.push({
               productName: name,
               quantity: qty,
@@ -200,11 +283,12 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
         });
       }
 
+      // Tìm tổng tiền
       let totalAmount = 0;
       const totalEl =
-        document.querySelector('.total-amount, [ng-bind*="Total"], [ng-bind*="totalPayment"], .lbl-total') ||
+        document.querySelector('.total-amount, [ng-bind*="Total"], [ng-bind*="totalPayment"], .lbl-total, #totalPayment') ||
         Array.from(document.querySelectorAll('span, div, b, strong')).find((el) =>
-          /(?:tổng\\s*tiền|khách\\s*cần\\s*trả)\\s*[:]?\\s*[\\d.,]+/i.test(el.innerText || '')
+          /(?:tổng\\s*tiền|khách\\s*cần\\s*trả|tổng\\s*cộng)\\s*[:]?\\s*[\\d.,]+/i.test(el.innerText || '')
         );
 
       if (totalEl) {
@@ -212,38 +296,36 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
           parseInt((totalEl.innerText || '').replace(/[^\\d]/g, ''), 10) || 0;
       }
 
-      if (items.length === 0 && totalAmount === 0) {
-        const orderPanel =
-          document.querySelector('.order-panel, .cart-panel, .panel-cart, #cart-container') ||
-          document.body;
-        return {
-          rawText: orderPanel.innerText || '',
-          tableName: tableName || 'Bàn KiotViet',
-        };
-      }
+      // Container giỏ hàng / order
+      const orderPanel =
+        document.querySelector('.order-panel, .cart-panel, .panel-cart, #cart-container, #tableCart, .pos-cart, [ng-controller*="Cart"], [ng-controller*="Order"]') ||
+        document.body;
+
+      const rawText = orderPanel ? orderPanel.innerText || '' : '';
 
       return {
         tableName: tableName || 'Bàn KiotViet',
         items: items,
         totalAmount: totalAmount,
+        rawText: rawText,
         paymentType: 'cash',
       };
     } catch (e) {
-      console.error('[VQBill] Lỗi đọc KiotViet:', e);
+      console.error('[VQBill] Lỗi đọc KiotViet DOM:', e);
       return null;
     }
   }
 
-  // 4. LẮNG NGHE SỰ KIỆN THANH TOÁN (F9)
+  // 5. LẮNG NGHE SỰ KIỆN THANH TOÁN (F9 / F10 / CLICK NÚT THANH TOÁN)
   function attachPaymentListeners() {
     window.addEventListener(
       'keydown',
       function (e) {
-        if (e.key === 'F9' || e.keyCode === 120) {
+        if (e.key === 'F9' || e.keyCode === 120 || e.key === 'F10' || e.keyCode === 121) {
           setTimeout(() => {
             const bill = captureActiveOrderFromDOM();
             if (bill) sendBillToVQBill(bill);
-          }, 400);
+          }, 350);
         }
       },
       true
@@ -260,11 +342,13 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
           if (
             text.includes('thanh toán') ||
             text.includes('(f9)') ||
-            text.includes('hoàn thành')
+            text.includes('(f10)') ||
+            text.includes('hoàn thành') ||
+            text.includes('lưu & in')
           ) {
             const bill = captureActiveOrderFromDOM();
             if (bill) {
-              setTimeout(() => sendBillToVQBill(bill), 300);
+              setTimeout(() => sendBillToVQBill(bill), 250);
             }
           }
         }
@@ -273,50 +357,62 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
     );
   }
 
-  // 5. INTERCEPT NETWORK REQUESTS (XHR & FETCH)
-  const origOpen = XMLHttpRequest.prototype.open;
-  const origSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url) {
-    this._url = url;
-    this._method = method;
-    return origOpen.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function () {
-    this.addEventListener('load', function () {
-      try {
-        if (
-          this._url &&
-          (this._url.includes('/invoices') ||
-            this._url.includes('/orders') ||
-            this._url.includes('/payment'))
-        ) {
-          if (this.status === 200 && this.responseText) {
-            const data = JSON.parse(this.responseText);
-            const inv = data.data || data;
-            if (inv && (inv.InvoiceDetails || inv.Total || inv.TableName)) {
-              sendBillToVQBill({
-                tableName: inv.TableName || inv.RoomName || '',
-                billCode: inv.Code || '',
-                totalAmount: inv.Total || inv.TotalPayment || 0,
-                paymentType: inv.PaymentType === 2 ? 'transfer' : 'cash',
-                items: (inv.InvoiceDetails || []).map((d) => ({
-                  productName: d.ProductName || '',
-                  quantity: d.Quantity || 1,
-                  unitPrice: d.Price || 0,
-                  subtotal: (d.Quantity || 1) * (d.Price || 0),
-                  note: d.Note || '',
-                })),
-              });
+  // 6. INTERCEPT NETWORK REQUESTS (XHR & FETCH TRÊN CẢ UNSAFEWINDOW)
+  try {
+    const targetWin = win || window;
+    const origOpen = targetWin.XMLHttpRequest.prototype.open;
+    const origSend = targetWin.XMLHttpRequest.prototype.send;
+
+    targetWin.XMLHttpRequest.prototype.open = function (method, url) {
+      this._url = url;
+      this._method = method;
+      return origOpen.apply(this, arguments);
+    };
+
+    targetWin.XMLHttpRequest.prototype.send = function (data) {
+      const self = this;
+      this.addEventListener('load', function () {
+        try {
+          if (
+            self._url &&
+            (self._url.includes('/invoices') ||
+              self._url.includes('/orders') ||
+              self._url.includes('/payment') ||
+              self._url.includes('/cashier'))
+          ) {
+            if (self.status >= 200 && self.status < 300 && self.responseText) {
+              const resData = JSON.parse(self.responseText);
+              const inv = resData.data || resData;
+              if (inv && (inv.InvoiceDetails || inv.Total || inv.TableName)) {
+                sendBillToVQBill({
+                  tableName: inv.TableName || inv.RoomName || '',
+                  billCode: inv.Code || '',
+                  totalAmount: inv.Total || inv.TotalPayment || 0,
+                  paymentType: inv.PaymentType === 2 ? 'transfer' : 'cash',
+                  items: (inv.InvoiceDetails || []).map((d) => ({
+                    productName: d.ProductName || '',
+                    quantity: d.Quantity || 1,
+                    unitPrice: d.Price || 0,
+                    subtotal: (d.Quantity || 1) * (d.Price || 0),
+                    note: d.Note || '',
+                  })),
+                });
+              }
             }
           }
-        }
-      } catch (err) {}
-    });
-    return origSend.apply(this, arguments);
-  };
+        } catch (err) {}
+      });
+      return origSend.apply(this, arguments);
+    };
+  } catch (err) {
+    console.warn('[VQBill] Không thể can thiệp XHR ngầm:', err);
+  }
 
-  attachPaymentListeners();
-  showToast('Đã kết nối VQBill Auto-Sync. Bấm Thanh toán (F9) để tự đồng bộ!');
+  // KHỞI ĐỘNG
+  setTimeout(() => {
+    createOrUpdateFloatingBadge('⚡ VQBill: Sẵn sàng');
+    attachPaymentListeners();
+  }, 1000);
 })();
 `;
 
@@ -601,6 +697,36 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* Diagnostic Callout */}
+          <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 space-y-1.5">
+            <div className="font-bold flex items-center gap-1.5 text-xs text-amber-950 dark:text-amber-100">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Tại sao bấm Thanh toán bên KiotViet nhưng chưa thấy qua web?</span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
+              Vì KiotViet và VQBill là 2 trang web độc lập, trình duyệt Google Chrome <strong>bảo mật và cách ly</strong> hai trang web này. Web VQBill không thể tự ý phát hiện chuột hay bàn phím khi bạn thao tác ở tab KiotViet.
+            </p>
+            <div className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300 pt-1 border-t border-amber-200 dark:border-amber-800/60 space-y-1">
+              <div>
+                <strong>Cách kiểm tra nhanh:</strong> Mở tab KiotViet POS của bạn xem ở góc dưới cùng bên trái có thấy huy hiệu{' '}
+                <span className="inline-block px-1.5 py-0.5 rounded bg-slate-900 text-emerald-400 font-bold text-[10px]">
+                  ⚡ VQBill: Sẵn sàng
+                </span>{' '}
+                không?
+              </div>
+              <ul className="list-disc pl-4 space-y-0.5">
+                <li>
+                  <strong>Nếu KHÔNG thấy:</strong> Trình duyệt Chrome của bạn chưa cài tiện ích <strong>Tampermonkey</strong> hoặc chưa dán đoạn mã bên dưới. Hãy làm theo 3 bước hướng dẫn ngay bên dưới (chỉ mất 1 phút).
+                </li>
+                <li>
+                  <strong>Nếu ĐÃ thấy:</strong> Bạn có thể bấm trực tiếp nút{' '}
+                  <span className="font-bold text-emerald-700 dark:text-emerald-300">"🔄 Đồng bộ bàn"</span>{' '}
+                  ngay trên màn hình KiotViet để gửi bàn hiện tại sang VQBill bất kỳ lúc nào!
+                </li>
+              </ul>
+            </div>
+          </div>
 
           {/* 3 Steps Guide */}
           <div className="space-y-3">
