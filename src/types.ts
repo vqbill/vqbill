@@ -18,7 +18,47 @@ export type ManagementTabId =
   | 'returns'
   | 'salary_advances'
   | 'products'
-  | 'accounts';
+  | 'accounts'
+  | 'menu_settings';
+
+export interface ExternalLinkItem {
+  id: string;
+  label: string;
+  url: string;
+  description?: string;
+}
+
+export const DEFAULT_EXTERNAL_LINKS: ExternalLinkItem[] = [
+  {
+    id: 'ext_cashier',
+    label: 'Thu ngân',
+    url: 'https://fnb.kiotviet.vn/vinhquan/pos/#/cashier',
+    description: 'KiotViet POS — Màn hình Thu ngân Vịnh Quán',
+  },
+  {
+    id: 'ext_cashflow',
+    label: 'Sổ quỹ',
+    url: 'https://fnb.kiotviet.vn/vinhquan/man/#/CashFlow',
+    description: 'KiotViet Quản lý — Sổ quỹ thu chi Vịnh Quán',
+  },
+  {
+    id: 'ext_nds',
+    label: 'NDS',
+    url: 'https://ndsgroup.vn/my/projects/613/task/18877',
+    description: 'Hệ thống quản lý dự án & công việc NDS Group',
+  },
+];
+
+export const DEFAULT_VISIBLE_PRIMARY_TABS: ManagementTabId[] = [
+  'home',
+  'dashboard',
+  'ocr',
+  'categories',
+  'deductions',
+  'returns',
+  'salary_advances',
+  'menu_settings',
+];
 
 export type PeriodPreset = 'today' | 'yesterday' | 'week' | 'month' | 'all' | 'custom';
 
@@ -114,6 +154,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     description:
       'Quản lý tài khoản, mật khẩu và phân phối danh mục quản lý cho từng Role & Tài khoản',
   },
+  {
+    id: 'menu_settings',
+    label: 'Cài đặt Hiển thị Danh mục',
+    shortLabel: 'Cài đặt Menu',
+    description:
+      'Tích chọn các tính năng được phép hiển thị trực tiếp ra màn hình chính, gộp các tính năng còn lại vào cột Dropdown và quản lý liên kết ngoài',
+  },
 ];
 
 export type RoleActionMode = 'read_only' | 'full_crud';
@@ -148,6 +195,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'salary_advances',
       'products',
       'accounts',
+      'menu_settings',
     ],
     canWrite: true,
     canDelete: true,
@@ -170,6 +218,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'returns',
       'salary_advances',
       'products',
+      'menu_settings',
     ],
     canWrite: true,
     canDelete: true,
@@ -190,6 +239,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'deductions',
       'returns',
       'salary_advances',
+      'menu_settings',
     ],
     canWrite: true,
     canDelete: true,
@@ -648,6 +698,10 @@ export function getEffectiveRolePermissions(
 
   if (!tabs.includes('home')) {
     tabs = ['home', ...tabs];
+  }
+
+  if (!tabs.includes('menu_settings')) {
+    tabs = [...tabs, 'menu_settings'];
   }
 
   if (tabs.length === 0) {

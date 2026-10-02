@@ -17,6 +17,7 @@ import {
   FileText,
   CheckCircle2,
   Wallet,
+  SlidersHorizontal,
 } from 'lucide-react';
 import {
   ManagementTabId,
@@ -280,6 +281,17 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       accentClass:
         'border-slate-200/90 dark:border-slate-800 hover:border-slate-500 dark:hover:border-slate-500',
       btnClass: 'text-slate-700 dark:text-slate-300',
+    },
+    {
+      id: 'menu_settings',
+      title: 'Cài Đặt Hiển Thị Danh Mục & Liên Kết',
+      pathLabel: '/cai-dat-danh-muc',
+      desc: 'Tích chọn các tính năng hiển thị ra màn hình chính, gom các mục còn lại vào cột dropdown và quản lý Liên kết ngoài (Thu ngân, Sổ quỹ, NDS).',
+      statText: `Tùy biến thanh điều hướng & liên kết ngoài`,
+      icon: <SlidersHorizontal className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />,
+      accentClass:
+        'border-emerald-200/90 dark:border-emerald-900/60 hover:border-emerald-500 dark:hover:border-emerald-500',
+      btnClass: 'text-emerald-700 dark:text-emerald-300',
     },
   ];
 

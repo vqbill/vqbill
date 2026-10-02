@@ -11,6 +11,7 @@ import {
   inferUnit,
   normalizeMoneyNumber,
   normalizeSynchronizedReceiptText,
+  normalizeTableName,
   parseBulkProductsInput,
   parseInvoiceText,
   resolveBusinessBillDate,
@@ -34,6 +35,21 @@ const GEMINI_MODELS = [
 ];
 
 app.use(express.json({ limit: '25mb' }));
+
+// CORS middleware allowing KiotViet POS (fnb.kiotviet.vn) and extension to post bills directly
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, x-gemini-api-key, x-sync-token'
+  );
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 
 // Persistent Cloud Workspace Storage (shared across all browsers and devices)
 interface ServerCloudWorkspace {
@@ -453,6 +469,7 @@ function buildSystemInstructionBillOcr(
 Nhiệm vụ của bạn là tiếp nhận dữ liệu đầu vào (HÌNH ẢNH HÓA ĐƠN hoặc ĐOẠN VĂN BẢN COPY/DÁN với nhiều định dạng khác nhau) và chỉ trích xuất chính xác các trường:
 - Ngày tháng (billDate - định dạng YYYY-MM-DD)
 - Giờ vào (checkInTime - HH:mm) và Giờ ra (checkOutTime - HH:mm)
+- Số bàn / Phòng (tableName - VD: "Bàn 24", "VIP 1", "VIP 2", hoặc nếu bill ghi "Mang về", "Mang về (01)", "Mang về (02) / Mang đi (Takeaway)" thì viết tắt tương ứng là "MV", "MV01", "MV02")
 - Hình thức thanh toán (paymentType: "cash" | "transfer" | "debt") và Tên người nợ (debtorName)
 - Danh sách món: Tên món chuẩn (productName), Ghi chú món (note), Danh mục (category), Số lượng (quantity), Đơn giá (unitPrice), Thành tiền (subtotal)
 - Chiết khấu (discountAmount) và Tổng cộng (totalAmount)
@@ -532,6 +549,10 @@ function sanitizeExtractedBill(
     typeof billInfo.checkInTime === 'string' ? billInfo.checkInTime.trim() : '';
   const checkOutTime =
     typeof billInfo.checkOutTime === 'string' ? billInfo.checkOutTime.trim() : '';
+  const tableName =
+    typeof billInfo.tableName === 'string'
+      ? normalizeTableName(billInfo.tableName)
+      : '';
 
   const { businessDate } = resolveBusinessBillDate(
     rawCalendarDate,
@@ -658,6 +679,7 @@ function sanitizeExtractedBill(
       rawDate: rawCalendarDate !== businessDate ? rawCalendarDate : undefined,
       checkInTime: checkInTime || undefined,
       checkOutTime: checkOutTime || undefined,
+      tableName: tableName || undefined,
       paymentType,
       debtorName,
       subtotalAmount,
@@ -868,6 +890,227 @@ app.post('/api/workspace', (req, res) => {
   }
 });
 
+// 0B. POST Sync KiotViet POS Bill directly (from Chrome Extension / Tampermonkey without KiotViet API)
+app.post('/api/sync-kiotviet-bill', (req, res) => {
+  try {
+    const payload = req.body || {};
+    const now = Date.now();
+    const todayStr = getCurrentBusinessDate();
+
+    let extractedTableName = '';
+    let extractedPaymentType: 'cash' | 'transfer' | 'debt' = 'cash';
+    let extractedDebtorName = '';
+    let extractedDiscount = 0;
+    let extractedTotal = 0;
+    let extractedCheckIn = '';
+    let extractedCheckOut = '';
+    let extractedDate = todayStr;
+    let extractedBillCode = '';
+    let billItemsPayload: Array<{
+      productName: string;
+      note?: string;
+      category?: string;
+      quantity: number;
+      unitPrice: number;
+      subtotal: number;
+    }> = [];
+
+    if (payload.rawText && typeof payload.rawText === 'string') {
+      const parsed = parseInvoiceText(
+        payload.rawText,
+        todayStr,
+        cloudWorkspace.products,
+        cloudWorkspace.categories
+      );
+      extractedTableName = parsed.billInfo.tableName || 'Bàn KiotViet';
+      extractedPaymentType = parsed.billInfo.paymentType || 'cash';
+      extractedDebtorName = parsed.billInfo.debtorName || '';
+      extractedDiscount = parsed.billInfo.discountAmount || 0;
+      extractedTotal = parsed.billInfo.totalAmount || 0;
+      extractedCheckIn = parsed.billInfo.checkInTime || '';
+      extractedCheckOut = parsed.billInfo.checkOutTime || '';
+      extractedDate = parsed.billInfo.billDate || todayStr;
+      billItemsPayload = parsed.items.map((it) => ({
+        productName: it.productName,
+        note: it.note || '',
+        category: it.category || inferCategory(it.productName, cloudWorkspace.categories),
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        subtotal: it.subtotal,
+      }));
+    } else {
+      // Structured payload from KiotViet Tampermonkey script / DOM scraper / network interceptor
+      extractedTableName = normalizeTableName(
+        String(payload.tableName || payload.table || payload.room || payload.TableName || 'Bàn KiotViet')
+      ) || 'Bàn KiotViet';
+
+      extractedBillCode = String(
+        payload.billCode || payload.code || payload.Code || payload.InvoiceCode || ''
+      ).trim();
+
+      extractedDate = String(
+        payload.billDate || payload.date || todayStr
+      ).trim();
+
+      const payMethodStr = String(
+        payload.paymentType || payload.paymentMethod || payload.PaymentMethod || ''
+      ).toLowerCase();
+      if (
+        payMethodStr.includes('ck') ||
+        payMethodStr.includes('chuyển') ||
+        payMethodStr.includes('bank') ||
+        payMethodStr.includes('transfer')
+      ) {
+        extractedPaymentType = 'transfer';
+      } else if (payMethodStr.includes('nợ') || payMethodStr.includes('debt')) {
+        extractedPaymentType = 'debt';
+        extractedDebtorName = String(
+          payload.debtorName || payload.customer || payload.CustomerName || ''
+        ).trim();
+      } else {
+        extractedPaymentType = 'cash';
+      }
+
+      extractedCheckIn = String(payload.checkInTime || '').trim();
+      extractedCheckOut = String(payload.checkOutTime || '').trim();
+      extractedDiscount = normalizeMoneyNumber(payload.discountAmount || payload.discount || payload.Discount);
+      extractedTotal = normalizeMoneyNumber(payload.totalAmount || payload.total || payload.Total);
+
+      // Extract items from payload
+      const rawList = Array.isArray(payload.items)
+        ? payload.items
+        : Array.isArray(payload.InvoiceDetails)
+        ? payload.InvoiceDetails
+        : Array.isArray(payload.details)
+        ? payload.details
+        : [];
+
+      for (const item of rawList) {
+        const rawName = String(
+          item.productName || item.name || item.ProductName || ''
+        ).trim();
+        if (!rawName) continue;
+        const rawNote = String(
+          item.note || item.Note || item.description || ''
+        ).trim();
+        const split = splitProductNameAndInlineNote(
+          rawName,
+          cloudWorkspace.products,
+          cloudWorkspace.categories
+        );
+        const mergedNote = [split.note, rawNote].filter(Boolean).join(', ');
+        const qty = Math.max(
+          1,
+          Math.round(Number(item.quantity || item.Quantity || item.qty) || 1)
+        );
+        let price = normalizeMoneyNumber(
+          item.unitPrice || item.Price || item.price || split.catalogUnitPrice || 0
+        );
+        if (price > 0 && price < 1000) price *= 1000;
+        let sub = normalizeMoneyNumber(
+          item.subtotal || item.SubTotal || item.subTotal || qty * price
+        );
+        if (sub > 0 && sub < 1000) sub *= 1000;
+        if (sub === 0 && price > 0) sub = qty * price;
+
+        billItemsPayload.push({
+          productName: split.productName || rawName,
+          note: mergedNote,
+          category: String(
+            item.category ||
+              split.category ||
+              inferCategory(rawName, cloudWorkspace.categories)
+          ),
+          quantity: qty,
+          unitPrice: price,
+          subtotal: sub,
+        });
+      }
+    }
+
+    if (billItemsPayload.length === 0) {
+      res.status(400).json({ ok: false, error: 'Không có món nào trong hóa đơn KiotViet.' });
+      return;
+    }
+
+    if (extractedTotal <= 0) {
+      extractedTotal =
+        billItemsPayload.reduce((sum, it) => sum + it.subtotal, 0) - extractedDiscount;
+      extractedTotal = Math.max(0, extractedTotal);
+    }
+
+    const billId = `bill_kv_${now}_${Math.random().toString(36).slice(2, 6)}`;
+    const billCode = extractedBillCode || `KV-${now.toString().slice(-6)}`;
+    const itemsSummary = billItemsPayload
+      .map((it) => `${it.quantity}x ${it.productName}${it.note ? ` (${it.note})` : ''}`)
+      .join(', ');
+
+    const newBill = {
+      id: billId,
+      ownerId: 'shared_workspace',
+      billCode,
+      billDate: extractedDate,
+      checkInTime: extractedCheckIn || undefined,
+      checkOutTime: extractedCheckOut || undefined,
+      paymentType: extractedPaymentType,
+      debtorName: extractedDebtorName,
+      debtStatus: extractedPaymentType === 'debt' ? 'unpaid' : 'none',
+      subtotalAmount: billItemsPayload.reduce((sum, it) => sum + it.subtotal, 0),
+      discountAmount: extractedDiscount,
+      totalAmount: extractedTotal,
+      deductedAmount: 0,
+      itemsSummary,
+      note: extractedTableName,
+      tableName: extractedTableName,
+      status: 'active',
+      createdAtMs: now,
+      updatedAtMs: now,
+      source: 'kiotviet_pos_sync',
+    };
+
+    const newBillItems = billItemsPayload.map((it, idx) => ({
+      id: `it_${now}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+      ownerId: 'shared_workspace',
+      billId,
+      billDate: extractedDate,
+      productName: it.productName,
+      note: it.note || '',
+      category: it.category || 'Khác',
+      quantity: it.quantity,
+      returnedQuantity: 0,
+      unitPrice: it.unitPrice,
+      subtotal: it.subtotal,
+      createdAtMs: now,
+      updatedAtMs: now,
+    }));
+
+    cloudWorkspace.bills = dedupeListById([newBill, ...(cloudWorkspace.bills || [])]);
+    cloudWorkspace.billItems = dedupeListById([
+      ...(cloudWorkspace.billItems || []),
+      ...newBillItems,
+    ]);
+    cloudWorkspace.version = (cloudWorkspace.version || 0) + 1;
+    cloudWorkspace.updatedAtMs = now;
+    cloudWorkspace.updatedBy = 'kiotviet_pos_sync';
+    cloudWorkspace.initialized = true;
+
+    saveCloudWorkspaceToDisk(cloudWorkspace);
+
+    res.json({
+      ok: true,
+      message: `Đã tự động đồng bộ hóa đơn ${extractedTableName} (${billCode}) sang VQBill!`,
+      bill: newBill,
+      itemsCount: newBillItems.length,
+      version: cloudWorkspace.version,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      error: err?.message || 'Lỗi khi đồng bộ bill KiotViet.',
+    });
+  }
+});
+
 // 1. GET Gemini Key Status
 app.get('/api/gemini-status', (_req, res) => {
   const custom = runtimeGeminiApiKey.trim();
@@ -1044,6 +1287,11 @@ app.post('/api/ocr-bill', async (req, res) => {
               type: Type.STRING,
               description: 'Giờ ra / thanh toán định dạng HH:mm (nếu có)',
             },
+            tableName: {
+              type: Type.STRING,
+              description:
+                'Phòng / Bàn (VD: Bàn 24, VIP 1, VIP 2, MV, MV01, MV02)',
+            },
             paymentType: {
               type: Type.STRING,
               description: 'Hình thức thanh toán: cash, transfer, hoặc debt',
@@ -1129,6 +1377,17 @@ app.post('/api/ocr-bill', async (req, res) => {
           existingProducts,
           categories
         );
+        if (rawText && String(rawText).trim() && !normalized.billInfo.tableName) {
+          const localParsed = parseInvoiceText(
+            String(rawText),
+            fallbackDate,
+            existingProducts,
+            categories
+          );
+          if (localParsed.billInfo.tableName) {
+            normalized.billInfo.tableName = localParsed.billInfo.tableName;
+          }
+        }
         res.json(normalized);
         return;
       } catch (err: any) {

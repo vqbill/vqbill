@@ -48,14 +48,60 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   const [debtorName, setDebtorName] = useState(bill.debtorName);
   const [debtStatus, setDebtStatus] = useState<'none' | 'unpaid' | 'paid'>(bill.debtStatus);
   const [note, setNote] = useState(bill.note);
-  const [editItems, setEditItems] = useState<BillItemRecord[]>(() => {
+  const [initialItems] = useState<BillItemRecord[]>(() => {
     const source =
       items && items.length > 0
         ? items
         : reconstructBillItemsFromSummary(bill, products);
     return source.map((it) => ({ ...it, note: it.note || '' }));
   });
+  const [editItems, setEditItems] = useState<BillItemRecord[]>(() =>
+    initialItems.map((it) => ({ ...it }))
+  );
   const [isSaving, setIsSaving] = useState(false);
+
+  const hasChanges = React.useMemo(() => {
+    if (billDate !== bill.billDate) return true;
+    if ((checkInTime || '').trim() !== (bill.checkInTime || '').trim()) return true;
+    if ((checkOutTime || '').trim() !== (bill.checkOutTime || '').trim()) return true;
+    if (
+      Math.max(0, Math.round(Number(discountAmount) || 0)) !==
+      Math.max(0, Math.round(Number(bill.discountAmount) || 0))
+    ) {
+      return true;
+    }
+    if (paymentType !== bill.paymentType) return true;
+    if ((debtorName || '').trim() !== (bill.debtorName || '').trim()) return true;
+    if (debtStatus !== bill.debtStatus) return true;
+    if ((note || '').trim() !== (bill.note || '').trim()) return true;
+
+    if (editItems.length !== initialItems.length) return true;
+    for (let i = 0; i < editItems.length; i++) {
+      const curr = editItems[i];
+      const init = initialItems[i];
+      if (!init) return true;
+      if (curr.id !== init.id) return true;
+      if (curr.productName.trim() !== init.productName.trim()) return true;
+      if ((curr.note || '').trim() !== (init.note || '').trim()) return true;
+      if (curr.category !== init.category) return true;
+      if (Number(curr.quantity) !== Number(init.quantity)) return true;
+      if (Number(curr.unitPrice) !== Number(init.unitPrice)) return true;
+    }
+
+    return false;
+  }, [
+    bill,
+    billDate,
+    checkInTime,
+    checkOutTime,
+    discountAmount,
+    paymentType,
+    debtorName,
+    debtStatus,
+    note,
+    editItems,
+    initialItems,
+  ]);
 
   const subtotalAmount = editItems.reduce(
     (sum, it) => sum + Math.round(it.quantity * it.unitPrice),
@@ -200,8 +246,8 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const triggerSaveBill = () => {
+    if (!hasChanges || isSaving) return;
     const valid = editItems.filter((it) => it.productName.trim() !== '');
     if (valid.length === 0) return;
 
@@ -210,7 +256,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
       message: `Bạn có chắc chắn muốn lưu thay đổi cho hóa đơn ${bill.billCode} (Tổng mới: ${formatVND(
         computedTotal
       )}) lên Firebase không? (Lưu ý: Giá chỉnh sửa trong bill này không làm thay đổi giá mặc định của sản phẩm trong Menu).`,
-      confirmLabel: 'Lưu thay đổi Bill',
+      confirmLabel: 'Lưu chỉnh sửa',
       variant: 'warning',
       onConfirm: async () => {
         setIsSaving(true);
@@ -266,6 +312,11 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     });
   };
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    triggerSaveBill();
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="w-full sm:max-w-4xl max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden">
@@ -280,13 +331,29 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               Ca bán 09:00 sáng → 08:00 sáng hôm sau · Chỉnh giá/ghi chú món trực tiếp
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-9 h-9 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center shrink-0 cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={!hasChanges || isSaving}
+              onClick={triggerSaveBill}
+              className={`h-9 px-3.5 rounded-xl text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors select-none ${
+                hasChanges && !isSaving
+                  ? 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white shadow-xs cursor-pointer'
+                  : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-300/70 dark:border-slate-700 cursor-not-allowed pointer-events-none'
+              }`}
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>{isSaving ? 'Đang lưu...' : 'Lưu chỉnh sửa'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              title="Đóng"
+              className="w-9 h-9 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center shrink-0 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
@@ -715,11 +782,15 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={isSaving}
-                className="flex-1 sm:flex-initial h-10 px-5 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                disabled={!hasChanges || isSaving}
+                className={`flex-1 sm:flex-initial h-10 px-5 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors select-none ${
+                  hasChanges && !isSaving
+                    ? 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white shadow-xs cursor-pointer'
+                    : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-300/70 dark:border-slate-700 cursor-not-allowed pointer-events-none'
+                }`}
               >
                 <Save className="w-4 h-4" />
-                <span>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi Bill'}</span>
+                <span>{isSaving ? 'Đang lưu...' : 'Lưu chỉnh sửa'}</span>
               </button>
             </div>
           </div>

@@ -17,6 +17,7 @@ import {
   Clock,
   MessageSquareText,
   Percent,
+  Zap,
 } from 'lucide-react';
 import {
   ExtractedBillItem,
@@ -33,6 +34,7 @@ import {
   getCurrentBusinessDate,
   inferCategory,
   normalizeSynchronizedReceiptText,
+  normalizeTableName,
   parseRawTextToBillJSON,
   resolveBusinessBillDate,
   SAMPLE_BILL_TEMPLATES,
@@ -69,6 +71,7 @@ interface OcrScannerTabProps {
   }) => Promise<BillRecord | void>;
   onDeleteAllMenuProducts: () => void;
   menuProductsCount: number;
+  onOpenKiotVietSync?: () => void;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
 
@@ -89,6 +92,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   onSaveExtractedBill,
   onDeleteAllMenuProducts,
   menuProductsCount,
+  onOpenKiotVietSync,
   requestConfirm,
 }) => {
   const todayBusinessStr = getCurrentBusinessDate();
@@ -269,7 +273,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setRawCalendarDate(result.billInfo.rawDate);
     setCheckInTime(result.billInfo.checkInTime || '');
     setCheckOutTime(result.billInfo.checkOutTime || '');
-    setTableName(result.billInfo.tableName || '');
+    setTableName(normalizeTableName(result.billInfo.tableName || ''));
     setDiscountAmount(Math.max(0, Math.round(result.billInfo.discountAmount || 0)));
     setPaymentType(result.billInfo.paymentType || 'cash');
     setDebtorName(
@@ -647,13 +651,14 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
   const executeSaveBillNow = async () => {
     const validItems = items.filter((it) => it.productName.trim() !== '');
-    const finalNote = [tableName.trim(), note.trim()].filter(Boolean).join(' - ');
+    const normalizedTable = normalizeTableName(tableName);
+    const finalNote = [normalizedTable, note.trim()].filter(Boolean).join(' - ');
     const snapshotPopup = {
       billCode: `HD-${billDate.replace(/-/g, '').slice(2)}`,
       billDate,
       checkInTime: checkInTime.trim() || undefined,
       checkOutTime: checkOutTime.trim() || undefined,
-      tableName: tableName.trim() || undefined,
+      tableName: normalizedTable || undefined,
       note: finalNote || undefined,
       itemCount: validItems.length,
       totalQuantity: validItems.reduce((s, it) => s + (Number(it.quantity) || 1), 0),
@@ -768,6 +773,18 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               />
               <span>Tự thêm món mới vào Menu theo Bill</span>
             </label>
+
+            {onOpenKiotVietSync && (
+              <button
+                type="button"
+                onClick={onOpenKiotVietSync}
+                className="h-9 px-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-700 dark:text-rose-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-2xs"
+                title="Cài đặt script bắt sự kiện nút Thanh toán (F9) bên KiotViet để tự đồng bộ"
+              >
+                <Zap className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                <span>Đồng bộ KiotViet (F9)</span>
+              </button>
+            )}
 
             {canWrite && menuProductsCount > 0 && (
               <button
@@ -1133,11 +1150,37 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 </label>
                 <input
                   type="text"
+                  list="vqbill-table-presets-list"
                   value={tableName}
                   onChange={(e) => setTableName(e.target.value)}
-                  placeholder="VD: Bàn 24, Bàn 30..."
+                  onBlur={() => setTableName((prev) => normalizeTableName(prev))}
+                  placeholder="VD: Bàn 24, VIP 1, VIP 2, MV, MV01, MV02..."
                   className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                 />
+                <datalist id="vqbill-table-presets-list">
+                  <option value="VIP 1" />
+                  <option value="VIP 2" />
+                  <option value="MV" />
+                  <option value="MV01" />
+                  <option value="MV02" />
+                </datalist>
+                <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                  {(['VIP 1', 'VIP 2', 'MV', 'MV01', 'MV02'] as const).map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setTableName(preset)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border transition-colors cursor-pointer ${
+                        tableName === preset
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500'
+                      }`}
+                      title={`Chọn nhanh ${preset}`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div>

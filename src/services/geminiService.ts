@@ -12,6 +12,7 @@ import {
   inferUnit,
   normalizeMoneyNumber,
   normalizeSynchronizedReceiptText,
+  normalizeTableName,
   parseBulkProductsInput,
   parseInvoiceText,
   resolveBusinessBillDate,
@@ -388,6 +389,7 @@ export function buildBillOcrSystemInstruction(
 Nhiệm vụ: Từ HÌNH ẢNH HÓA ĐƠN hoặc VĂN BẢN COPY NHIỀU ĐỊNH DẠNG, chỉ cần lấy chính xác các trường:
 - Ngày tháng (billDate - định dạng YYYY-MM-DD)
 - Giờ vào (checkInTime - HH:mm) và Giờ ra (checkOutTime - HH:mm)
+- Phòng / Bàn (tableName - VD: "Bàn 24", "VIP 1", "VIP 2", hoặc nếu bill ghi "Mang về", "Mang về 01", "Mang về 02" thì viết tắt thành "MV", "MV01", "MV02")
 - Hình thức thanh toán (paymentType: "cash" | "transfer" | "debt") và Tên người nợ (debtorName)
 - Danh sách món: Tên món chuẩn (productName), Ghi chú món (note), Danh mục (category), Số lượng (quantity), Đơn giá (unitPrice), Thành tiền (subtotal)
 - Chiết khấu (discountAmount) và Tổng cộng (totalAmount)
@@ -445,7 +447,9 @@ export function normalizeAndSanitizeExtractedBill(
   const checkOutTime =
     typeof billInfo.checkOutTime === 'string' ? billInfo.checkOutTime.trim() : '';
   const tableName =
-    typeof billInfo.tableName === 'string' ? billInfo.tableName.trim() : '';
+    typeof billInfo.tableName === 'string'
+      ? normalizeTableName(billInfo.tableName)
+      : '';
 
   const { businessDate } = resolveBusinessBillDate(
     rawCalendarDate,
@@ -864,12 +868,24 @@ export async function extractBillWithGemini(params: {
       );
       throw new Error(parsedErr.message);
     }
-    return normalizeAndSanitizeExtractedBill(
+    const normalized = normalizeAndSanitizeExtractedBill(
       serverResp.data,
       defaultDate,
       existingProducts,
       categories
     );
+    if (rawText && String(rawText).trim() && !normalized.billInfo.tableName) {
+      const localParsed = parseInvoiceText(
+        String(rawText),
+        defaultDate,
+        existingProducts,
+        categories
+      );
+      if (localParsed.billInfo.tableName) {
+        normalized.billInfo.tableName = localParsed.billInfo.tableName;
+      }
+    }
+    return normalized;
   }
 
   // Client-side direct Gemini execution for static hosting (Netlify)
@@ -927,6 +943,11 @@ export async function extractBillWithGemini(params: {
                 checkOutTime: {
                   type: Type.STRING,
                   description: 'Giờ ra / thanh toán định dạng HH:mm (nếu có)',
+                },
+                tableName: {
+                  type: Type.STRING,
+                  description:
+                    'Số bàn / Phòng / Mang về (VD: Bàn 24, VIP 1, VIP 2, MV, MV01, MV02)',
                 },
                 paymentType: {
                   type: Type.STRING,

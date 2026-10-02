@@ -45,6 +45,11 @@ import {
   UserCheck,
   Scissors,
   Wallet,
+  ExternalLink,
+  ChevronDown,
+  SlidersHorizontal,
+  FolderKanban,
+  Zap,
 } from 'lucide-react';
 import {
   auth,
@@ -81,6 +86,9 @@ import {
   CalendarEventNote,
   EmployeeRecord,
   SalaryAdvanceRecord,
+  ExternalLinkItem,
+  DEFAULT_EXTERNAL_LINKS,
+  DEFAULT_VISIBLE_PRIMARY_TABS,
 } from './types';
 import {
   formatVND,
@@ -161,6 +169,8 @@ import { ReturnsDeductionsTab } from './components/ReturnsDeductionsTab';
 import { SalaryAdvanceTab, EmployeeUpsertInput } from './components/SalaryAdvanceTab';
 import { ProductCatalogTab } from './components/ProductCatalogTab';
 import { AccountsManagerTab } from './components/AccountsManagerTab';
+import { MenuSettingsTab } from './components/MenuSettingsTab';
+import { KiotVietSyncModal } from './components/KiotVietSyncModal';
 import { BillEditModal } from './components/BillEditModal';
 import { BillCheckModal } from './components/BillCheckModal';
 import { BillSplitMergeModal } from './components/BillSplitMergeModal';
@@ -341,6 +351,7 @@ export default function App() {
       salary_advances: '/ung-luong',
       products: '/thuc-don',
       accounts: '/tai-khoan',
+      menu_settings: '/cai-dat-danh-muc',
     }),
     []
   );
@@ -359,6 +370,7 @@ export default function App() {
       'salary_advances',
       'products',
       'accounts',
+      'menu_settings',
     ];
     try {
       const cleanPath = window.location.pathname.replace(/\/+$/, '') || '/';
@@ -438,6 +450,7 @@ export default function App() {
   const [inspectingBill, setInspectingBill] = useState<BillRecord | null>(null);
   const [editingBill, setEditingBill] = useState<BillRecord | null>(null);
   const [splitMergeBill, setSplitMergeBill] = useState<BillRecord | null>(null);
+  const [showKiotVietSyncModal, setShowKiotVietSyncModal] = useState<boolean>(false);
   const [preselectedReturnBillId, setPreselectedReturnBillId] = useState<string | null>(
     null
   );
@@ -497,6 +510,66 @@ export default function App() {
     }
     setActiveTab(targetTab);
   };
+
+  // Customizable Main Screen Visible Tabs vs Overflow Dropdown Column
+  const [visiblePrimaryTabs, setVisiblePrimaryTabs] = useState<ManagementTabId[]>(() => {
+    try {
+      const saved = localStorage.getItem('vqbill_visible_primary_tabs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const cleaned = sanitizeTabList(parsed);
+          if (cleaned.length > 0) return cleaned;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_VISIBLE_PRIMARY_TABS;
+  });
+
+  const handleUpdateVisiblePrimaryTabs = (nextTabs: ManagementTabId[]) => {
+    const cleaned = sanitizeTabList(nextTabs);
+    const safeNext: ManagementTabId[] = cleaned.length > 0 ? cleaned : ['home'];
+    setVisiblePrimaryTabs(safeNext);
+    try {
+      localStorage.setItem('vqbill_visible_primary_tabs', JSON.stringify(safeNext));
+    } catch {
+      // ignore
+    }
+  };
+
+  // External Links (Thu ngân, Sổ quỹ, NDS, etc.) for Dropdown Tab
+  const [externalLinks, setExternalLinks] = useState<ExternalLinkItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('vqbill_external_links');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_EXTERNAL_LINKS;
+  });
+
+  const handleUpdateExternalLinks = (nextLinks: ExternalLinkItem[]) => {
+    setExternalLinks(nextLinks);
+    try {
+      localStorage.setItem('vqbill_external_links', JSON.stringify(nextLinks));
+    } catch {
+      // ignore
+    }
+  };
+
+  const [headerMoreDropdownOpen, setHeaderMoreDropdownOpen] = useState(false);
+  const [headerExtLinksDropdownOpen, setHeaderExtLinksDropdownOpen] = useState(false);
+  const [sidebarMoreDropdownOpen, setSidebarMoreDropdownOpen] = useState(false);
+  const [sidebarExtLinksDropdownOpen, setSidebarExtLinksDropdownOpen] = useState(false);
+  const [mobileMoreDropdownOpen, setMobileMoreDropdownOpen] = useState(false);
+  const [mobileExtLinksDropdownOpen, setMobileExtLinksDropdownOpen] = useState(false);
 
   // Sync Gemini Key on boot with backend or static fallback (Netlify / Vercel safe)
   useEffect(() => {
@@ -4681,10 +4754,40 @@ export default function App() {
       shortLabel: 'Tài khoản',
       icon: <Shield className="w-4 h-4" />,
     },
+    {
+      id: 'menu_settings',
+      label: 'Cài đặt Hiển thị Danh mục',
+      shortLabel: 'Cài đặt Menu',
+      icon: <SlidersHorizontal className="w-4 h-4" />,
+    },
   ];
+
+  const tabIconMap: Record<ManagementTabId, React.ReactNode> = {
+    home: <Home className="w-4 h-4" />,
+    dashboard: <LayoutDashboard className="w-4 h-4" />,
+    ocr: <Camera className="w-4 h-4" />,
+    categories: <Layers className="w-4 h-4" />,
+    inventory: <Boxes className="w-4 h-4" />,
+    owner_use: <UserCheck className="w-4 h-4" />,
+    debts: <CreditCard className="w-4 h-4" />,
+    deductions: <Receipt className="w-4 h-4" />,
+    returns: <RotateCcw className="w-4 h-4" />,
+    salary_advances: <Wallet className="w-4 h-4" />,
+    products: <Package className="w-4 h-4" />,
+    accounts: <Shield className="w-4 h-4" />,
+    menu_settings: <SlidersHorizontal className="w-4 h-4" />,
+  };
 
   // Strictly filter navigation items to ONLY the management categories assigned by Admin
   const navItems = allNavItems.filter((item) => allowedTabs.includes(item.id));
+  const primaryNavItems = (() => {
+    const filtered = navItems.filter((item) => visiblePrimaryTabs.includes(item.id));
+    return filtered.length > 0 ? filtered : navItems.slice(0, 1);
+  })();
+  const overflowNavItems = navItems.filter(
+    (item) => !primaryNavItems.some((p) => p.id === item.id)
+  );
+  const activeOverflowItem = overflowNavItems.find((item) => item.id === activeTab);
   const isCurrentTabAllowed = allowedTabs.includes(activeTab);
 
   return (
@@ -4715,13 +4818,17 @@ export default function App() {
           </a>
         </div>
 
-        {/* Desktop Compact Horizontal Nav Links */}
-        <nav className="hidden xl:flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/60 p-1 rounded-xl">
-          {navItems.map((item) => (
+        {/* Desktop Compact Horizontal Nav Links + Overflow Dropdown + External Links Dropdown */}
+        <nav className="hidden xl:flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/60 p-1 rounded-xl relative">
+          {primaryNavItems.map((item) => (
             <button
               key={item.id}
               type="button"
-              onClick={() => handleSelectTab(item.id)}
+              onClick={() => {
+                handleSelectTab(item.id);
+                setHeaderMoreDropdownOpen(false);
+                setHeaderExtLinksDropdownOpen(false);
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
                 activeTab === item.id
                   ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
@@ -4732,6 +4839,159 @@ export default function App() {
               <span>{item.shortLabel}</span>
             </button>
           ))}
+
+          {/* Overflow Dropdown Column for Remaining Features */}
+          {overflowNavItems.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setHeaderMoreDropdownOpen((v) => !v);
+                  setHeaderExtLinksDropdownOpen(false);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                  activeOverflowItem
+                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+                title="Các tính năng còn lại trong Danh mục quản lý"
+              >
+                {activeOverflowItem ? (
+                  <>
+                    {activeOverflowItem.icon}
+                    <span>{activeOverflowItem.shortLabel}</span>
+                  </>
+                ) : (
+                  <>
+                    <FolderKanban className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                    <span>Danh mục khác ({overflowNavItems.length})</span>
+                  </>
+                )}
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform ${
+                    headerMoreDropdownOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              {headerMoreDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-30"
+                    onClick={() => setHeaderMoreDropdownOpen(false)}
+                  />
+                  <div className="absolute right-0 top-full mt-2 w-64 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-1.5 z-40 space-y-1">
+                    <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 dark:border-slate-800">
+                      Các tính năng gộp trong Dropdown ({overflowNavItems.length})
+                    </div>
+                    {overflowNavItems.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          handleSelectTab(item.id);
+                          setHeaderMoreDropdownOpen(false);
+                        }}
+                        className={`w-full px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                          activeTab === item.id
+                            ? 'bg-emerald-600 text-white'
+                            : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {item.icon}
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    ))}
+                    <div className="pt-1 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleSelectTab('menu_settings');
+                          setHeaderMoreDropdownOpen(false);
+                        }}
+                        className="w-full px-3 py-2 rounded-xl text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-2 cursor-pointer"
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5" />
+                        <span>Cài đặt tích chọn hiển thị danh mục</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* External Links Dropdown Tab (Thu ngân, Sổ quỹ, NDS) */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setHeaderExtLinksDropdownOpen((v) => !v);
+                setHeaderMoreDropdownOpen(false);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                headerExtLinksDropdownOpen
+                  ? 'bg-blue-600 text-white shadow-2xs'
+                  : 'text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40'
+              }`}
+              title="Chuyển qua liên kết bên ngoài (Mở tab mới)"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Liên kết ngoài</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform ${
+                  headerExtLinksDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {headerExtLinksDropdownOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setHeaderExtLinksDropdownOpen(false)}
+                />
+                <div className="absolute right-0 top-full mt-2 w-64 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-1.5 z-40 space-y-1">
+                  <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 dark:border-slate-800">
+                    Chuyển liên kết ngoài (Mở tab mới)
+                  </div>
+                  {externalLinks.map((link) => (
+                    <a
+                      key={link.id}
+                      href={link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setHeaderExtLinksDropdownOpen(false)}
+                      className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 hover:text-blue-600 dark:hover:text-blue-400 flex items-center justify-between gap-2 transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-bold truncate">{link.label}</div>
+                        {link.description && (
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {link.description}
+                          </div>
+                        )}
+                      </div>
+                      <ExternalLink className="w-3.5 h-3.5 shrink-0 text-blue-500" />
+                    </a>
+                  ))}
+                  <div className="pt-1 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleSelectTab('menu_settings');
+                        setHeaderExtLinksDropdownOpen(false);
+                      }}
+                      className="w-full px-3 py-2 rounded-xl text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 cursor-pointer"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      <span>Quản lý liên kết ngoài...</span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </nav>
 
         {/* Primary Actions */}
@@ -4813,6 +5073,16 @@ export default function App() {
             </span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => setShowKiotVietSyncModal(true)}
+            className="px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/40 hover:bg-rose-100 text-rose-700 dark:text-rose-300 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-2xs"
+            title="Đồng bộ tự động khi bấm Thanh toán (F9) trên KiotViet POS (Không cần API)"
+          >
+            <Zap className="w-3.5 h-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
+            <span className="hidden sm:inline">Sync KiotViet (F9)</span>
+          </button>
+
           {allowedTabs.includes('ocr') && (
             <button
               type="button"
@@ -4862,7 +5132,7 @@ export default function App() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-            {navItems.map((item) => (
+            {primaryNavItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -4881,6 +5151,97 @@ export default function App() {
               </button>
             ))}
           </div>
+
+          {/* Mobile Overflow Dropdown for Remaining Features */}
+          {overflowNavItems.length > 0 && (
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+              <button
+                type="button"
+                onClick={() => setMobileMoreDropdownOpen((v) => !v)}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                  activeOverflowItem
+                    ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                    : 'border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <FolderKanban className="w-4 h-4" />
+                  <span>
+                    {activeOverflowItem
+                      ? `Đang chọn: ${activeOverflowItem.label}`
+                      : `Các tính năng khác (${overflowNavItems.length})`}
+                  </span>
+                </span>
+                <ChevronDown
+                  className={`w-4 h-4 transition-transform ${
+                    mobileMoreDropdownOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+              {mobileMoreDropdownOpen && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pl-2">
+                  {overflowNavItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        handleSelectTab(item.id);
+                        setMobileMoreDropdownOpen(false);
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                        activeTab === item.id
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {item.icon}
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Mobile External Links Dropdown (Thu ngân, Sổ quỹ, NDS) */}
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+            <button
+              type="button"
+              onClick={() => setMobileExtLinksDropdownOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 cursor-pointer"
+            >
+              <span className="flex items-center gap-2">
+                <ExternalLink className="w-4 h-4" />
+                <span>Liên kết bên ngoài (Thu ngân / Sổ quỹ / NDS)</span>
+              </span>
+              <ChevronDown
+                className={`w-4 h-4 transition-transform ${
+                  mobileExtLinksDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+            {mobileExtLinksDropdownOpen && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 pl-2">
+                {externalLinks.map((link) => (
+                  <a
+                    key={link.id}
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      setMobileExtLinksDropdownOpen(false);
+                      setMobileMenuOpen(false);
+                    }}
+                    className="px-3 py-2 rounded-xl border border-blue-200/80 dark:border-blue-800 bg-white dark:bg-slate-800 text-xs font-semibold text-blue-700 dark:text-blue-300 flex items-center justify-between gap-2"
+                  >
+                    <span>{link.label}</span>
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -4894,11 +5255,19 @@ export default function App() {
                 <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                   Danh mục quản lý
                 </p>
-                <span className="text-[10px] font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                  {navItems.length}/{MANAGEMENT_TABS.length}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => handleSelectTab('menu_settings')}
+                  title="Cài đặt các tính năng hiển thị trong Danh mục quản lý"
+                  className="text-[10px] font-mono font-semibold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <SlidersHorizontal className="w-3 h-3" />
+                  <span>
+                    {primaryNavItems.length}/{navItems.length}
+                  </span>
+                </button>
               </div>
-              {navItems.map((item) => (
+              {primaryNavItems.map((item) => (
                 <button
                   key={item.id}
                   type="button"
@@ -4910,9 +5279,94 @@ export default function App() {
                   }`}
                 >
                   {item.icon}
-                  <span>{item.label}</span>
+                  <span className="truncate">{item.label}</span>
                 </button>
               ))}
+
+              {/* Grouped Dropdown Column for Remaining Features in Danh mục quản lý */}
+              {overflowNavItems.length > 0 && (
+                <div className="pt-1 space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => setSidebarMoreDropdownOpen((v) => !v)}
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                      activeOverflowItem
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                        : 'border-amber-200/90 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/50'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <FolderKanban className="w-4 h-4 shrink-0" />
+                      <span className="truncate">
+                        {activeOverflowItem
+                          ? `Khác: ${activeOverflowItem.shortLabel}`
+                          : `Tính năng khác (${overflowNavItems.length})`}
+                      </span>
+                    </span>
+                    <ChevronDown
+                      className={`w-4 h-4 shrink-0 transition-transform ${
+                        sidebarMoreDropdownOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+
+                  {sidebarMoreDropdownOpen && (
+                    <div className="p-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-950/70 space-y-1">
+                      {overflowNavItems.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleSelectTab(item.id)}
+                          className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                            activeTab === item.id
+                              ? 'bg-emerald-600 text-white shadow-2xs'
+                              : 'text-slate-700 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {item.icon}
+                          <span className="truncate">{item.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* External Links Dropdown Tab inside Danh mục quản lý (Thu ngân, Sổ quỹ, NDS) */}
+              <div className="pt-1 space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setSidebarExtLinksDropdownOpen((v) => !v)}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-xs font-bold border border-blue-200/90 dark:border-blue-900/60 bg-blue-50/60 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100/70 dark:hover:bg-blue-950/50 transition-all cursor-pointer"
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <ExternalLink className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Liên kết bên ngoài</span>
+                  </span>
+                  <ChevronDown
+                    className={`w-4 h-4 shrink-0 transition-transform ${
+                      sidebarExtLinksDropdownOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                {sidebarExtLinksDropdownOpen && (
+                  <div className="p-1.5 rounded-xl border border-blue-200/70 dark:border-blue-900/50 bg-slate-50/90 dark:bg-slate-950/70 space-y-1">
+                    {externalLinks.map((link) => (
+                      <a
+                        key={link.id}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-blue-600 hover:text-white transition-colors"
+                      >
+                        <span className="truncate">{link.label}</span>
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Quick Summary Sidebar Box */}
@@ -5723,6 +6177,7 @@ export default function App() {
               onSaveGeminiKey={handleSaveGeminiKey}
               onCheckGeminiKey={handleCheckGeminiKey}
               onClearGeminiKey={handleClearGeminiKey}
+              onOpenKiotVietSync={() => setShowKiotVietSyncModal(true)}
               requestConfirm={requestConfirm}
             />
           )}
@@ -5978,12 +6433,25 @@ export default function App() {
                 requestConfirm={requestConfirm}
               />
             )}
+
+          {/* TAB 8: MENU DISPLAY SETTINGS & EXTERNAL LINKS MANAGER */}
+          {activeTab === 'menu_settings' && (
+            <MenuSettingsTab
+              allowedTabs={allowedTabs}
+              visiblePrimaryTabs={visiblePrimaryTabs}
+              onChangeVisiblePrimaryTabs={handleUpdateVisiblePrimaryTabs}
+              externalLinks={externalLinks}
+              onChangeExternalLinks={handleUpdateExternalLinks}
+              onSelectTab={handleSelectTab}
+              tabIcons={tabIconMap}
+            />
+          )}
         </main>
       </div>
 
       {/* Mobile Bottom Navigation Bar (< lg) */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800 px-1 py-1 flex items-center justify-around overflow-x-auto no-scrollbar">
-        {navItems.map((item) => {
+        {primaryNavItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
             <button
@@ -6122,6 +6590,13 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* KiotViet Auto Sync Modal (Không Cần API) */}
+      <KiotVietSyncModal
+        isOpen={showKiotVietSyncModal}
+        onClose={() => setShowKiotVietSyncModal(false)}
+        onSyncSuccess={() => handlePullFromCloud(true)}
+      />
 
       {/* Gemini API Key Popup Modal */}
       {showGeminiKeyModal && (

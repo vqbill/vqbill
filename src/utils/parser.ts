@@ -65,13 +65,78 @@ export function formatDateDMY(ymd?: string): string {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
+export function normalizeTableName(rawTable: string): string {
+  const cleanedFull = (rawTable || '')
+    .normalize('NFC')
+    .replace(
+      /\b(?:phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|hóa\s*đơn\s*bán\s*hàng|hóa\s*đơn\s*thanh\s*toán|hóa\s*đơn)\b.*$/i,
+      ''
+    )
+    .replace(/^(?:phòng\s*\/\s*bàn|phòng\s*bàn|số\s*bàn|bàn\s*số|khu\s*vực)\s*[:\-]?\s*/i, '')
+    .replace(/^[=\-*_~><:\s]+|[=\-*_~><:\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleanedFull) return '';
+
+  // If KiotViet POS format has " / " like "Mang về (02) / Mang đi (Takeaway)" or "VIP 1 / Khu VIP" or "Bàn 12 / Tầng 1",
+  // take the primary table segment before "/"
+  const slashParts = cleanedFull.split(/\s*\/\s*/).map((s) => s.trim()).filter(Boolean);
+  const cleaned = slashParts[0] || cleanedFull;
+
+  // Check "Mang về" / "Mang đi" / "Takeaway" / "MV" variants (including parentheses like "Mang về (02)", "Mang về 01", "MV02")
+  const mvMatch = cleaned.match(
+    /^(?:bàn\s+|phòng\s+|khách\s+|đơn\s+)?(?:mang\s*về|mang\s*ve|mang\s*đi|mang\s*di|take\s*away|takeaway|mv)(?:\s*[:\-_#]?\s*\(?\s*0*(\d+)([a-zA-Z]*)\s*\)?)?(?:\s*\(.*\))?$/i
+  );
+  if (mvMatch) {
+    if (mvMatch[1]) {
+      const paddedNum = String(parseInt(mvMatch[1], 10)).padStart(2, '0');
+      const suffix = (mvMatch[2] || '').toUpperCase();
+      return `MV${paddedNum}${suffix}`;
+    }
+    return 'MV';
+  }
+
+  // Check "VIP 1", "VIP (1)", "VIP 02", "Phòng VIP 1", "Bàn VIP 1" -> "VIP 1", "VIP 2"
+  const vipMatch = cleaned.match(
+    /^(?:bàn\s+|phòng\s+|phong\s+|ban\s+)?vip(?:\s*[:\-_#]?\s*\(?\s*0*([0-9a-zA-Z]+)\s*\)?)?$/i
+  );
+  if (vipMatch) {
+    if (vipMatch[1]) {
+      return `VIP ${vipMatch[1].toUpperCase()}`;
+    }
+    return 'VIP';
+  }
+
+  // Pure table number like "24" or "05" or "(24)" -> "Bàn 24"
+  const pureNumMatch = cleaned.match(/^\(?\s*(\d{1,3}[a-zA-Z]?)\s*\)?$/);
+  if (pureNumMatch) {
+    return `Bàn ${pureNumMatch[1].toUpperCase()}`;
+  }
+
+  if (/^(?:bàn|ban)\b/i.test(cleaned)) {
+    const rest = cleaned
+      .replace(/^(?:bàn|ban)\s*[:\-]?\s*/i, '')
+      .replace(/^\(\s*([0-9a-zA-Z]+)\s*\)$/, '$1')
+      .trim();
+    if (
+      /^(?:mang\s*về|mang\s*ve|mang\s*đi|mang\s*di|takeaway|mv)(?:\b|\s|\(|$)/i.test(rest) ||
+      /^vip(?:\b|\s|\(|$)/i.test(rest)
+    ) {
+      return normalizeTableName(rest);
+    }
+    return 'Bàn ' + rest;
+  }
+
+  return cleaned;
+}
+
 export function extractBillTableName(
   bill?: Partial<BillRecord> | null,
   fallback = 'Bàn lẻ'
 ): string {
   if (!bill) return fallback;
   const directTable = String((bill as any).tableName || '').trim();
-  if (directTable) return directTable;
+  if (directTable) return normalizeTableName(directTable) || directTable;
 
   const rawNote = (bill.note || '').trim();
   if (rawNote) {
@@ -79,21 +144,21 @@ export function extractBillTableName(
     const firstSegment = rawNote.split(/\s*(?:\-|–|—|·|\|)\s*/)[0]?.trim() || '';
     if (
       firstSegment &&
-      (/(?:^|\b)(?:bàn|ban|vip|phòng|phong|sân|chòi|khu|lầu|tầng)\b/i.test(
+      (/(?:^|\b)(?:bàn|ban|vip|phòng|phong|sân|chòi|khu|lầu|tầng|mv|mang\s*về|mang\s*ve)\b|^mv\d+/i.test(
         firstSegment
       ) ||
         firstSegment.length <= 16)
     ) {
-      return firstSegment;
+      return normalizeTableName(firstSegment) || firstSegment;
     }
 
-    // 2. Search anywhere in note for "Bàn ...", "VIP ...", "Phòng ..."
+    // 2. Search anywhere in note for "Bàn ...", "VIP ...", "MV...", "Mang về..."
     const tableMatch = rawNote.match(
-      /((?:bàn|ban|phòng|phong|vip|chòi|sân vườn)\s*(?:vip\s*|sân vườn\s*)?[a-zA-Z0-9]+(?:\s*(?:&|\+|và)\s*(?:bàn\s*|vip\s*)?[a-zA-Z0-9]+)*)/i
+      /((?:bàn|ban|phòng|phong|vip|chòi|sân vườn|mang\s*về|mang\s*ve|mv)\s*(?:vip\s*|sân vườn\s*)?[a-zA-Z0-9]*(?:\s*(?:&|\+|và)\s*(?:bàn\s*|vip\s*)?[a-zA-Z0-9]+)*)/i
     );
     if (tableMatch && tableMatch[1]) {
       const matched = tableMatch[1].trim();
-      return matched.charAt(0).toUpperCase() + matched.slice(1);
+      return normalizeTableName(matched) || matched.charAt(0).toUpperCase() + matched.slice(1);
     }
   }
 
@@ -1283,17 +1348,7 @@ function parseFullItemLine(
   return null;
 }
 
-function normalizeTableName(rawTable: string): string {
-  const cleaned = rawTable
-    .replace(/\b(?:phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|hóa\s*đơn\s*bán\s*hàng|hóa\s*đơn\s*thanh\s*toán|hóa\s*đơn)\b.*$/i, '')
-    .replace(/^[=\-*_~><:\s]+|[=\-*_~><:\s]+$/g, '')
-    .trim();
-  if (!cleaned) return '';
-  if (/^bàn\b/i.test(cleaned)) {
-    return 'Bàn ' + cleaned.replace(/^bàn\s*/i, '').trim();
-  }
-  return cleaned;
-}
+// normalizeTableName is exported at the top of parser.ts
 
 function isNumericOrPercentPosLine(s: string): boolean {
   const t = (s || '').trim();
@@ -1512,9 +1567,10 @@ export function normalizeSynchronizedReceiptText(rawText: string): string {
     if (!s) return true;
     if (isPureDecorativeLine(s)) return true;
     return (
-      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+[a-z0-9]+|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|tổng\s*tiền|tổng\s*cộng|tạm\s*tính|cộng\s*tiền|chiết\s*khấu|giảm\s*giá|khuyến\s*mãi|khách\s*cần\s*trả|khách\s*phải\s*trả|khách\s*đã\s*trả)/i.test(
+      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+[a-z0-9\(\)]+|vip\s*[a-z0-9\(\)]*|mang\s*về(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mang\s*đi(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mv\s*\d*|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|tìm\s*khách\s*hàng|tìm\s*mặt\s*hàng|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|tổng\s*tiền|tổng\s*cộng|tạm\s*tính|cộng\s*tiền|chiết\s*khấu|giảm\s*giá|khuyến\s*mãi|khách\s*cần\s*trả|khách\s*phải\s*trả|khách\s*đã\s*trả)/i.test(
         s
       ) ||
+      /\b(?:phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán)\b/i.test(s) ||
       /^\d{2,4}\-\d{1,4}$/.test(s) ||
       /^HD\d{4,}$/i.test(s)
     );
@@ -1633,22 +1689,52 @@ export function parseRawTextToBillJSON(
 
   const fullText = synchronizedText;
 
-  // 1. Extract Table Name (e.g., "BÀN 24 PHIẾU TÍNH TIỀN" -> "Bàn 24", or "Phòng/bàn:\nBÀN 30" -> "Bàn 30")
+  // 1. Extract Table Name (e.g., "BÀN 24 PHIẾU TÍNH TIỀN" -> "Bàn 24", "VIP 1" -> "VIP 1", "Mang về (02) / Mang đi (Takeaway)" -> "MV02", "Mang về 01" -> "MV01", "Mang về" -> "MV")
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i];
-    if (/^(?:phòng\s*\/\s*bàn|số\s*bàn|bàn\s*số)\s*[:\-]?\s*$/i.test(line) && rawLines[i + 1]) {
+    if (
+      /^(?:phòng\s*\/\s*bàn|phòng\s*bàn|số\s*bàn|bàn\s*số|khu\s*vực)\s*[:\-]?\s*$/i.test(
+        line
+      ) &&
+      rawLines[i + 1]
+    ) {
       tableName = normalizeTableName(rawLines[i + 1]);
       break;
     }
-    const kvTable = line.match(/^(?:phòng\s*\/\s*bàn|số\s*bàn|bàn)\s*[:\-]\s*(.+)$/i);
+    const kvTable = line.match(
+      /^(?:phòng\s*\/\s*bàn|phòng\s*bàn|số\s*bàn|bàn)\s*[:\-]\s*(.+)$/i
+    );
     if (kvTable) {
-      tableName = normalizeTableName('Bàn ' + kvTable[1]);
+      tableName = normalizeTableName(kvTable[1]);
       break;
     }
-    const inlineTable = line.match(/\b(BÀN\s+(?:VIP\s*)?[A-Z0-9À-ỹ]+)\b/i);
-    if (inlineTable) {
-      tableName = normalizeTableName(inlineTable[1]);
+
+    // Check KiotViet POS header line or standalone table/takeaway/VIP line (e.g., "Mang về (02) / Mang đi (Takeaway)", "VIP 1 / Tầng 2", "Bàn 12 / Sân vườn")
+    const primaryPart = line.split('/')[0].trim();
+    if (
+      /^(?:(?:bàn|ban|phòng|phong)\s+(?:vip\s*|mang\s*về\s*)?\(?\s*[a-z0-9à-ỹ]+\s*\)?|vip(?:\s*[:\-_#]?\s*\(?\s*[a-z0-9]+\s*\)?)?|mang\s*về(?:\s*[:\-_#]?\s*\(?\s*\d+[a-z]*\s*\)?)?|mang\s*ve(?:\s*[:\-_#]?\s*\(?\s*\d+[a-z]*\s*\)?)?|mang\s*đi(?:\s*[:\-_#]?\s*\(?\s*\d+[a-z]*\s*\)?)?|takeaway(?:\s*[:\-_#]?\s*\(?\s*\d+[a-z]*\s*\)?)?|mv(?:\s*[:\-_#]?\s*\(?\s*\d+[a-z]*\s*\)?)?)$/i.test(
+        primaryPart
+      )
+    ) {
+      tableName = normalizeTableName(primaryPart);
       break;
+    }
+
+    const inlineTable = line.match(
+      /(?:^|\s)((?:BÀN|PHÒNG)\s+(?:VIP\s*|MANG\s*VỀ\s*)?\(?\s*[A-Z0-9À-ỹ]+\s*\)?|VIP\s*\(?\s*\d+[A-Z]?\s*\)?|MANG\s*VỀ(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?|MANG\s*ĐI(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?|MV\s*\(?\s*\d+\s*\)?)(?=\s|$|\/|\-)/i
+    );
+    if (inlineTable) {
+      const isReceiptTitleLine = /\b(?:phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|hóa\s*đơn)\b/i.test(
+        line
+      );
+      if (
+        isReceiptTitleLine ||
+        /^bàn\s+/i.test(inlineTable[1]) ||
+        i < 12
+      ) {
+        tableName = normalizeTableName(inlineTable[1]);
+        break;
+      }
     }
   }
 
@@ -1914,9 +2000,9 @@ export function parseRawTextToBillJSON(
       continue;
     }
 
-    // Skip metadata / header lines (including store name, address ĐC:, phone ĐT:, order code 110-88, BÀN 24 PHIẾU TÍNH TIỀN, or wrapped "tiền" / "Thành tiền")
+    // Skip metadata / header lines (including store name, address ĐC:, phone ĐT:, order code 110-88, BÀN 24 PHIẾU TÍNH TIỀN, KiotViet POS UI headers like "Mang về (02) / Mang đi (Takeaway)", "Tìm khách hàng (F4)", or wrapped "tiền" / "Thành tiền")
     if (
-      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+\d+|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|(?:thành\s*)?tiền$|đ\.?\s*giá$|sl$)/i.test(
+      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+[a-z0-9\(\)]+|vip\s*[a-z0-9\(\)]*(?:\s*\/.*)?$|mang\s*về(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mang\s*đi(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mv\s*\d*(?:\s*\/.*)?$|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|tìm\s*khách\s*hàng|tìm\s*mặt\s*hàng|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|(?:thành\s*)?tiền$|đ\.?\s*giá$|sl$)/i.test(
         cleanedLine
       ) ||
       /^\d{2,4}\-\d{1,4}$/.test(cleanedLine) ||
@@ -2341,6 +2427,74 @@ Khách cần trả
 2,008,000
 Khách đã trả
 2,008,000`,
+  },
+  {
+    id: 'sample_kiotviet_pos_vip2',
+    label: 'Mẫu KiotViet POS Thu Ngân (VIP 2 - 14 món)',
+    description: 'Copy trực tiếp từ màn hình KiotViet POS: Bàn VIP 2, 14 món, tổng: 2.787.000đ',
+    rawText: `VIP 2 / PHÒNG LẠNH
+Tìm khách hàng (F4)
+Bảng giá chung
+1. Heineken bạc lon 330ml
+48
+26,000
+1,248,000
+2. Cơm chiên trứng
+1
+59,000
+59,000
+3. Gỏi ốc giác
+1
+119,000
+119,000
+4. Hàu nướng mỡ hành
+1
+119,000
+119,000
+5. Nước suối
+3
+10,000
+30,000
+6. Ốc Hương
+ốc hương hấp 3 lạng
+1
+186,000
+186,000
+7. Cá bớp um dưa
+làm cay, nhiều dưa
+1
+189,000
+189,000
+8. Bò cháy tiêu xanh bản giang
+1
+139,000
+139,000
+9. Bánh bao chiên
+4
+5,000
+20,000
+10. Cá Đuối (Phần)
+Um chua cay
+1
+195,000
+195,000
+11. Coca
+1
+15,000
+15,000
+12. Sụn gà chiên mắm
+1
+99,000
+99,000
+13. Mực khô nướng
+1
+169,000
+169,000
+14. Phụ thu
+1
+200,000
+200,000
+Tổng tiền: 2,787,000`,
   },
   {
     id: 'sample_combo_and_note',
