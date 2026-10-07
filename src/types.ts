@@ -517,6 +517,40 @@ export interface CalendarEventNote {
   createdBy?: string;
 }
 
+export interface TelegramBotConfig {
+  enabled: boolean;
+  botToken: string;
+  botUsername?: string;
+  authorizedChatIds: string[]; // Whitelist các Telegram Chat ID được phép ra lệnh
+  autoSendDailyReport?: boolean;
+}
+
+export interface ChatAssistantMessage {
+  id: string;
+  sender: 'user' | 'assistant' | 'system';
+  text: string;
+  createdAtMs: number;
+  type?: 'text' | 'stock_check' | 'import_result' | 'import_execute' | 'sales_report' | 'help' | 'unknown' | 'error';
+  importSummary?: {
+    totalItems: number;
+    items: {
+      productName: string;
+      quantity: number;
+      oldStock: number;
+      newStock: number;
+      unit: string;
+    }[];
+  };
+}
+
+export interface CustomCategoryGroup {
+  id: string;
+  name: string; // Tên riêng nhóm do người dùng tự đặt (Ví dụ: "A", "B", "Kho Lạnh", "Bia & Đồ uống"...)
+  categories: string[]; // Danh sách các nhóm category của sản phẩm hiện có trên website được chọn để xem
+  aliases?: string[]; // Các bí danh / từ khóa gọi tắt khác (tùy chọn)
+  createdAtMs?: number;
+}
+
 export interface WorkspaceInventoryData {
   trackedCategories: string[]; // Mặc định ['Bia', 'Nước ngọt']
   deductionCategories?: string[]; // Danh sách nhóm khoản trừ tùy chỉnh & mặc định
@@ -528,6 +562,10 @@ export interface WorkspaceInventoryData {
   itemConfigs: Record<string, InventoryItemConfig>; // key = lowercase productName
   dailyEntries: Record<string, Record<string, DailyInventoryEntry>>; // date -> lowercase productName
   importLogs: InventoryImportLog[];
+  categoryAliases?: Record<string, string[]>; // Danh mục -> Danh sách tên riêng / bí danh (ví dụ: "Bia" -> ["bia", "beer", "a", "tiger"])
+  customCategoryGroups?: CustomCategoryGroup[]; // Danh sách nhóm danh mục do người dùng tự tạo tên & chọn category trên website để xem
+  telegramConfig?: TelegramBotConfig; // Cấu hình kết nối Bot Telegram
+  kiotvietSyncLocked?: boolean; // Khóa / Mở khóa chức năng sync KiotViet POS để giảm tải hệ thống
   updatedAtMs: number;
 }
 

@@ -142,6 +142,7 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
   const [onlyAlertOrDiscrepancy, setOnlyAlertOrDiscrepancy] = useState<boolean>(false);
   const [showPackConversion, setShowPackConversion] = useState<boolean>(true);
   const [groupByCategory, setGroupByCategory] = useState<boolean>(true);
+  const [showAllLogDates, setShowAllLogDates] = useState<boolean>(false);
 
   // Category collapse states (expanded by default in Inventory for quick counting, with collapse/expand all buttons)
   const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
@@ -402,7 +403,84 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
         Number(cfg?.costPrice) || Math.round(unitPrice * 0.72)
       );
 
-      const openingStock = Math.max(0, Number(entry?.openingStock) || 0);
+      let openingStock = -1;
+
+      // If current day has explicitly entered positive openingStock, use it
+      if (
+        entry?.openingStock !== undefined &&
+        entry?.openingStock !== null &&
+        Number(entry.openingStock) > 0
+      ) {
+        openingStock = Math.max(0, Number(entry.openingStock));
+      }
+
+      if (openingStock < 0) {
+        // Auto-inherit from most recent recorded prior date (ClosingStock(D-1) -> OpeningStock(D))
+        const allPriorDates = Object.keys(inventoryData?.dailyEntries || {})
+          .filter((d) => d < selectedDate)
+          .sort()
+          .reverse();
+
+        let foundPriorDate: string | null = null;
+        let inheritedClosing = -1;
+
+        for (const pDate of allPriorDates) {
+          const pe = inventoryData?.dailyEntries?.[pDate]?.[pKey];
+          if (
+            pe &&
+            ((pe.openingStock !== undefined && pe.openingStock !== null) ||
+              (pe.importedQty !== undefined &&
+                pe.importedQty !== null &&
+                Number(pe.importedQty) > 0) ||
+              (pe.actualClosingStock !== undefined && pe.actualClosingStock !== null))
+          ) {
+            foundPriorDate = pDate;
+            if (pe.actualClosingStock !== null && pe.actualClosingStock !== undefined) {
+              inheritedClosing = Math.max(0, Number(pe.actualClosingStock));
+            } else {
+              const peOpen = Math.max(0, Number(pe.openingStock) || 0);
+              const peImp = Math.max(0, Number(pe.importedQty) || 0);
+              const peDmg = Math.max(0, Number(pe.damagedQty) || 0);
+              const peSale = computeSalesForDate(pDate).get(pKey);
+              const peNetSold = peSale?.netSold || 0;
+              inheritedClosing = Math.max(0, peOpen + peImp - peNetSold - peDmg);
+            }
+            break;
+          }
+        }
+
+        if (inheritedClosing >= 0 && foundPriorDate) {
+          // Deduct net sales on intermediate dates between foundPriorDate and selectedDate
+          let intermediateSold = 0;
+          for (const d of allPriorDates) {
+            if (d > foundPriorDate && d < selectedDate) {
+              const intSale = computeSalesForDate(d).get(pKey);
+              intermediateSold += intSale?.netSold || 0;
+            }
+          }
+          const finalInherited = Math.max(0, inheritedClosing - intermediateSold);
+
+          // If entry has openingStock === 0, but finalInherited > 0 and was created by telegram or not manually entered, use finalInherited
+          if (
+            entry?.openingStock !== undefined &&
+            entry?.openingStock !== null &&
+            Number(entry.openingStock) === 0 &&
+            finalInherited > 0 &&
+            entry.updatedBy === 'Telegram User'
+          ) {
+            openingStock = finalInherited;
+          } else if (entry?.openingStock !== undefined && entry?.openingStock !== null) {
+            openingStock = Math.max(0, Number(entry.openingStock));
+          } else {
+            openingStock = finalInherited;
+          }
+        } else if (entry?.openingStock !== undefined && entry?.openingStock !== null) {
+          openingStock = Math.max(0, Number(entry.openingStock));
+        } else {
+          openingStock = 0;
+        }
+      }
+
       const importedQty = Math.max(0, Number(entry?.importedQty) || 0);
       const damagedQty = Math.max(0, Number(entry?.damagedQty) || 0);
       const grossSoldQty = sale?.grossSold || 0;
@@ -1043,7 +1121,7 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
   const logsForSelectedDate = useMemo(() => {
     return (inventoryData.importLogs || [])
       .filter((l) => {
-        if (l.date !== selectedDate) return false;
+        if (!showAllLogDates && l.date !== selectedDate) return false;
         const pKey = (l.productName || '').trim().toLowerCase();
         return productCatalogMap.has(pKey);
       })
@@ -1060,7 +1138,7 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
         return l;
       })
       .sort((a, b) => b.createdAtMs - a.createdAtMs);
-  }, [inventoryData.importLogs, selectedDate, productCatalogMap]);
+  }, [inventoryData.importLogs, selectedDate, productCatalogMap, showAllLogDates]);
 
   // Group filtered rows by category
   const groupedByCategory = useMemo(() => {
@@ -1755,31 +1833,66 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
       )}
 
       {/* SECTION 5: IMPORT & ADJUSTMENT LOGS FOR SELECTED DATE */}
-      <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+      <div id="inventory-audit-log-section" className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
           <div>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-              Nhật Ký Phiếu Nhập Kho & Biến Động Kho Ngày {formatDateDMY(selectedDate)}
-            </h3>
-            <p className="text-xs text-slate-500">
-              Lưu vết chi tiết các lần nhập thêm thùng bia/nước ngọt hoặc báo vỡ/hủy trong ca (Xóa phiếu sẽ tự động hoàn tác số lượng)
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                Nhật Ký Phiếu Nhập Kho & Biến Động Kho
+              </h3>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+                {logsForSelectedDate.length} phiếu
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Lưu vết chi tiết các lần nhập hàng thủ công, qua Trợ lý Chat Web hoặc Telegram Bot (Xóa phiếu sẽ tự động hoàn tác số lượng)
             </p>
           </div>
-          {canWrite && (
-            <button
-              type="button"
-              onClick={() => handleOpenImportModal()}
-              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>+ Tạo Phiếu Nhập Kho</span>
-            </button>
-          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-0.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setShowAllLogDates(false)}
+                className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                  !showAllLogDates
+                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs font-bold'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                Ca {formatDateDMY(selectedDate)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAllLogDates(true)}
+                className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                  showAllLogDates
+                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs font-bold'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                Toàn bộ lịch sử ({inventoryData.importLogs?.length || 0})
+              </button>
+            </div>
+
+            {canWrite && (
+              <button
+                type="button"
+                onClick={() => handleOpenImportModal()}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Tạo Phiếu Nhập Kho</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {logsForSelectedDate.length === 0 ? (
           <div className="py-6 text-center text-xs text-slate-500">
-            Chưa có phiếu nhập kho hoặc xuất hủy nào được ghi nhận trong ngày {formatDateDMY(selectedDate)}.
+            {showAllLogDates
+              ? 'Chưa có phiếu nhập kho nào trong toàn bộ lịch sử.'
+              : `Chưa có phiếu nhập kho hoặc xuất hủy nào được ghi nhận trong ngày ${formatDateDMY(selectedDate)}.`}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -1791,7 +1904,7 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
                   <th className="py-2 px-3 font-semibold">Mặt hàng</th>
                   <th className="py-2 px-3 font-semibold text-right">Số lượng</th>
                   <th className="py-2 px-3 font-semibold text-right">Tiền nhập</th>
-                  <th className="py-2 px-3 font-semibold">Ghi chú / Đại lý giao</th>
+                  <th className="py-2 px-3 font-semibold">Nguồn / Ghi chú</th>
                   <th className="py-2 px-3 font-semibold">Người nhập</th>
                   <th className="py-2 px-3 font-semibold text-right">Thao tác</th>
                 </tr>
@@ -1803,10 +1916,24 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
                     className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
                   >
                     <td className="py-2.5 px-3 text-slate-500 whitespace-nowrap">
-                      {new Date(log.createdAtMs).toLocaleTimeString('vi-VN', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                      {showAllLogDates ? (
+                        <div>
+                          <div className="font-bold text-slate-700 dark:text-slate-300">
+                            {formatDateDMY(log.date)}
+                          </div>
+                          <div className="text-[10px]">
+                            {new Date(log.createdAtMs).toLocaleTimeString('vi-VN', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        new Date(log.createdAtMs).toLocaleTimeString('vi-VN', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      )}
                     </td>
                     <td className="py-2.5 px-3 font-sans font-semibold whitespace-nowrap">
                       {log.type === 'import' ? (
@@ -1842,7 +1969,16 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
                         : '—'}
                     </td>
                     <td className="py-2.5 px-3 font-sans text-slate-600 dark:text-slate-300">
-                      {log.supplierOrNote}
+                      {log.supplierOrNote?.includes('Telegram') ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 font-bold text-[10px] mr-1.5">
+                          ✈️ Telegram Bot
+                        </span>
+                      ) : log.supplierOrNote?.includes('Chat') ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-teal-100 dark:bg-teal-950/80 text-teal-700 dark:text-teal-300 font-bold text-[10px] mr-1.5">
+                          💬 Chat Trợ Lý
+                        </span>
+                      ) : null}
+                      <span>{log.supplierOrNote}</span>
                     </td>
                     <td className="py-2.5 px-3 text-slate-500">
                       @{log.createdBy}

@@ -13,6 +13,10 @@ import {
   X,
   LayoutGrid,
   FolderKanban,
+  Lock,
+  Unlock,
+  Zap,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   ManagementTabId,
@@ -30,6 +34,8 @@ interface MenuSettingsTabProps {
   onChangeExternalLinks: (nextLinks: ExternalLinkItem[]) => void;
   onSelectTab: (tabId: ManagementTabId) => void;
   tabIcons: Record<ManagementTabId, React.ReactNode>;
+  kiotvietSyncLocked?: boolean;
+  onToggleKiotvietSyncLock?: (locked?: boolean) => void;
 }
 
 export const MenuSettingsTab: React.FC<MenuSettingsTabProps> = ({
@@ -40,6 +46,8 @@ export const MenuSettingsTab: React.FC<MenuSettingsTabProps> = ({
   onChangeExternalLinks,
   onSelectTab,
   tabIcons,
+  kiotvietSyncLocked = false,
+  onToggleKiotvietSyncLock,
 }) => {
   const [newLinkLabel, setNewLinkLabel] = useState('');
   const [newLinkUrl, setNewLinkUrl] = useState('');
@@ -149,6 +157,74 @@ export const MenuSettingsTab: React.FC<MenuSettingsTabProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* SECTION 0: KHÓA / MỞ KHÓA SYNC KIOTVIET POS ĐỂ GIẢM TẢI HỆ THỐNG */}
+      <div className={`p-4 sm:p-6 border rounded-2xl shadow-xs space-y-4 transition-colors ${
+        kiotvietSyncLocked
+          ? 'border-amber-300 dark:border-amber-800/80 bg-amber-50/40 dark:bg-amber-950/20'
+          : 'border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900'
+      }`}>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                kiotvietSyncLocked
+                  ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                  : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+              }`}>
+                {kiotvietSyncLocked ? <Lock className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
+              </span>
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <span>Đồng Bộ KiotViet POS & Giảm Tải Hệ Thống</span>
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                  kiotvietSyncLocked
+                    ? 'bg-amber-200 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700'
+                    : 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
+                }`}>
+                  {kiotvietSyncLocked ? 'ĐÃ KHÓA SYNC' : 'ĐANG MỞ KHÓA'}
+                </span>
+              </h2>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed max-w-3xl">
+              {kiotvietSyncLocked ? (
+                <span>
+                  🔒 <strong className="text-amber-800 dark:text-amber-300">Tính năng đồng bộ KiotViet POS đang được KHÓA:</strong> Hệ thống tạm ngừng lắng nghe và chặn các yêu cầu gửi bill từ KiotViet POS, giúp <strong>giảm tải tối đa cho máy chủ, tiết kiệm RAM/băng thông</strong> và giúp ứng dụng chạy siêu mượt.
+                </span>
+              ) : (
+                <span>
+                  ⚡ <strong className="text-emerald-700 dark:text-emerald-300">Tính năng đồng bộ KiotViet POS đang MỞ KHÓA:</strong> Sẵn sàng tự động nhận bill tức thì mỗi khi thu ngân nhấn phím <strong>F9 (Thanh toán)</strong> bên màn hình KiotViet. Khi quán đông hoặc không cần sync tự động, bạn có thể <strong>Khóa lại</strong> để hệ thống nhẹ nhất.
+                </span>
+              )}
+            </p>
+          </div>
+
+          <div className="shrink-0 flex items-center gap-2">
+            {onToggleKiotvietSyncLock && (
+              <button
+                type="button"
+                onClick={() => onToggleKiotvietSyncLock(!kiotvietSyncLocked)}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-2 cursor-pointer ${
+                  kiotvietSyncLocked
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-amber-500 hover:bg-amber-600 text-white'
+                }`}
+              >
+                {kiotvietSyncLocked ? (
+                  <>
+                    <Unlock className="w-4 h-4" />
+                    <span>Mở Khóa Sync KiotViet</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-4 h-4" />
+                    <span>Khóa Sync (Giảm tải hệ thống)</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* SECTION 1: CÀI ĐẶT TÍNH NĂNG HIỂN THỊ TRONG DANH MỤC QUẢN LÝ */}
       <div className="p-4 sm:p-6 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">

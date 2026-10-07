@@ -555,15 +555,15 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
   const handleDeleteOneClick = (prod: ProductRecord) => {
     if (!canWrite) return;
     requestConfirm({
-      title: 'Xác nhận Xóa Sản Phẩm',
-      message: `Bạn có chắc chắn muốn xóa sản phẩm "${prod.productName}" (Danh mục: ${prod.category}) khỏi Menu và Firebase không?`,
-      confirmLabel: 'Xóa sản phẩm',
+      title: 'Xác nhận Xóa Sản Phẩm Khỏi Menu',
+      message: `Bạn có chắc chắn muốn xóa sản phẩm "${prod.productName}" (Danh mục: ${prod.category}) khỏi Menu không?\n\n💡 Lưu ý: Mọi hóa đơn đã bán trước đây sẽ hoàn toàn KHÔNG bị ảnh hưởng (tên món và giá bán trên các bill cũ vẫn giữ nguyên vẹn).`,
+      confirmLabel: 'Xóa sản phẩm khỏi Menu',
       variant: 'danger',
       onConfirm: async () => {
         await onDeleteProduct(prod.id);
         setFeedback({
           type: 'ok',
-          text: `Đã xóa sản phẩm "${prod.productName}" khỏi Menu.`,
+          text: `Đã xóa sản phẩm "${prod.productName}" khỏi Menu (các bill cũ không bị ảnh hưởng).`,
         });
       },
     });
@@ -578,15 +578,15 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
         : `tất cả ${ids.length} sản phẩm thuộc tab danh mục "${categoryFilter}"`;
 
     requestConfirm({
-      title: 'Xác nhận Xóa Tất Cả Sản Phẩm',
-      message: `Bạn có chắc chắn muốn xóa ${label} khỏi hệ thống Firebase không? Dữ liệu sau khi xóa sẽ không thể khôi phục.`,
-      confirmLabel: 'Xác nhận Xóa tất cả',
+      title: 'Xác nhận Xóa Tất Cả Sản Phẩm Khỏi Menu',
+      message: `Bạn có chắc chắn muốn xóa ${label} khỏi Menu không?\n\n💡 Yên tâm: Mọi hóa đơn bán hàng đã thanh toán trước đây sẽ hoàn toàn KHÔNG bị ảnh hưởng.`,
+      confirmLabel: 'Xác nhận Xóa khỏi Menu',
       variant: 'danger',
       onConfirm: async () => {
         await onDeleteProductsBatch(ids);
         setFeedback({
           type: 'ok',
-          text: `Đã xóa thành công ${label} khỏi Menu.`,
+          text: `Đã xóa thành công ${label} khỏi Menu (các bill cũ không bị ảnh hưởng).`,
         });
       },
     });
@@ -597,14 +597,14 @@ export const ProductCatalogTab: React.FC<ProductCatalogTabProps> = ({
     const allIds = products.map((p) => p.id);
     requestConfirm({
       title: 'Xác nhận Xóa Tất Cả Sản Phẩm Trong Toàn Bộ Menu',
-      message: `Bạn có chắc chắn muốn xóa sạch toàn bộ ${allIds.length} sản phẩm trong tất cả các danh mục của Menu trên Firebase không?`,
-      confirmLabel: 'Xóa sạch toàn bộ Menu',
+      message: `Bạn có chắc chắn muốn xóa toàn bộ ${allIds.length} sản phẩm trong tất cả các danh mục của Menu không?\n\n💡 Yên tâm: Mọi hóa đơn đã bán trước đây sẽ hoàn toàn KHÔNG bị ảnh hưởng.`,
+      confirmLabel: 'Xóa sạch Menu',
       variant: 'danger',
       onConfirm: async () => {
         await onDeleteProductsBatch(allIds);
         setFeedback({
           type: 'ok',
-          text: `Đã xóa toàn bộ ${allIds.length} sản phẩm trong Menu.`,
+          text: `Đã xóa toàn bộ ${allIds.length} sản phẩm trong Menu (các bill cũ không bị ảnh hưởng).`,
         });
       },
     });

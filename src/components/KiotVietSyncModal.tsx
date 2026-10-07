@@ -14,6 +14,8 @@ import {
   Layers,
   ArrowRight,
   ShieldCheck,
+  Lock,
+  Unlock,
 } from 'lucide-react';
 import { formatVND, getCurrentBusinessDate } from '../utils/parser';
 
@@ -22,6 +24,8 @@ interface KiotVietSyncModalProps {
   onClose: () => void;
   onSyncSuccess?: () => void;
   onDirectCreateBill?: (billData: any) => Promise<any>;
+  isLocked?: boolean;
+  onToggleLock?: (nextLocked: boolean) => void;
 }
 
 export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
@@ -29,6 +33,8 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
   onClose,
   onSyncSuccess,
   onDirectCreateBill,
+  isLocked = false,
+  onToggleLock,
 }) => {
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
@@ -776,6 +782,78 @@ export const KiotVietSyncModal: React.FC<KiotVietSyncModalProps> = ({
 
         {/* Content Body */}
         <div className="p-4 sm:p-6 space-y-5 overflow-y-auto text-xs">
+          {/* Lock / Unlock Toggle Card (Giảm tải hệ thống) */}
+          <div
+            className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 ${
+              isLocked
+                ? 'border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className={`p-2 rounded-xl shrink-0 ${
+                  isLocked
+                    ? 'bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300'
+                    : 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300'
+                }`}
+              >
+                {isLocked ? (
+                  <Lock className="w-5 h-5" />
+                ) : (
+                  <Unlock className="w-5 h-5" />
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-sm text-slate-900 dark:text-white">
+                    {isLocked
+                      ? 'Trạng thái: ĐÃ KHÓA ĐỒNG BỘ KIOTVIET (Hệ thống chạy siêu nhẹ)'
+                      : 'Trạng thái: ĐANG MỞ ĐỒNG BỘ KIOTVIET'}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      isLocked
+                        ? 'bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200'
+                        : 'bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200'
+                    }`}
+                  >
+                    {isLocked ? 'ĐÃ KHÓA' : 'HOẠT ĐỘNG'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                  {isLocked
+                    ? 'Toàn bộ kênh lắng nghe thời gian thực và tự động kéo KiotViet đã được ngắt để giảm tải CPU, tiết kiệm RAM và mạng. Hãy mở khóa khi cần đồng bộ bill từ máy thu ngân.'
+                    : 'Hệ thống đang sẵn sàng nhận hóa đơn tự động khi thu ngân bấm phím F9 bên KiotViet POS. Nếu không dùng thường xuyên, bạn có thể Khóa lại để máy chạy nhẹ nhất.'}
+                </p>
+              </div>
+            </div>
+
+            {onToggleLock && (
+              <button
+                type="button"
+                onClick={() => onToggleLock(!isLocked)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold shrink-0 cursor-pointer inline-flex items-center gap-2 transition-all shadow-xs ${
+                  isLocked
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100'
+                }`}
+              >
+                {isLocked ? (
+                  <>
+                    <Unlock className="w-4 h-4" />
+                    <span>Mở khóa đồng bộ</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-4 h-4" />
+                    <span>Khóa lại (Tiết kiệm RAM)</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
           {/* Active Webhook Status Banner */}
           <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">

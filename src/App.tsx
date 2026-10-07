@@ -50,6 +50,9 @@ import {
   SlidersHorizontal,
   FolderKanban,
   Zap,
+  Bot,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import {
   auth,
@@ -103,6 +106,8 @@ import {
   extractReturnTableName,
   formatReturnDeductionTitle,
   isOwnerUseBill,
+  mergeInventoryData,
+  shiftDateByDays,
 } from './utils/parser';
 import {
   fetchGeminiStatus,
@@ -178,12 +183,16 @@ import { BillSplitMergeModal } from './components/BillSplitMergeModal';
 import { ConfirmDialogModal } from './components/ConfirmDialogModal';
 import { GeminiKeyBar } from './components/GeminiKeyBar';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { ChatAssistantWidget } from './components/ChatAssistantWidget';
 
 type ActiveTab = ManagementTabId;
 
 export default function App() {
   const todayStr = getCurrentBusinessDate();
   const yesterdayStr = getYesterdayBusinessDate();
+
+  // Chat-Ops Assistant Widget State
+  const [showChatAssistant, setShowChatAssistant] = useState(false);
 
   // Theme State
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -457,6 +466,12 @@ export default function App() {
   );
   const [toastBanner, setToastBanner] = useState<string | null>(null);
 
+  // Bulk Bill Selection & Payment Method Modification on Dashboard
+  const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(new Set());
+  const [showBulkPaymentModal, setShowBulkPaymentModal] = useState<boolean>(false);
+  const [bulkPaymentType, setBulkPaymentType] = useState<PaymentType>('transfer');
+  const [bulkDebtorName, setBulkDebtorName] = useState<string>('');
+
   const showToast = (msg: string) => {
     setToastBanner(msg);
     setTimeout(() => setToastBanner(null), 4000);
@@ -708,18 +723,7 @@ export default function App() {
         }
         const delEmpSet = getDeletedEmployeeIds();
         setInventoryData((prev) => {
-          if ((prev.updatedAtMs || 0) > (incomingInv.updatedAtMs || 0)) {
-            return prev;
-          }
-          return {
-            ...incomingInv,
-            deletedEmployeeIds: Array.from(delEmpSet),
-            employees: Array.isArray(incomingInv.employees)
-              ? incomingInv.employees.filter(
-                  (e) => !delEmpSet.has(e.id) && !delEmpSet.has(sanitizeId(e.id))
-                )
-              : prev.employees,
-          };
+          return mergeInventoryData(prev, incomingInv, delEmpSet);
         });
       }
       setProducts(nextProducts);
@@ -869,10 +873,10 @@ export default function App() {
               localCached.rolePermissions ||
               bestRemote.rolePermissions ||
               DEFAULT_ROLE_PERMISSIONS,
-            inventoryData:
-              localCached.inventoryData ||
-              bestRemote.inventoryData ||
-              buildInitialInventoryData(todayStr, yesterdayStr),
+            inventoryData: mergeInventoryData(
+              bestRemote.inventoryData || buildInitialInventoryData(todayStr, yesterdayStr),
+              localCached.inventoryData || buildInitialInventoryData(todayStr, yesterdayStr)
+            ),
             products: Array.from(mergedProdsMap.values()),
             bills: Array.from(mergedBillsMap.values()),
             billItems: Array.from(mergedItemsMap.values()),
@@ -1027,6 +1031,11 @@ export default function App() {
           setLastCloudSyncAt(res.updatedAtMs || Date.now());
           setCloudSyncedOnce(true);
           setCloudSyncStatus('synced');
+          if (res.workspace?.inventoryData) {
+            const incomingInv = res.workspace.inventoryData;
+            const delEmpSet = getDeletedEmployeeIds();
+            setInventoryData((prev) => mergeInventoryData(prev, incomingInv, delEmpSet));
+          }
           saveLocalMirror(ownerId, {
             ...currentSnapshot,
             version: res.version,
@@ -1976,6 +1985,82 @@ export default function App() {
     };
   }, [periodBills, periodDeductions, inventoryData.debtPayments, bills]);
 
+  // Bulk Selection Handlers
+  const handleToggleSelectBill = (billId: string) => {
+    setSelectedBillIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(billId)) {
+        next.delete(billId);
+      } else {
+        next.add(billId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllBills = () => {
+    const allDisplayedIds = displayedBills.map((b) => b.id);
+    const allSelected =
+      allDisplayedIds.length > 0 &&
+      allDisplayedIds.every((id) => selectedBillIds.has(id));
+    if (allSelected) {
+      setSelectedBillIds(new Set());
+    } else {
+      setSelectedBillIds(new Set(allDisplayedIds));
+    }
+  };
+
+  const handleClearSelectedBills = () => {
+    setSelectedBillIds(new Set());
+  };
+
+  const handleApplyBulkPaymentType = async () => {
+    if (selectedBillIds.size === 0) return;
+    const count = selectedBillIds.size;
+    const now = Date.now();
+    const isDebt = bulkPaymentType === 'debt';
+    const targetDebtor = bulkDebtorName.trim() || 'Khách nợ';
+
+    const nextBills: BillRecord[] = bills.map((b) => {
+      if (!selectedBillIds.has(b.id)) return b;
+      return {
+        ...b,
+        paymentType: bulkPaymentType,
+        debtorName: isDebt ? targetDebtor : '',
+        debtStatus: isDebt ? ('unpaid' as const) : ('none' as const),
+        updatedAtMs: now,
+      };
+    });
+
+    setBills(nextBills);
+    setShowBulkPaymentModal(false);
+    setSelectedBillIds(new Set());
+
+    const label =
+      bulkPaymentType === 'cash'
+        ? 'Tiền mặt'
+        : bulkPaymentType === 'transfer'
+        ? 'Chuyển khoản'
+        : `Ghi nợ (${targetDebtor})`;
+
+    showToast(`Đã chuyển thành công ${count} hóa đơn sang "${label}"!`);
+  };
+
+  const handleBulkDeleteSelectedBills = () => {
+    if (selectedBillIds.size === 0) return;
+    const targetBills = bills.filter((b) => selectedBillIds.has(b.id));
+    requestConfirm({
+      title: 'Xác nhận Xóa Các Hóa Đơn Đã Chọn',
+      message: `Bạn có chắc chắn muốn xóa ${targetBills.length} hóa đơn đã chọn khỏi hệ thống không?`,
+      confirmLabel: `Xóa ${targetBills.length} hóa đơn`,
+      variant: 'danger',
+      onConfirm: async () => {
+        await handleDeleteMultipleBills(targetBills);
+        setSelectedBillIds(new Set());
+      },
+    });
+  };
+
   // Daily Chart Data Points
   const chartData = useMemo<DailyRevenuePoint[]>(() => {
     const dateMap = new Map<
@@ -2570,6 +2655,9 @@ export default function App() {
 
   // Tự động nhận hóa đơn KiotViet POS bắn qua Firebase Realtime Database
   useEffect(() => {
+    if (inventoryData.kiotvietSyncLocked) {
+      return;
+    }
     const processIncomingBill = async (incoming: any) => {
       try {
         if (!incoming || typeof incoming !== 'object') return;
@@ -2661,7 +2749,7 @@ export default function App() {
       unsub();
       clearInterval(pollTimer);
     };
-  }, []);
+  }, [inventoryData.kiotvietSyncLocked]);
 
   const handleSaveOwnerUseBill = async (payload: {
     billDate: string;
@@ -4748,10 +4836,67 @@ export default function App() {
   ) => {
     setWorkspaceInitialized(true);
     setInventoryData(nextData);
-    await saveInventoryDataToCloud(ownerId, nextData, rolePermissions);
+
+    const now = Date.now();
+    const nextVer = lastKnownServerVersionRef.current + 1;
+    const snapToPush: WorkspaceCacheSnapshot = {
+      version: nextVer,
+      updatedAtMs: now,
+      cloudSyncedOnce: true,
+      initialized: true,
+      categories,
+      rolePermissions,
+      inventoryData: nextData,
+      products,
+      bills,
+      billItems,
+      deductions,
+      returns,
+      debtors,
+      staffAccounts,
+    };
+
+    saveLocalMirror(ownerId, snapToPush);
+
+    await Promise.all([
+      saveInventoryDataToCloud(ownerId, nextData, rolePermissions),
+      pushWorkspaceToServer(
+        snapToPush,
+        'replace',
+        currentStaffAccount?.username || 'inventory_save'
+      ).then((res) => {
+        if (res && res.ok) {
+          lastKnownServerVersionRef.current = Math.max(
+            lastKnownServerVersionRef.current,
+            res.version
+          );
+          setCloudVersion(res.version);
+          setLastCloudSyncAt(res.updatedAtMs || now);
+          setCloudSyncedOnce(true);
+          setCloudSyncStatus('synced');
+        }
+      }),
+    ]);
+
     if (toastMsg) {
       showToast(toastMsg);
     }
+  };
+
+  const handleToggleKiotvietSyncLock = async (locked?: boolean) => {
+    const nextLocked =
+      locked !== undefined ? locked : !inventoryData.kiotvietSyncLocked;
+    const nextInv: WorkspaceInventoryData = {
+      ...inventoryData,
+      kiotvietSyncLocked: nextLocked,
+      updatedAtMs: Date.now(),
+    };
+    await handleSaveInventoryData(
+      nextInv,
+      nextLocked
+        ? '🔒 Đã KHÓA đồng bộ KiotViet POS (Tạm ngắt kết nối để hệ thống nhẹ nhất)!'
+        : '🔓 Đã MỞ KHÓA đồng bộ KiotViet POS (Sẵn sàng nhận bill từ F9)!'
+    );
   };
 
   // If not logged in, render AuthScreen (without any sample quick-fill buttons)
@@ -5174,12 +5319,36 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setShowKiotVietSyncModal(true)}
-            className="px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/40 hover:bg-rose-100 text-rose-700 dark:text-rose-300 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-2xs"
-            title="Đồng bộ tự động khi bấm Thanh toán (F9) trên KiotViet POS (Không cần API)"
+            onClick={() => setShowChatAssistant((prev) => !prev)}
+            className="px-2.5 py-1.5 rounded-xl border border-teal-200 dark:border-teal-800/80 bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 text-teal-800 dark:text-teal-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-2xs"
+            title="Mở Trợ lý ảo Kho & Báo Cáo (Chat Web & Telegram Bot)"
           >
-            <Zap className="w-3.5 h-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
-            <span className="hidden sm:inline">Sync KiotViet (F9)</span>
+            <Bot className="w-3.5 h-3.5 shrink-0 text-teal-600 dark:text-teal-400" />
+            <span className="hidden sm:inline">Trợ lý Kho & Chat</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowKiotVietSyncModal(true)}
+            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-2xs ${
+              inventoryData.kiotvietSyncLocked
+                ? 'border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                : 'border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/40 hover:bg-rose-100 text-rose-700 dark:text-rose-300'
+            }`}
+            title={
+              inventoryData.kiotvietSyncLocked
+                ? 'KiotViet POS đang BỊ KHÓA (để nhẹ hệ thống). Bấm để mở lại hoặc cài đặt.'
+                : 'Đồng bộ tự động khi bấm Thanh toán (F9) trên KiotViet POS (Không cần API)'
+            }
+          >
+            {inventoryData.kiotvietSyncLocked ? (
+              <Lock className="w-3.5 h-3.5 shrink-0 text-slate-500 dark:text-slate-400" />
+            ) : (
+              <Zap className="w-3.5 h-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
+            )}
+            <span className="hidden sm:inline">
+              {inventoryData.kiotvietSyncLocked ? 'KiotViet (Đã khóa)' : 'Sync KiotViet (F9)'}
+            </span>
           </button>
 
           {allowedTabs.includes('ocr') && (
@@ -5667,25 +5836,113 @@ export default function App() {
                     ))}
                   </div>
 
-                  {/* Custom Date Range Inputs */}
-                  {periodPreset === 'custom' && (
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-                      <span>Từ:</span>
+                  {/* Date Stepper with Single Day Shift ← → (Tiến / Lùi ngày giống bên Khoản trừ theo thời gian) */}
+                  <div className="flex flex-wrap items-center gap-2.5 pt-1 sm:pt-0">
+                    <span className="text-xs text-slate-600 dark:text-slate-300 font-medium">
+                      Chọn ngày cần xem:
+                    </span>
+                    <div className="inline-flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-2xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentSelected =
+                            periodPreset === 'today'
+                              ? todayStr
+                              : periodPreset === 'yesterday'
+                              ? yesterdayStr
+                              : customStartDate;
+                          const prev = shiftDateByDays(currentSelected, -1);
+                          setCustomStartDate(prev);
+                          setCustomEndDate(prev);
+                          if (prev === todayStr) {
+                            setPeriodPreset('today');
+                          } else if (prev === yesterdayStr) {
+                            setPeriodPreset('yesterday');
+                          } else {
+                            setPeriodPreset('custom');
+                          }
+                        }}
+                        className="px-2.5 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-xs font-mono font-bold cursor-pointer transition-colors"
+                        title="Ngày hôm trước (Lùi 1 ngày)"
+                      >
+                        ←
+                      </button>
                       <input
                         type="date"
-                        value={customStartDate}
-                        onChange={(e) => setCustomStartDate(e.target.value)}
-                        className="px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                        value={
+                          periodPreset === 'today'
+                            ? todayStr
+                            : periodPreset === 'yesterday'
+                            ? yesterdayStr
+                            : customStartDate
+                        }
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            setCustomStartDate(e.target.value);
+                            setCustomEndDate(e.target.value);
+                            if (e.target.value === todayStr) {
+                              setPeriodPreset('today');
+                            } else if (e.target.value === yesterdayStr) {
+                              setPeriodPreset('yesterday');
+                            } else {
+                              setPeriodPreset('custom');
+                            }
+                          }
+                        }}
+                        className="px-2 py-1 text-xs font-mono font-bold bg-transparent text-slate-900 dark:text-white focus:outline-none cursor-pointer"
                       />
-                      <span>Đến:</span>
-                      <input
-                        type="date"
-                        value={customEndDate}
-                        onChange={(e) => setCustomEndDate(e.target.value)}
-                        className="px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentSelected =
+                            periodPreset === 'today'
+                              ? todayStr
+                              : periodPreset === 'yesterday'
+                              ? yesterdayStr
+                              : customStartDate;
+                          const next = shiftDateByDays(currentSelected, 1);
+                          setCustomStartDate(next);
+                          setCustomEndDate(next);
+                          if (next === todayStr) {
+                            setPeriodPreset('today');
+                          } else if (next === yesterdayStr) {
+                            setPeriodPreset('yesterday');
+                          } else {
+                            setPeriodPreset('custom');
+                          }
+                        }}
+                        className="px-2.5 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-xs font-mono font-bold cursor-pointer transition-colors"
+                        title="Ngày tiếp theo (Tiến 1 ngày)"
+                      >
+                        →
+                      </button>
                     </div>
-                  )}
+
+                    {/* Tùy chọn mở rộng xem khoảng ngày (Từ ngày - Đến ngày) khi đang ở chế độ chọn ngày */}
+                    {periodPreset === 'custom' && (
+                      <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200 dark:border-slate-700 text-xs font-mono animate-in fade-in duration-150">
+                        <span className="text-slate-500 font-sans">Đến:</span>
+                        <input
+                          type="date"
+                          value={customEndDate}
+                          onChange={(e) => {
+                            if (e.target.value) setCustomEndDate(e.target.value);
+                          }}
+                          className="px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white cursor-pointer"
+                        />
+                        {customStartDate !== customEndDate && (
+                          <button
+                            type="button"
+                            onClick={() => setCustomEndDate(customStartDate)}
+                            className="text-[11px] font-sans text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                            title="Xem riêng ngày này"
+                          >
+                            (1 ngày)
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -5942,6 +6199,23 @@ export default function App() {
                       </select>
                     </div>
 
+                    {displayedBills.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleToggleSelectAllBills}
+                        className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap transition-colors"
+                        title="Chọn hoặc bỏ chọn tất cả hóa đơn đang hiển thị"
+                      >
+                        <CheckSquare className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        <span>
+                          {displayedBills.length > 0 &&
+                          displayedBills.every((b) => selectedBillIds.has(b.id))
+                            ? 'Bỏ chọn tất cả'
+                            : `Chọn toàn bộ (${displayedBills.length})`}
+                        </span>
+                      </button>
+                    )}
+
                     {canDelete && displayedBills.length > 0 && (
                       <button
                         type="button"
@@ -5965,6 +6239,60 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Bulk Action Banner when 1 or more bills are selected */}
+                {selectedBillIds.size > 0 && (
+                  <div className="p-3.5 bg-emerald-50/90 dark:bg-emerald-950/60 border-2 border-emerald-500/60 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in duration-150">
+                    <div className="flex items-center gap-2 text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>
+                        Đã chọn <strong>{selectedBillIds.size} / {displayedBills.length}</strong> hóa đơn
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleToggleSelectAllBills}
+                        className="text-[11px] font-normal underline text-emerald-700 dark:text-emerald-300 ml-1 cursor-pointer"
+                      >
+                        {displayedBills.every((b) => selectedBillIds.has(b.id)) ? 'Bỏ chọn' : 'Chọn tất cả'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleClearSelectedBills}
+                        className="text-[11px] font-normal text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 cursor-pointer ml-1"
+                      >
+                        Xóa chọn
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canWrite && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBulkPaymentType('transfer');
+                            setBulkDebtorName('');
+                            setShowBulkPaymentModal(true);
+                          }}
+                          className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>Đổi phương thức thanh toán ({selectedBillIds.size})</span>
+                        </button>
+                      )}
+
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={handleBulkDeleteSelectedBills}
+                          className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 text-xs font-semibold hover:bg-rose-100 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Xóa ({selectedBillIds.size})</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {displayedBills.length === 0 ? (
                   <div className="py-12 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500">
                     Không tìm thấy hóa đơn nào khớp với điều kiện lọc.
@@ -5981,22 +6309,43 @@ export default function App() {
                         const billItemCount = effectiveBillItems.filter(
                           (it) => it.billId === bill.id
                         ).length;
+                        const isSelected = selectedBillIds.has(bill.id);
                         return (
                           <div
                             key={bill.id}
                             onClick={() => setInspectingBill(bill)}
-                            className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:border-emerald-500/60 dark:hover:border-emerald-500/60 transition-colors space-y-2 text-xs cursor-pointer"
+                            className={`p-3.5 rounded-xl border transition-colors space-y-2 text-xs cursor-pointer ${
+                              isSelected
+                                ? 'border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/30'
+                                : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:border-emerald-500/60'
+                            }`}
                           >
                             <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <div className="font-mono font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                                  <span>
-                                    {bill.billCode} · {bill.billDate}
-                                  </span>
-                                  <span className="text-[11px] font-normal text-emerald-600 dark:text-emerald-400">
-                                    ({billItemCount} món)
-                                  </span>
+                              <div className="flex items-start gap-2.5">
+                                <div
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleSelectBill(bill.id);
+                                  }}
+                                  className="pt-0.5 cursor-pointer"
+                                  title="Chọn hóa đơn này"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={() => handleToggleSelectBill(bill.id)}
+                                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                  />
                                 </div>
+                                <div>
+                                  <div className="font-mono font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                                    <span>
+                                      {bill.billCode} · {bill.billDate}
+                                    </span>
+                                    <span className="text-[11px] font-normal text-emerald-600 dark:text-emerald-400">
+                                      ({billItemCount} món)
+                                    </span>
+                                  </div>
                                 {(bill.checkInTime || bill.checkOutTime) && (
                                   <div className="text-[11px] font-mono text-slate-500">
                                     Giờ: {bill.checkInTime || '--:--'} → {bill.checkOutTime || '--:--'}
@@ -6018,7 +6367,8 @@ export default function App() {
                                     : ''}
                                 </div>
                               </div>
-                              <div className="text-right font-mono">
+                            </div>
+                            <div className="text-right font-mono">
                                 <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
                                   {formatVND(netBill)}
                                 </div>
@@ -6101,6 +6451,18 @@ export default function App() {
                       <table className="w-full text-left border-collapse text-xs">
                         <thead>
                           <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                            <th className="py-2.5 px-3 w-10 text-center">
+                              <input
+                                type="checkbox"
+                                checked={
+                                  displayedBills.length > 0 &&
+                                  displayedBills.every((b) => selectedBillIds.has(b.id))
+                                }
+                                onChange={handleToggleSelectAllBills}
+                                className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                title="Chọn / Bỏ chọn toàn bộ"
+                              />
+                            </th>
                             <th className="py-2.5 px-3">Mã Bill / Ngày</th>
                             <th className="py-2.5 px-3">Hình thức & Khách</th>
                             <th className="py-2.5 px-3">Chi tiết các món (Bấm vào dòng để xem bill)</th>
@@ -6119,12 +6481,31 @@ export default function App() {
                             const billItemCount = effectiveBillItems.filter(
                               (it) => it.billId === bill.id
                             ).length;
+                            const isSelected = selectedBillIds.has(bill.id);
                             return (
                               <tr
                                 key={bill.id}
                                 onClick={() => setInspectingBill(bill)}
-                                className="hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer group"
+                                className={`transition-colors cursor-pointer group ${
+                                  isSelected
+                                    ? 'bg-emerald-50/60 dark:bg-emerald-950/40'
+                                    : 'hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
+                                }`}
                               >
+                                <td
+                                  className="py-3 px-3 text-center"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleSelectBill(bill.id);
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={() => handleToggleSelectBill(bill.id)}
+                                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                  />
+                                </td>
                                 <td className="py-3 px-3 font-mono">
                                   <div className="font-bold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
                                     {bill.billCode}
@@ -6543,6 +6924,8 @@ export default function App() {
               onChangeExternalLinks={handleUpdateExternalLinks}
               onSelectTab={handleSelectTab}
               tabIcons={tabIconMap}
+              kiotvietSyncLocked={Boolean(inventoryData.kiotvietSyncLocked)}
+              onToggleKiotvietSyncLock={handleToggleKiotvietSyncLock}
             />
           )}
         </main>
@@ -6696,6 +7079,26 @@ export default function App() {
         onClose={() => setShowKiotVietSyncModal(false)}
         onSyncSuccess={() => handlePullFromCloud(true)}
         onDirectCreateBill={handleSaveExtractedBill}
+        isLocked={Boolean(inventoryData.kiotvietSyncLocked)}
+        onToggleLock={handleToggleKiotvietSyncLock}
+      />
+
+      {/* Chat-Ops Assistant Widget (Kiểm kho & Báo cáo qua Chat Web / Telegram) */}
+      <ChatAssistantWidget
+        isOpen={showChatAssistant}
+        onToggle={() => setShowChatAssistant((prev) => !prev)}
+        selectedDate={periodPreset === 'yesterday' ? yesterdayStr : todayStr}
+        todayStr={todayStr}
+        yesterdayStr={yesterdayStr}
+        products={products}
+        categories={effectiveCategories}
+        bills={bills}
+        billItems={billItems}
+        returns={returns}
+        inventoryData={inventoryData}
+        onUpdateInventoryData={handleSaveInventoryData}
+        onNavigateToTab={(tabId) => handleSelectTab(tabId as ManagementTabId)}
+        currentUsername={currentStaffAccount?.username || 'admin'}
       />
 
       {/* Gemini API Key Popup Modal */}
@@ -6851,6 +7254,131 @@ export default function App() {
           }
           requestConfirm={requestConfirm}
         />
+      )}
+
+      {/* Bulk Change Payment Method Modal */}
+      {showBulkPaymentModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden space-y-4 p-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <CreditCard className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                    Đổi Phương Thức Thanh Toán
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Áp dụng đồng loạt cho <strong>{selectedBillIds.size}</strong> hóa đơn đã chọn
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBulkPaymentModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Chọn phương thức thanh toán mới:
+              </label>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {(
+                  [
+                    { id: 'transfer', label: 'Chuyển khoản (VietQR / Bank)', icon: '💳' },
+                    { id: 'cash', label: 'Tiền mặt', icon: '💵' },
+                    { id: 'debt', label: 'Ghi nợ (Công nợ)', icon: '📝' },
+                    { id: 'owner_use', label: 'Chủ / QL dùng (0đ)', icon: '👑' },
+                  ] as { id: PaymentType; label: string; icon: string }[]
+                ).map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setBulkPaymentType(m.id)}
+                    className={`p-3 rounded-xl border text-left font-medium transition-all cursor-pointer flex items-center gap-2 ${
+                      bulkPaymentType === m.id
+                        ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/30'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <span className="text-base">{m.icon}</span>
+                    <span className="font-semibold text-xs">{m.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Nếu chọn Ghi nợ: nhập tên khách nợ */}
+              {bulkPaymentType === 'debt' && (
+                <div className="pt-2 space-y-2 border-t border-slate-100 dark:border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Tên người nợ / Khách nợ:
+                  </label>
+                  <input
+                    type="text"
+                    value={bulkDebtorName}
+                    onChange={(e) => setBulkDebtorName(e.target.value)}
+                    placeholder="VD: Anh Hoàng (Cty Minh Phát), Bác Tư..."
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                  {effectiveDebtors.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <span className="text-[11px] text-slate-500">Khách nợ có sẵn:</span>
+                      {effectiveDebtors.slice(0, 6).map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setBulkDebtorName(d)}
+                          className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[11px] text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 hover:text-emerald-600 transition-colors cursor-pointer"
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Nếu chọn Chủ / QL dùng: ghi chú */}
+              {bulkPaymentType === 'owner_use' && (
+                <div className="pt-2 space-y-2 border-t border-slate-100 dark:border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Tên người dùng (Tùy chọn):
+                  </label>
+                  <input
+                    type="text"
+                    value={bulkDebtorName}
+                    onChange={(e) => setBulkDebtorName(e.target.value)}
+                    placeholder="VD: Chủ quán tiếp khách, Quản lý..."
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowBulkPaymentModal(false)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyBulkPaymentType}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
+              >
+                Xác nhận đổi {selectedBillIds.size} hóa đơn
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Global Confirmation Popup Modal */}

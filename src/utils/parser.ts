@@ -5,6 +5,10 @@ import {
   ProductRecord,
   BillRecord,
   BillItemRecord,
+  WorkspaceInventoryData,
+  DailyInventoryEntry,
+  InventoryImportLog,
+  CustomCategoryGroup,
 } from '../types';
 
 export function sanitizeId(raw: string): string {
@@ -27,6 +31,15 @@ let privacyMaskEnabled: boolean = (() => {
 
 export function getPrivacyMaskMode(): boolean {
   return privacyMaskEnabled;
+}
+
+export function removeVietnameseAccents(str: string): string {
+  if (!str) return '';
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
 }
 
 export function setPrivacyMaskMode(enabled: boolean): void {
@@ -993,6 +1006,15 @@ export function splitProductNameAndInlineNote(
     }
 
     if (lowerCleaned.startsWith(pLow + ' ') || lowerCleaned.startsWith(pLow + '-') || lowerCleaned.startsWith(pLow + ':')) {
+      const isCleanChai = /\bchai\b/i.test(cleaned);
+      const isCleanLonOr330 = /\b(?:lon|330ml|330|250ml)\b/i.test(cleaned);
+      const isProdChai = /\bchai\b/i.test(catProd.productName);
+      const isProdLonOr330 = /\b(?:lon|330ml|330|250ml)\b/i.test(catProd.productName);
+
+      // Do not prematurely match a base prefix if specifications (chai vs lon/330ml) conflict
+      if (isCleanChai && !isProdChai) continue;
+      if (isCleanLonOr330 && isProdChai) continue;
+
       const remainder = cleaned
         .slice(catProd.productName.length)
         .replace(/^[\s\-:,|]+|[\s\-:,|]+$/g, '')
@@ -1008,6 +1030,71 @@ export function splitProductNameAndInlineNote(
         note: noteParts.join(', '),
         category: catProd.category,
         catalogUnitPrice: catProd.unitPrice,
+      };
+    }
+  }
+
+  // 1.5 Smart Variant & Specification Disambiguation (e.g. "Tiger bạc chai" vs "Tiger bạc lon 330ml" vs "Tiger bạc 250ml")
+  const normClean = removeVietnameseAccents(cleaned).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (normClean) {
+    const isChai = /\bchai\b/i.test(cleaned);
+    const isLon = /\b(?:lon|330ml|330|250ml)\b/i.test(cleaned);
+    const is330 = /\b(?:330ml|330)\b/i.test(cleaned);
+    const is250 = /\b(?:250ml|250|nho)\b/i.test(normClean);
+
+    let bestProd: (typeof catalogList)[0] | null = null;
+    let bestScore = -1;
+
+    for (const catProd of catalogList) {
+      const pNorm = removeVietnameseAccents(catProd.productName).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      const prodIsChai = /\bchai\b/i.test(catProd.productName);
+      const prodIsLon = /\b(?:lon|330ml|250ml)\b/i.test(catProd.productName);
+      const prodIs330 = /\b(?:330ml|330)\b/i.test(catProd.productName);
+      const prodIs250 = /\b(?:250ml|250|nho)\b/i.test(pNorm);
+
+      // Strict specifications conflict prevention
+      if (isChai && !prodIsChai) continue;
+      if ((isLon || is330) && prodIsChai) continue;
+      if (is250 && !prodIs250 && (prodIs330 || prodIsChai)) continue;
+      if (is330 && !prodIs330 && (prodIs250 || prodIsChai)) continue;
+
+      let score = 0;
+      const cleanNoBia = normClean.replace(/^bia\s+/, '');
+      const pNormNoBia = pNorm.replace(/^bia\s+/, '');
+
+      if (cleanNoBia === pNormNoBia) {
+        score = 100;
+      } else if (cleanNoBia.startsWith(pNormNoBia + ' ')) {
+        score = 92;
+      } else if (pNormNoBia.startsWith(cleanNoBia + ' ')) {
+        score = 88;
+      } else {
+        const qTokens = cleanNoBia.split(' ').filter(Boolean);
+        let matchCount = 0;
+        for (const t of qTokens) {
+          if (pNormNoBia.includes(t)) matchCount++;
+        }
+        if (matchCount === qTokens.length && qTokens.length >= 2) {
+          score = 80 + matchCount * 3;
+        }
+      }
+
+      if (isChai && prodIsChai) score += 15;
+      if (is330 && prodIs330) score += 15;
+      if (is250 && prodIs250) score += 15;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestProd = catProd;
+      }
+    }
+
+    if (bestScore >= 80 && bestProd) {
+      return {
+        productName: bestProd.productName,
+        note: noteParts.join(', '),
+        category: bestProd.category,
+        catalogUnitPrice: bestProd.unitPrice,
       };
     }
   }
@@ -2539,3 +2626,180 @@ Hình thức: Ghi nợ: Anh Hoàng (Công ty Xây dựng Minh Phát)
 Tổng cộng: 2.996.000đ`,
   },
 ];
+
+export function mergeInventoryData(
+  base?: WorkspaceInventoryData,
+  incoming?: WorkspaceInventoryData,
+  delEmpSet?: Set<string>
+): WorkspaceInventoryData {
+  if (!base && !incoming) {
+    return {
+      trackedCategories: ['Bia', 'Nước ngọt'],
+      itemConfigs: {},
+      dailyEntries: {},
+      importLogs: [],
+      updatedAtMs: Date.now(),
+    };
+  }
+  if (!base) return incoming!;
+  if (!incoming) return base;
+
+  // 1. Merge dailyEntries (Date -> productKey -> DailyInventoryEntry)
+  const allDates = new Set([
+    ...Object.keys(base.dailyEntries || {}),
+    ...Object.keys(incoming.dailyEntries || {}),
+  ]);
+  const mergedDailyEntries: Record<string, Record<string, DailyInventoryEntry>> = {};
+
+  for (const date of allDates) {
+    const bMap = base.dailyEntries?.[date] || {};
+    const incMap = incoming.dailyEntries?.[date] || {};
+    const allPKeys = new Set([...Object.keys(bMap), ...Object.keys(incMap)]);
+    const dateEntries: Record<string, DailyInventoryEntry> = {};
+
+    for (const pKey of allPKeys) {
+      const bEntry = bMap[pKey];
+      const incEntry = incMap[pKey];
+      if (!bEntry) {
+        dateEntries[pKey] = incEntry;
+      } else if (!incEntry) {
+        dateEntries[pKey] = bEntry;
+      } else {
+        const bTime = Number(bEntry.updatedAtMs) || 0;
+        const incTime = Number(incEntry.updatedAtMs) || 0;
+        const chosen = incTime >= bTime ? { ...bEntry, ...incEntry } : { ...incEntry, ...bEntry };
+        
+        // Preserve positive import quantity if one source has it and the other doesn't
+        if ((incEntry.importedQty || 0) > (bEntry.importedQty || 0) && incTime >= bTime) {
+          chosen.importedQty = incEntry.importedQty;
+        } else if ((bEntry.importedQty || 0) > (incEntry.importedQty || 0) && bTime >= incTime) {
+          chosen.importedQty = bEntry.importedQty;
+        } else {
+          chosen.importedQty = Math.max(incEntry.importedQty || 0, bEntry.importedQty || 0);
+        }
+
+        // Preserve positive opening stock if one source has it and other is 0 or unset
+        if (Number(bEntry.openingStock) > 0 && (Number(incEntry.openingStock) === 0 || incEntry.openingStock === undefined || incEntry.openingStock === null)) {
+          chosen.openingStock = bEntry.openingStock;
+        } else if (Number(incEntry.openingStock) > 0 && (Number(bEntry.openingStock) === 0 || bEntry.openingStock === undefined || bEntry.openingStock === null)) {
+          chosen.openingStock = incEntry.openingStock;
+        }
+
+        // Preserve actualClosingStock if recorded
+        if (bEntry.actualClosingStock !== null && bEntry.actualClosingStock !== undefined && (incEntry.actualClosingStock === null || incEntry.actualClosingStock === undefined)) {
+          chosen.actualClosingStock = bEntry.actualClosingStock;
+        } else if (incEntry.actualClosingStock !== null && incEntry.actualClosingStock !== undefined && (bEntry.actualClosingStock === null || bEntry.actualClosingStock === undefined)) {
+          chosen.actualClosingStock = incEntry.actualClosingStock;
+        }
+
+        dateEntries[pKey] = chosen;
+      }
+    }
+    mergedDailyEntries[date] = dateEntries;
+  }
+
+  // 2. Merge importLogs (by ID)
+  const logMap = new Map<string, InventoryImportLog>();
+  for (const log of base.importLogs || []) {
+    if (log && log.id) logMap.set(log.id, log);
+  }
+  for (const log of incoming.importLogs || []) {
+    if (log && log.id) {
+      const existing = logMap.get(log.id);
+      if (!existing || (log.createdAtMs || 0) >= (existing.createdAtMs || 0)) {
+        logMap.set(log.id, log);
+      }
+    }
+  }
+  const mergedImportLogs = Array.from(logMap.values()).sort(
+    (a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0)
+  );
+
+  // 3. Merge customCategoryGroups
+  const groupMap = new Map<string, CustomCategoryGroup>();
+  for (const g of base.customCategoryGroups || []) {
+    if (g && g.id) groupMap.set(g.id, g);
+  }
+  for (const g of incoming.customCategoryGroups || []) {
+    if (g && g.id) {
+      const existing = groupMap.get(g.id);
+      if (!existing || (g.createdAtMs || 0) >= (existing.createdAtMs || 0)) {
+        groupMap.set(g.id, g);
+      }
+    }
+  }
+
+  // 4. Merge categoryAliases
+  const mergedAliases: Record<string, string[]> = {
+    ...(base.categoryAliases || {}),
+  };
+  for (const [cat, aliases] of Object.entries(incoming.categoryAliases || {})) {
+    if (Array.isArray(aliases)) {
+      const prev = mergedAliases[cat] || [];
+      mergedAliases[cat] = Array.from(new Set([...prev, ...aliases]));
+    }
+  }
+
+  // 5. Merge telegramConfig
+  const bTg = base.telegramConfig || { enabled: false, botToken: '', authorizedChatIds: [] };
+  const incTg = incoming.telegramConfig || { enabled: false, botToken: '', authorizedChatIds: [] };
+  const mergedTg = {
+    enabled: incTg.enabled ?? bTg.enabled ?? true,
+    botToken: incTg.botToken || bTg.botToken || '',
+    botUsername: incTg.botUsername || bTg.botUsername || '',
+    authorizedChatIds: Array.from(
+      new Set([...(bTg.authorizedChatIds || []), ...(incTg.authorizedChatIds || [])])
+    ),
+    autoSendDailyReport: incTg.autoSendDailyReport ?? bTg.autoSendDailyReport ?? true,
+  };
+
+  // 6. Merge trackedCategories
+  const trackedCategories = Array.from(
+    new Set([
+      ...(Array.isArray(incoming.trackedCategories) && incoming.trackedCategories.length > 0
+        ? incoming.trackedCategories
+        : []),
+      ...(Array.isArray(base.trackedCategories) && base.trackedCategories.length > 0
+        ? base.trackedCategories
+        : []),
+      'Bia',
+      'Nước ngọt',
+    ])
+  );
+
+  // 7. Merge itemConfigs
+  const mergedConfigs = {
+    ...(base.itemConfigs || {}),
+    ...(incoming.itemConfigs || {}),
+  };
+
+  // 8. Employees filter by tombstone
+  const allEmps = [...(base.employees || []), ...(incoming.employees || [])];
+  const empMap = new Map<string, any>();
+  for (const e of allEmps) {
+    if (!e || !e.id) continue;
+    if (delEmpSet && (delEmpSet.has(e.id) || delEmpSet.has(sanitizeId(e.id)))) continue;
+    const existing = empMap.get(e.id);
+    if (!existing || (e.updatedAtMs || 0) >= (existing.updatedAtMs || 0)) {
+      empMap.set(e.id, e);
+    }
+  }
+
+  return {
+    ...base,
+    ...incoming,
+    trackedCategories,
+    itemConfigs: mergedConfigs,
+    dailyEntries: mergedDailyEntries,
+    importLogs: mergedImportLogs,
+    customCategoryGroups: Array.from(groupMap.values()),
+    categoryAliases: mergedAliases,
+    telegramConfig: mergedTg,
+    kiotvietSyncLocked:
+      incoming?.kiotvietSyncLocked !== undefined
+        ? incoming.kiotvietSyncLocked
+        : base?.kiotvietSyncLocked,
+    employees: Array.from(empMap.values()),
+    updatedAtMs: Math.max(base.updatedAtMs || 0, incoming.updatedAtMs || 0, Date.now()),
+  };
+}

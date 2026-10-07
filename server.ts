@@ -17,6 +17,7 @@ import {
   resolveBusinessBillDate,
   splitProductNameAndInlineNote,
 } from './src/utils/parser';
+import { executeChatCommand } from './src/utils/chatAssistantEngine';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -177,6 +178,167 @@ function mergeById<T extends { id: string; updatedAtMs?: number }>(
     }
   }
   return Array.from(map.values());
+}
+
+function mergeServerInventoryData(
+  serverInv: any,
+  clientInv: any
+): any {
+  if (!serverInv && !clientInv) {
+    return {
+      trackedCategories: ['Bia', 'Nước ngọt'],
+      itemConfigs: {},
+      dailyEntries: {},
+      importLogs: [],
+      updatedAtMs: Date.now(),
+    };
+  }
+  if (!serverInv) return clientInv;
+  if (!clientInv) return serverInv;
+
+  // 1. Merge dailyEntries (Date -> productKey -> DailyInventoryEntry)
+  const allDates = new Set([
+    ...Object.keys(serverInv.dailyEntries || {}),
+    ...Object.keys(clientInv.dailyEntries || {}),
+  ]);
+  const mergedDailyEntries: Record<string, Record<string, any>> = {};
+
+  for (const date of allDates) {
+    const sMap = serverInv.dailyEntries?.[date] || {};
+    const cMap = clientInv.dailyEntries?.[date] || {};
+    const allPKeys = new Set([...Object.keys(sMap), ...Object.keys(cMap)]);
+    const dateEntries: Record<string, any> = {};
+
+    for (const pKey of allPKeys) {
+      const sEntry = sMap[pKey];
+      const cEntry = cMap[pKey];
+      if (!sEntry) {
+        dateEntries[pKey] = cEntry;
+      } else if (!cEntry) {
+        dateEntries[pKey] = sEntry;
+      } else {
+        const sTime = Number(sEntry.updatedAtMs) || 0;
+        const cTime = Number(cEntry.updatedAtMs) || 0;
+        const baseChosen = cTime >= sTime ? { ...sEntry, ...cEntry } : { ...cEntry, ...sEntry };
+        if ((sEntry.importedQty || 0) > (cEntry.importedQty || 0) && sTime >= cTime) {
+          baseChosen.importedQty = sEntry.importedQty;
+        } else if ((cEntry.importedQty || 0) > (sEntry.importedQty || 0) && cTime >= sTime) {
+          baseChosen.importedQty = cEntry.importedQty;
+        } else {
+          baseChosen.importedQty = Math.max(sEntry.importedQty || 0, cEntry.importedQty || 0);
+        }
+
+        // Preserve positive opening stock if one source has it and other is 0 or unset
+        if (Number(sEntry.openingStock) > 0 && (Number(cEntry.openingStock) === 0 || cEntry.openingStock === undefined || cEntry.openingStock === null)) {
+          baseChosen.openingStock = sEntry.openingStock;
+        } else if (Number(cEntry.openingStock) > 0 && (Number(sEntry.openingStock) === 0 || sEntry.openingStock === undefined || sEntry.openingStock === null)) {
+          baseChosen.openingStock = cEntry.openingStock;
+        }
+
+        // Preserve actualClosingStock if recorded
+        if (sEntry.actualClosingStock !== null && sEntry.actualClosingStock !== undefined && (cEntry.actualClosingStock === null || cEntry.actualClosingStock === undefined)) {
+          baseChosen.actualClosingStock = sEntry.actualClosingStock;
+        } else if (cEntry.actualClosingStock !== null && cEntry.actualClosingStock !== undefined && (sEntry.actualClosingStock === null || sEntry.actualClosingStock === undefined)) {
+          baseChosen.actualClosingStock = cEntry.actualClosingStock;
+        }
+
+        dateEntries[pKey] = baseChosen;
+      }
+    }
+    mergedDailyEntries[date] = dateEntries;
+  }
+
+  // 2. Merge importLogs
+  const logMap = new Map<string, any>();
+  for (const log of serverInv.importLogs || []) {
+    if (log && log.id) logMap.set(log.id, log);
+  }
+  for (const log of clientInv.importLogs || []) {
+    if (log && log.id) {
+      const existing = logMap.get(log.id);
+      if (!existing || (log.createdAtMs || 0) >= (existing.createdAtMs || 0)) {
+        logMap.set(log.id, log);
+      }
+    }
+  }
+  const mergedImportLogs = Array.from(logMap.values()).sort(
+    (a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0)
+  );
+
+  // 3. Merge customCategoryGroups
+  const groupMap = new Map<string, any>();
+  for (const g of serverInv.customCategoryGroups || []) {
+    if (g && g.id) groupMap.set(g.id, g);
+  }
+  for (const g of clientInv.customCategoryGroups || []) {
+    if (g && g.id) {
+      const existing = groupMap.get(g.id);
+      if (!existing || (g.createdAtMs || 0) >= (existing.createdAtMs || 0)) {
+        groupMap.set(g.id, g);
+      }
+    }
+  }
+
+  // 4. Merge categoryAliases
+  const mergedAliases: Record<string, string[]> = {
+    ...(serverInv.categoryAliases || {}),
+  };
+  for (const [cat, aliases] of Object.entries(clientInv.categoryAliases || {})) {
+    if (Array.isArray(aliases)) {
+      const prev = mergedAliases[cat] || [];
+      mergedAliases[cat] = Array.from(new Set([...prev, ...aliases]));
+    }
+  }
+
+  // 5. Merge telegramConfig
+  const sTg = serverInv.telegramConfig || {};
+  const cTg = clientInv.telegramConfig || {};
+  const mergedTgConfig = {
+    enabled: sTg.enabled ?? cTg.enabled ?? true,
+    botToken: sTg.botToken || cTg.botToken || '',
+    botUsername: sTg.botUsername || cTg.botUsername || '',
+    authorizedChatIds: Array.from(
+      new Set([...(sTg.authorizedChatIds || []), ...(cTg.authorizedChatIds || [])])
+    ),
+    autoSendDailyReport: sTg.autoSendDailyReport ?? cTg.autoSendDailyReport ?? true,
+  };
+
+  // 6. Merge trackedCategories
+  const trackedCategories = Array.from(
+    new Set([
+      ...(Array.isArray(clientInv.trackedCategories) && clientInv.trackedCategories.length > 0
+        ? clientInv.trackedCategories
+        : []),
+      ...(Array.isArray(serverInv.trackedCategories) && serverInv.trackedCategories.length > 0
+        ? serverInv.trackedCategories
+        : []),
+      'Bia',
+      'Nước ngọt',
+    ])
+  );
+
+  // 7. Merge itemConfigs
+  const mergedConfigs = {
+    ...(serverInv.itemConfigs || {}),
+    ...(clientInv.itemConfigs || {}),
+  };
+
+  return {
+    ...serverInv,
+    ...clientInv,
+    trackedCategories,
+    itemConfigs: mergedConfigs,
+    dailyEntries: mergedDailyEntries,
+    importLogs: mergedImportLogs,
+    customCategoryGroups: Array.from(groupMap.values()),
+    categoryAliases: mergedAliases,
+    telegramConfig: mergedTgConfig,
+    kiotvietSyncLocked:
+      clientInv?.kiotvietSyncLocked !== undefined
+        ? clientInv.kiotvietSyncLocked
+        : serverInv?.kiotvietSyncLocked,
+    updatedAtMs: Math.max(serverInv.updatedAtMs || 0, clientInv.updatedAtMs || 0, Date.now()),
+  };
 }
 
 // Runtime Gemini API key configured by user in UI (falls back to cloudWorkspace or process.env.GEMINI_API_KEY)
@@ -500,7 +662,11 @@ Nhiệm vụ của bạn là tiếp nhận dữ liệu đầu vào (HÌNH ẢNH 
        giá 459000
        -> Đây là 1 món duy nhất: productName: "Combo 2", note: "Cơm chiên hải sản, Càng cua trộn bò, Chip hấp thái, Cá giò kho tiêu, 1 dĩa trái cây", quantity: 1, unitPrice: 459000, subtotal: 459000. Tuyệt đối KHÔNG tách các dòng >>> ... <<< thành các món riêng.
 
-3. PHÂN LOẠI DANH MỤC (category):
+3. PHÂN LOẠI DANH MỤC & BẢO TOÀN QUY CÁCH (CHAI vs LON 330ml):
+   - TUYỆT ĐỐI KHÔNG NHẦM LẪN QUY CÁCH:
+     + Nếu hóa đơn ghi "chai" (ví dụ: "Tiger bạc chai", "Heineken bạc chai") -> productName PHẢI GIỮ NGUYÊN là "Tiger bạc chai", TUYỆT ĐỐI KHÔNG ĐƯỢC tự ý đổi thành "Tiger bạc lon 330ml" hay sản phẩm khác!
+     + Nếu hóa đơn ghi "lon" hoặc "330ml" (ví dụ: "Tiger bạc 330ml", "Tiger bạc lon 330ml") -> productName là "Tiger bạc lon 330ml".
+     + Nếu hóa đơn ghi "lon nhỏ" hoặc "250ml" (ví dụ: "Tiger bạc lon nhỏ 250ml") -> productName là "Tiger bạc lon nhỏ 250ml".
    - Tự động xếp vào một trong các danh mục hiện có: [${catList}].
 
 4. HÌNH THỨC THANH TOÁN (paymentType) & NGƯỜI NỢ (debtorName):
@@ -739,7 +905,7 @@ app.post('/api/workspace', (req, res) => {
             rolePermissions:
               snapshot.rolePermissions || cloudWorkspace.rolePermissions,
             inventoryData:
-              snapshot.inventoryData || cloudWorkspace.inventoryData,
+              mergeServerInventoryData(cloudWorkspace.inventoryData, snapshot.inventoryData),
             products: dedupeListById(snapshot.products),
             bills: dedupeListById(snapshot.bills),
             billItems: dedupeListById(snapshot.billItems),
@@ -823,7 +989,7 @@ app.post('/api/workspace', (req, res) => {
             rolePermissions:
               cloudWorkspace.rolePermissions || snapshot.rolePermissions,
             inventoryData:
-              cloudWorkspace.inventoryData || snapshot.inventoryData,
+              mergeServerInventoryData(cloudWorkspace.inventoryData, snapshot.inventoryData),
             products: mergedProducts,
             bills: mergedBills,
             billItems: mergedBillItems,
@@ -852,7 +1018,7 @@ app.post('/api/workspace', (req, res) => {
         rolePermissions:
           snapshot.rolePermissions || cloudWorkspace.rolePermissions,
         inventoryData:
-          snapshot.inventoryData || cloudWorkspace.inventoryData,
+          mergeServerInventoryData(cloudWorkspace.inventoryData, snapshot.inventoryData),
         products: Array.isArray(snapshot.products)
           ? dedupeListById(snapshot.products)
           : cloudWorkspace.products,
@@ -894,6 +1060,14 @@ app.post('/api/workspace', (req, res) => {
 app.post('/api/sync-kiotviet-bill', (req, res) => {
   try {
     const payload = req.body || {};
+    if (cloudWorkspace.inventoryData?.kiotvietSyncLocked) {
+      res.status(403).json({
+        ok: false,
+        error: 'Chức năng đồng bộ KiotViet POS hiện đang bị KHÓA trong Cài đặt của VQBill để giảm tải hệ thống.',
+        locked: true,
+      });
+      return;
+    }
     console.log('[KiotViet POS Sync API] Nhận yêu cầu đồng bộ:', {
       tableName: payload.tableName || payload.table,
       totalAmount: payload.totalAmount || payload.Total,
@@ -1150,6 +1324,397 @@ app.post('/api/sync-kiotviet-bill', (req, res) => {
       ok: false,
       error: err?.message || 'Lỗi khi đồng bộ bill KiotViet.',
     });
+  }
+});
+
+// 0C. Telegram Bot Message Processing, Polling Engine & Webhook
+let lastTelegramUpdateId = 0;
+let isPollerRunning = false;
+
+async function handleIncomingTelegramMessage(message: any, botToken: string, tgConfig: any) {
+  if (!message || !message.text) return;
+
+  const chatId = String(message.chat?.id || '');
+  const userText = String(message.text || '').trim();
+  const senderName = message.from?.username
+    ? `@${message.from.username}`
+    : `${message.from?.first_name || ''} ${message.from?.last_name || ''}`.trim() || 'Telegram User';
+
+  console.log(`[Telegram Recv] from ${senderName} (ChatID: ${chatId}): "${userText}"`);
+
+  // Phản hồi lệnh /start, /id, /help
+  if (userText === '/start' || userText === '/id' || userText === '/help') {
+    const reply =
+      `👋 Xin chào ${senderName}!\n\n` +
+      `🆔 Chat ID của bạn là: <code>${chatId}</code>\n\n` +
+      `📌 HƯỚNG DẪN CÁC LỆNH BẠN CÓ THỂ GÕ:\n` +
+      `• <code>kiểm tồn kho A</code> (hoặc B, kho lạnh... chỉ hiện món tồn > 0)\n` +
+      `• <code>kiểm kho bia</code> (theo danh mục cụ thể)\n` +
+      `• <code>kiểm số lượng bán 24/9/2026</code> (chỉ hiện món bán > 0)\n` +
+      `• <code>kiểm số lượng bán 2 ngày trước</code> hoặc <code>hôm qua</code>\n` +
+      `• <code>nhập 240 tiger lùn, huda 90, larue 60</code>\n\n` +
+      `⚠️ Hãy đảm bảo bạn đã lưu Chat ID <code>${chatId}</code> vào mục Cài Đặt Telegram trên Website VQBill!`;
+
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: reply,
+        parse_mode: 'HTML',
+      }),
+    }).catch((err) => console.error('[Telegram Send Error]:', err));
+    return;
+  }
+
+  // Kiểm tra quyền (Whitelist Chat ID) nếu có cấu hình
+  if (Array.isArray(tgConfig.authorizedChatIds) && tgConfig.authorizedChatIds.length > 0) {
+    const isAuthorized = tgConfig.authorizedChatIds.some((id: string) => String(id).trim() === chatId);
+    if (!isAuthorized) {
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `⛔ Tài khoản Telegram của bạn chưa được cấp quyền điều hành VQBill.\nChat ID của bạn là: ${chatId}.\nHãy thêm Chat ID này vào mục Cài Đặt Telegram trên Website VQBill để kích hoạt.`,
+        }),
+      }).catch(() => {});
+      return;
+    }
+  }
+
+  const todayStr = getCurrentBusinessDate();
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterdayStr = yesterdayDate.toISOString().slice(0, 10);
+
+  const invData = cloudWorkspace.inventoryData || {};
+  const context = {
+    selectedDate: todayStr,
+    todayStr,
+    yesterdayStr,
+    products: cloudWorkspace.products || [],
+    categories: cloudWorkspace.categories || ['Bia', 'Nước ngọt', 'Khai vị', 'Hải sản', 'Món chính', 'Gà', 'Khác'],
+    bills: cloudWorkspace.bills || [],
+    billItems: cloudWorkspace.billItems || [],
+    returns: cloudWorkspace.returns || [],
+    inventoryData: invData,
+    categoryAliases: invData.categoryAliases,
+    customCategoryGroups: invData.customCategoryGroups,
+    currentUsername: senderName,
+    source: 'telegram' as const,
+  };
+
+  const result = await executeChatCommand(userText, context);
+
+  // Nếu là lệnh nhập kho: cập nhật tồn kho trên server workspace
+  if (result.commandType === 'import_execute' && result.importData) {
+    const { date, updatedItems, newLogs } = result.importData;
+    const curDaily = { ...(invData.dailyEntries?.[date] || {}) };
+    for (const item of updatedItems) {
+      const pKey = item.productName.trim().toLowerCase();
+      let prevEntry = curDaily[pKey];
+      if (!prevEntry) {
+        let inheritedOpen = 0;
+        const allPriorDates = Object.keys(invData.dailyEntries || {})
+          .filter((d) => d < date)
+          .sort()
+          .reverse();
+        for (const priorDate of allPriorDates) {
+          const pe = invData.dailyEntries?.[priorDate]?.[pKey];
+          if (pe && (
+            (pe.openingStock !== undefined && pe.openingStock !== null) ||
+            (pe.importedQty !== undefined && pe.importedQty !== null && Number(pe.importedQty) > 0) ||
+            (pe.actualClosingStock !== undefined && pe.actualClosingStock !== null)
+          )) {
+            if (pe.actualClosingStock !== null && pe.actualClosingStock !== undefined) {
+              inheritedOpen = Math.max(0, Number(pe.actualClosingStock));
+            } else {
+              const peOpen = Math.max(0, Number(pe.openingStock) || 0);
+              const peImp = Math.max(0, Number(pe.importedQty) || 0);
+              const peDmg = Math.max(0, Number(pe.damagedQty) || 0);
+              let priorNetSold = 0;
+              for (const bi of cloudWorkspace.billItems || []) {
+                if (bi.billDate === priorDate && bi.productName.trim().toLowerCase() === pKey) {
+                  priorNetSold += Number(bi.quantity) || 0;
+                }
+              }
+              for (const ret of cloudWorkspace.returns || []) {
+                if (ret.returnDate === priorDate && ret.productName.trim().toLowerCase() === pKey) {
+                  priorNetSold -= Number(ret.quantity) || 0;
+                }
+              }
+              inheritedOpen = Math.max(0, peOpen + peImp - Math.max(0, priorNetSold) - peDmg);
+            }
+            break;
+          }
+        }
+        prevEntry = {
+          openingStock: inheritedOpen,
+          importedQty: 0,
+          damagedQty: 0,
+          actualClosingStock: null,
+          updatedAtMs: Date.now(),
+        };
+      }
+      curDaily[pKey] = {
+        ...prevEntry,
+        importedQty: (prevEntry.importedQty || 0) + item.quantity,
+        updatedAtMs: Date.now(),
+        updatedBy: senderName,
+      };
+    }
+    cloudWorkspace.inventoryData = {
+      ...invData,
+      dailyEntries: {
+        ...(invData.dailyEntries || {}),
+        [date]: curDaily,
+      },
+      importLogs: [...newLogs, ...(invData.importLogs || [])],
+      updatedAtMs: Date.now(),
+    };
+    cloudWorkspace.version = (cloudWorkspace.version || 0) + 1;
+    saveCloudWorkspaceToDisk(cloudWorkspace);
+  }
+
+  // Gửi tin nhắn phản hồi về Telegram
+  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: result.replyText,
+    }),
+  }).catch((err) => console.error('[Telegram Send Error]:', err));
+}
+
+// Background Polling Engine: Tự động kéo tin nhắn mới từ Telegram theo thời gian thực
+function startTelegramPoller() {
+  if (isPollerRunning) return;
+  isPollerRunning = true;
+  console.log('[Telegram Poller] Starting background real-time listener...');
+
+  (async () => {
+    while (true) {
+      try {
+        const invData = cloudWorkspace.inventoryData || {};
+        const tgConfig = invData.telegramConfig || {};
+        const botToken = tgConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+
+        if (tgConfig.enabled && botToken) {
+          const url = `https://api.telegram.org/bot${botToken}/getUpdates?offset=${lastTelegramUpdateId + 1}&timeout=5`;
+          const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+          const data = await res.json();
+
+          if (data.ok && Array.isArray(data.result)) {
+            for (const update of data.result) {
+              lastTelegramUpdateId = Math.max(lastTelegramUpdateId, update.update_id);
+              const message = update.message || update.edited_message;
+              if (message) {
+                await handleIncomingTelegramMessage(message, botToken, tgConfig);
+              }
+            }
+          } else if (data.description && data.description.includes('webhook is active')) {
+            console.log('[Telegram Poller] Webhook was active, deleting webhook to enable polling...');
+            await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`).catch(() => {});
+          }
+        }
+      } catch (err: any) {
+        // Bỏ qua lỗi tạm thời hoặc timeout
+      }
+
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  })();
+}
+
+// API POST Telegram Bot Webhook
+app.post('/api/telegram-webhook', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const message = body.message || body.edited_message;
+    if (!message || !message.text) {
+      res.json({ ok: true });
+      return;
+    }
+
+    const invData = cloudWorkspace.inventoryData || {};
+    const tgConfig = invData.telegramConfig || {};
+    const botToken = tgConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+
+    if (botToken) {
+      await handleIncomingTelegramMessage(message, botToken, tgConfig);
+    }
+
+    res.json({ ok: true });
+  } catch (err: any) {
+    console.error('[Telegram Webhook Error]:', err);
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
+// API POST Cấu hình Telegram Bot từ Website
+app.post('/api/telegram-config', async (req, res) => {
+  try {
+    const { botToken = '', authorizedChatIds = [], enabled = true, customCategoryGroups } = req.body || {};
+    const cleanToken = String(botToken).trim();
+
+    if (!cleanToken) {
+      res.status(400).json({ ok: false, error: 'Bot Token không được để trống.' });
+      return;
+    }
+
+    // Kiểm tra tính hợp lệ của Token qua Telegram getMe
+    const meRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
+    const meData = await meRes.json();
+
+    if (!meData.ok) {
+      res.status(400).json({
+        ok: false,
+        error: `Bot Token không hợp lệ: ${meData.description || 'Vui lòng kiểm tra lại token từ @BotFather.'}`,
+      });
+      return;
+    }
+
+    const botUsername = meData.result?.username;
+    const botName = meData.result?.first_name;
+
+    // Xóa webhook cũ nếu có để Polling hoạt động trơn tru 100%
+    await fetch(`https://api.telegram.org/bot${cleanToken}/deleteWebhook`).catch(() => {});
+
+    // Cập nhật cấu hình vào server cloudWorkspace
+    const invData = cloudWorkspace.inventoryData || {};
+    cloudWorkspace.inventoryData = {
+      ...invData,
+      telegramConfig: {
+        enabled: Boolean(enabled),
+        botToken: cleanToken,
+        botUsername,
+        authorizedChatIds: Array.isArray(authorizedChatIds) ? authorizedChatIds : [],
+        autoSendDailyReport: false,
+      },
+      customCategoryGroups: customCategoryGroups || invData.customCategoryGroups,
+      updatedAtMs: Date.now(),
+    };
+    cloudWorkspace.version = (cloudWorkspace.version || 0) + 1;
+    saveCloudWorkspaceToDisk(cloudWorkspace);
+
+    // Kích hoạt Poller ngay lập tức
+    lastTelegramUpdateId = 0;
+    startTelegramPoller();
+
+    console.log(`[Telegram Config] Successfully configured Bot @${botUsername} (${botName}) with ${authorizedChatIds.length} authorized chat IDs.`);
+
+    res.json({
+      ok: true,
+      botUsername,
+      botName,
+      message: `Đã kết nối thành công Bot @${botUsername}! Hệ thống đang lắng nghe tin nhắn tự động 24/7.`,
+    });
+  } catch (err: any) {
+    console.error('[Telegram Config Error]:', err);
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
+// API GET Kiểm tra trạng thái Telegram Bot
+app.get('/api/telegram-status', async (_req, res) => {
+  try {
+    const invData = cloudWorkspace.inventoryData || {};
+    const tgConfig = invData.telegramConfig || {};
+    const botToken = tgConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+
+    if (!botToken) {
+      res.json({
+        ok: true,
+        configured: false,
+        enabled: false,
+        message: 'Chưa cấu hình Telegram Bot Token.',
+      });
+      return;
+    }
+
+    const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+    const meData = await meRes.json();
+
+    res.json({
+      ok: true,
+      configured: true,
+      enabled: Boolean(tgConfig.enabled),
+      valid: Boolean(meData.ok),
+      botUsername: meData.result?.username || tgConfig.botUsername,
+      botName: meData.result?.first_name,
+      authorizedChatIds: tgConfig.authorizedChatIds || [],
+      isPollerRunning,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
+// 0D. POST Chat Command API (Chạy lệnh từ Web Chat hoặc bên ngoài)
+app.post('/api/chat-command', async (req, res) => {
+  try {
+    const { query = '', username = 'Web User' } = req.body || {};
+    const todayStr = getCurrentBusinessDate();
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = yesterdayDate.toISOString().slice(0, 10);
+
+    const invData = cloudWorkspace.inventoryData || {};
+    const context = {
+      selectedDate: todayStr,
+      todayStr,
+      yesterdayStr,
+      products: cloudWorkspace.products || [],
+      categories: cloudWorkspace.categories || ['Bia', 'Nước ngọt', 'Khai vị', 'Hải sản', 'Món chính', 'Gà', 'Khác'],
+      bills: cloudWorkspace.bills || [],
+      billItems: cloudWorkspace.billItems || [],
+      returns: cloudWorkspace.returns || [],
+      inventoryData: invData,
+      categoryAliases: invData.categoryAliases,
+      customCategoryGroups: invData.customCategoryGroups,
+      currentUsername: username,
+      source: 'web_chat' as const,
+    };
+
+    const result = await executeChatCommand(query, context);
+
+    if (result.commandType === 'import_execute' && result.importData) {
+      const { date, updatedItems, newLogs } = result.importData;
+      const curDaily = { ...(invData.dailyEntries?.[date] || {}) };
+      for (const item of updatedItems) {
+        const pKey = item.productName.trim().toLowerCase();
+        const prevEntry = curDaily[pKey] || {
+          openingStock: 0,
+          importedQty: 0,
+          damagedQty: 0,
+          actualClosingStock: null,
+          updatedAtMs: Date.now(),
+        };
+        curDaily[pKey] = {
+          ...prevEntry,
+          importedQty: (prevEntry.importedQty || 0) + item.quantity,
+          updatedAtMs: Date.now(),
+          updatedBy: username,
+        };
+      }
+      cloudWorkspace.inventoryData = {
+        ...invData,
+        dailyEntries: {
+          ...(invData.dailyEntries || {}),
+          [date]: curDaily,
+        },
+        importLogs: [...newLogs, ...(invData.importLogs || [])],
+        updatedAtMs: Date.now(),
+      };
+      cloudWorkspace.version = (cloudWorkspace.version || 0) + 1;
+      saveCloudWorkspaceToDisk(cloudWorkspace);
+    }
+
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message });
   }
 });
 
@@ -1593,6 +2158,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`VQBill server listening on http://0.0.0.0:${PORT}`);
+    startTelegramPoller();
   });
 }
 
