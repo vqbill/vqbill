@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Plus, Trash2, Save, MessageSquareText } from 'lucide-react';
+import { X, Plus, Trash2, Save, MessageSquareText, Calendar, CheckCircle2 } from 'lucide-react';
 import {
   BillRecord,
   BillItemRecord,
@@ -47,6 +47,9 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   const [paymentType, setPaymentType] = useState<PaymentType>(bill.paymentType);
   const [debtorName, setDebtorName] = useState(bill.debtorName);
   const [debtStatus, setDebtStatus] = useState<'none' | 'unpaid' | 'paid'>(bill.debtStatus);
+  const [settleDate, setSettleDate] = useState<string>(() => {
+    return bill.settleDate || (bill.debtStatus === 'paid' ? bill.billDate : '');
+  });
   const [note, setNote] = useState(bill.note);
   const [initialItems] = useState<BillItemRecord[]>(() => {
     const source =
@@ -73,6 +76,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     if (paymentType !== bill.paymentType) return true;
     if ((debtorName || '').trim() !== (bill.debtorName || '').trim()) return true;
     if (debtStatus !== bill.debtStatus) return true;
+    if ((settleDate || '').trim() !== (bill.settleDate || '').trim()) return true;
     if ((note || '').trim() !== (bill.note || '').trim()) return true;
 
     if (editItems.length !== initialItems.length) return true;
@@ -98,6 +102,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     paymentType,
     debtorName,
     debtStatus,
+    settleDate,
     note,
     editItems,
     initialItems,
@@ -292,6 +297,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             totalAmount: computedTotal,
             itemsSummary: summaryStr,
             note: note.trim(),
+            settleDate:
+              debtStatus === 'paid' || bill.debtStatus === 'paid'
+                ? (settleDate.trim() || bill.settleDate || bill.billDate)
+                : bill.settleDate,
             updatedAtMs: now,
           };
 
@@ -472,6 +481,69 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                 ))}
               </datalist>
             </div>
+
+            {(paymentType === 'debt' || bill.paymentType === 'debt' || debtStatus === 'paid' || bill.debtStatus === 'paid') && (
+              <div className="p-3 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-amber-900 dark:text-amber-200">
+                    Trạng thái công nợ của hóa đơn
+                  </label>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-amber-700 dark:text-amber-300">
+                    {debtStatus === 'paid' ? 'Đã tất toán' : 'Đang ghi nợ'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDebtStatus('unpaid');
+                    }}
+                    className={`h-9 px-2.5 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                      debtStatus !== 'paid'
+                        ? 'border-amber-500 bg-amber-500 text-white shadow-xs'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <span>Đang nợ (Chưa trả)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDebtStatus('paid');
+                      if (!settleDate) {
+                        setSettleDate(bill.settleDate || bill.billDate);
+                      }
+                    }}
+                    className={`h-9 px-2.5 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                      debtStatus === 'paid'
+                        ? 'border-emerald-600 bg-emerald-600 text-white shadow-xs'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Đã tất toán</span>
+                  </button>
+                </div>
+
+                {(debtStatus === 'paid' || bill.debtStatus === 'paid') && (
+                  <div className="pt-2 border-t border-amber-200/80 dark:border-amber-900/40">
+                    <label className="block text-xs font-bold text-emerald-800 dark:text-emerald-300 mb-1 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Ngày tất toán công nợ (Tùy chỉnh ngày thu tiền nợ)</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={settleDate || bill.settleDate || bill.billDate}
+                      onChange={(e) => setSettleDate(e.target.value)}
+                      className="w-full h-10 px-3 text-xs font-mono font-semibold rounded-xl border border-emerald-400 dark:border-emerald-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                      Doanh thu thu hồi nợ của bill này sẽ được tính vào báo cáo ngày tất toán đã chọn ở trên.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">

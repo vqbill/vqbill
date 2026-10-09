@@ -21,6 +21,7 @@ import {
   Square,
   Layers,
   Sparkles,
+  RefreshCw,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -32,6 +33,7 @@ import {
   DailyInventoryEntry,
   InventoryImportLog,
   ConfirmRequestOptions,
+  KitchenSupplyItem,
 } from '../types';
 import {
   formatVND,
@@ -39,7 +41,13 @@ import {
   formatDateDMY,
   shiftDateByDays,
   inferUnit,
+  sanitizeId,
 } from '../utils/parser';
+import {
+  computeLiveBeverageStockMap,
+  syncBeveragesToKitchenSupplyItems,
+  isBeverageCategory,
+} from '../utils/beverageInventorySync';
 
 interface BeverageInventoryTabProps {
   bills: BillRecord[];
@@ -167,6 +175,16 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
   const [cfgPackSize, setCfgPackSize] = useState<string>('24');
   const [cfgMinStock, setCfgMinStock] = useState<string>('24');
   const [cfgCostPrice, setCfgCostPrice] = useState<string>('0');
+  const [cfgPackCostPrice, setCfgPackCostPrice] = useState<string>('0');
+
+  const handleOpenConfigModal = (r: ComputedInventoryRow) => {
+    setEditingConfigRow(r);
+    setCfgPackSize(String(r.packSize));
+    setCfgMinStock(String(r.minStockThreshold));
+    setCfgCostPrice(String(r.costPrice || 0));
+    const mult = r.packSize > 1 ? r.packSize : 1;
+    setCfgPackCostPrice(String((r.costPrice || 0) * mult));
+  };
 
   // Zalo Report Modal state
   const [showZaloReportModal, setShowZaloReportModal] = useState<boolean>(false);
@@ -868,6 +886,51 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
     });
   };
 
+  // Sync Bia & Nước ngọt to Kitchen Supply Items (Req 3)
+  const handleSyncToKitchenInventory = async () => {
+    if (!canWrite) return;
+    const liveStockMap = computeLiveBeverageStockMap({
+      inventoryData,
+      products,
+      bills,
+      billItems,
+      returns,
+      referenceDate: selectedDate,
+    });
+
+    const syncRes = syncBeveragesToKitchenSupplyItems(
+      inventoryData.kitchenSupplyItems || [],
+      liveStockMap,
+      products,
+      inventoryData.kitchenCategories || []
+    );
+
+    const currentCats = [...(inventoryData.kitchenCategories || [
+      'Hàng tươi sống',
+      'Hải sản',
+      'Rau',
+      'Gia vị',
+      'Bia',
+      'Nước ngọt',
+      'Tạp vụ & Vệ sinh',
+      'Nhiên liệu & Gas',
+      'Bao bì & Dụng cụ',
+      'Khác',
+    ])];
+    if (!currentCats.some((c) => c.toLowerCase() === 'bia')) currentCats.push('Bia');
+    if (!currentCats.some((c) => c.toLowerCase() === 'nước ngọt')) currentCats.push('Nước ngọt');
+
+    await onSaveInventoryData(
+      {
+        ...inventoryData,
+        kitchenSupplyItems: syncRes.updatedSupplyItems,
+        kitchenCategories: currentCats,
+        updatedAtMs: Date.now(),
+      },
+      `Đã đồng bộ thành công số lượng tồn kho ${syncRes.syncedDetails.length} mặt hàng Bia & Nước ngọt sang cột "Tồn hiện tại" trong Hàng Hóa Tồn Kho (+${syncRes.newCount} mới, cập nhật ${syncRes.updatedCount})!`
+    );
+  };
+
   // Open Quick Import Modal
   const handleOpenImportModal = (preselectRow?: ComputedInventoryRow) => {
     const firstRow = preselectRow || allInventoryRows[0];
@@ -1326,6 +1389,17 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
               >
                 Chọn tất cả ({allCategories.length})
               </button>
+              {canWrite && (
+                <button
+                  type="button"
+                  onClick={handleSyncToKitchenInventory}
+                  className="px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-[11px] font-semibold text-amber-900 dark:text-amber-200 inline-flex items-center gap-1 cursor-pointer shadow-2xs transition-colors"
+                  title="Đồng bộ toàn bộ số lượng tồn kho & giá nhập của 2 cột Bia và Nước ngọt sang Hàng Hóa Tồn Kho"
+                >
+                  <RefreshCw className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                  <span>Đồng Bộ Sang Hàng Hóa Tồn Kho</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1739,6 +1813,12 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
                           <th className="py-2.5 px-2.5 font-semibold text-right min-w-[130px]">
                             8. Kiểm thực tế
                           </th>
+                          <th className="py-2.5 px-2.5 font-semibold text-right min-w-[125px]">
+                            Giá nhập (thùng)
+                          </th>
+                          <th className="py-2.5 px-3 font-semibold text-right min-w-[130px]">
+                            Giá tồn kho
+                          </th>
                           <th className="py-2.5 px-3 font-semibold text-right min-w-[130px]">
                             9. Đối soát / Cảnh báo
                           </th>
@@ -1754,12 +1834,7 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
                             onUpdateField={handleUpdateDailyField}
                             onQuickAddPack={handleQuickAddPack}
                             onOpenImportModal={handleOpenImportModal}
-                            onOpenConfigModal={(r) => {
-                              setEditingConfigRow(r);
-                              setCfgPackSize(String(r.packSize));
-                              setCfgMinStock(String(r.minStockThreshold));
-                              setCfgCostPrice(String(r.costPrice || 0));
-                            }}
+                            onOpenConfigModal={handleOpenConfigModal}
                           />
                         ))}
                       </tbody>
@@ -1803,6 +1878,12 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
                   <th className="py-2.5 px-2.5 font-semibold text-right min-w-[130px]">
                     8. Kiểm thực tế
                   </th>
+                  <th className="py-2.5 px-2.5 font-semibold text-right min-w-[125px]">
+                    Giá nhập (thùng)
+                  </th>
+                  <th className="py-2.5 px-3 font-semibold text-right min-w-[130px]">
+                    Giá tồn kho
+                  </th>
                   <th className="py-2.5 px-3 font-semibold text-right min-w-[130px]">
                     9. Đối soát / Cảnh báo
                   </th>
@@ -1818,12 +1899,7 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
                     onUpdateField={handleUpdateDailyField}
                     onQuickAddPack={handleQuickAddPack}
                     onOpenImportModal={handleOpenImportModal}
-                    onOpenConfigModal={(r) => {
-                      setEditingConfigRow(r);
-                      setCfgPackSize(String(r.packSize));
-                      setCfgMinStock(String(r.minStockThreshold));
-                      setCfgCostPrice(String(r.costPrice || 0));
-                    }}
+                    onOpenConfigModal={handleOpenConfigModal}
                   />
                 ))}
               </tbody>
@@ -2389,19 +2465,52 @@ export const BeverageInventoryTab: React.FC<BeverageInventoryTabProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Giá vốn nhập ước tính / 1 {editingConfigRow.unit} (VNĐ):
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  value={cfgCostPrice}
-                  onChange={(e) => setCfgCostPrice(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
-                <div className="text-[11px] text-slate-500 mt-1">
-                  Giá bán hiện tại trên Menu: {formatVND(editingConfigRow.unitPrice)} / {editingConfigRow.unit}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Giá nhập 1 thùng (VNĐ):
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1000}
+                    value={cfgPackCostPrice}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCfgPackCostPrice(val);
+                      const pSize = Math.max(1, Number(cfgPackSize) || 24);
+                      const unitCost = Math.round((Number(val) || 0) / pSize);
+                      setCfgCostPrice(String(unitCost));
+                    }}
+                    placeholder="VD: 430000"
+                    className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50/30 dark:bg-emerald-950/20 font-mono font-bold text-emerald-800 dark:text-emerald-200"
+                  />
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    Giá quy đổi theo {cfgPackSize} {editingConfigRow.unit}/thùng
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Giá vốn / 1 {editingConfigRow.unit} (VNĐ):
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={500}
+                    value={cfgCostPrice}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCfgCostPrice(val);
+                      const pSize = Math.max(1, Number(cfgPackSize) || 24);
+                      const packCost = Math.round((Number(val) || 0) * pSize);
+                      setCfgPackCostPrice(String(packCost));
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                  />
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    Giá bán Menu: {formatVND(editingConfigRow.unitPrice)} / {editingConfigRow.unit}
+                  </div>
                 </div>
               </div>
 
@@ -2723,6 +2832,48 @@ const InventoryTableRow: React.FC<InventoryTableRowProps> = ({
               =
             </button>
           )}
+        </div>
+      </td>
+
+      {/* Col 8b: Giá nhập (thùng) */}
+      <td className="py-2.5 px-2.5 text-right font-mono tabular-nums">
+        <div className="flex items-center justify-end gap-1">
+          <div>
+            <div className="font-bold text-slate-800 dark:text-slate-200 text-xs">
+              {formatVND(row.costPrice * (row.packSize > 1 ? row.packSize : 1))}
+            </div>
+            <div className="text-[10px] text-slate-400">
+              {row.packSize > 1 ? `(${formatVND(row.costPrice)}/${row.unit})` : `/thùng`}
+            </div>
+          </div>
+          {canWrite && (
+            <button
+              type="button"
+              onClick={() => onOpenConfigModal(row)}
+              className="p-1 rounded-md text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer transition-colors"
+              title="Chỉnh sửa giá nhập thùng / lon"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </td>
+
+      {/* Col 8c: Giá tồn kho */}
+      <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+        <div
+          className={`font-extrabold text-xs ${
+            row.stockCostValue > 0
+              ? 'text-emerald-700 dark:text-emerald-300'
+              : 'text-slate-400'
+          }`}
+        >
+          {formatVND(row.stockCostValue)}
+        </div>
+        <div className="text-[10px] text-slate-400">
+          {(row.actualClosingStock !== null ? row.actualClosingStock : row.expectedClosingStock) > 0
+            ? `Tồn: ${formatNumber(row.actualClosingStock !== null ? row.actualClosingStock : row.expectedClosingStock)} ${row.unit}`
+            : '0'}
         </div>
       </td>
 

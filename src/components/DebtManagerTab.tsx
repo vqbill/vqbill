@@ -2,7 +2,10 @@ import React, { useState, useRef, useMemo } from 'react';
 import {
   ArrowDownCircle,
   CheckCircle2,
+  Calendar,
   Edit3,
+  Eye,
+  EyeOff,
   RotateCcw,
   Search,
   UserCheck,
@@ -13,6 +16,7 @@ import {
   Wallet,
   History,
   PlusCircle,
+  X,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -42,7 +46,11 @@ interface DebtManagerTabProps {
     newNote?: string
   ) => Promise<void>;
   onJumpToReturnForBill: (bill: BillRecord) => void;
-  onSettleDebt: (bill: BillRecord, settledVia: 'cash' | 'transfer') => Promise<void>;
+  onSettleDebt: (
+    bill: BillRecord,
+    settledVia: 'cash' | 'transfer',
+    settleDate?: string
+  ) => Promise<void>;
   onRecordPartialDebtPayment?: (params: {
     bill: BillRecord;
     amount: number;
@@ -84,15 +92,22 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   const [newDebtorInput, setNewDebtorInput] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'paid'>('all');
   const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
+  const [showBillDetail, setShowBillDetail] = useState<boolean>(false);
   const [isSettling, setIsSettling] = useState(false);
   const [inlinePrices, setInlinePrices] = useState<Record<string, number>>({});
   const [inlineNotes, setInlineNotes] = useState<Record<string, string>>({});
+
+  // Settle Debt Modal state (Tất toán công nợ kèm ngày tất toán)
+  const [settleModalBill, setSettleModalBill] = useState<BillRecord | null>(null);
+  const [modalSettleDate, setModalSettleDate] = useState<string>(() => getCurrentBusinessDate());
+  const [modalSettleMethod, setModalSettleMethod] = useState<'cash' | 'transfer'>('cash');
 
   // Partial Debt Payment (Trả góp từng đợt) form state
   const [partialAmountInput, setPartialAmountInput] = useState<string>('');
   const [partialMethod, setPartialMethod] = useState<'cash' | 'transfer'>('cash');
   const [partialDate, setPartialDate] = useState<string>(() => getCurrentBusinessDate());
   const [partialNote, setPartialNote] = useState<string>('');
+  const [settleDateInput, setSettleDateInput] = useState<string>(() => getCurrentBusinessDate());
 
   const allowDeleteDebt = canDelete || canWrite;
 
@@ -194,7 +209,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
       const found = debtBills.find((b) => b.id === selectedBillId);
       if (found) return found;
     }
-    return debtBills[0] || null;
+    return null;
   }, [debtBills, selectedBillId]);
 
   const activeBillItems = useMemo(() => {
@@ -230,29 +245,88 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
     return names.size;
   }, [bills, paymentsByBillId]);
 
-  const handleInspectAndScroll = (billId: string) => {
+  const handleSelectDebtorFilter = (debtor: string) => {
+    setSelectedDebtorFilter(debtor);
+    setSelectedBillId(null);
+    setShowBillDetail(false);
+  };
+
+  const handleStatusFilterChange = (st: 'all' | 'unpaid' | 'paid') => {
+    setStatusFilter(st);
+    setSelectedBillId(null);
+    setShowBillDetail(false);
+  };
+
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val);
+    setSelectedBillId(null);
+    setShowBillDetail(false);
+  };
+
+  const handleSelectBillRow = (billId: string) => {
     setSelectedBillId(billId);
+  };
+
+  const handleShowBillDetail = (billId: string) => {
+    setSelectedBillId(billId);
+    setShowBillDetail(true);
     setTimeout(() => {
       detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 60);
   };
 
-  const handleSettle = (bill: BillRecord, method: 'cash' | 'transfer') => {
+  const handleInspectAndScroll = (billId: string) => {
+    handleShowBillDetail(billId);
+  };
+
+  const openSettleModal = (bill: BillRecord) => {
+    setSettleModalBill(bill);
+    setModalSettleDate(settleDateInput || getCurrentBusinessDate());
+    setModalSettleMethod('cash');
+  };
+
+  const handleConfirmModalSettle = async () => {
+    if (!settleModalBill || !canWrite) return;
+    const { remainingDebt } = getBillDebtMetrics(settleModalBill);
+    const targetDate = modalSettleDate || getCurrentBusinessDate();
+    requestConfirm({
+      title: 'Xác nhận Tất Toán Dư Nợ Còn Lại',
+      message: `Bạn có chắc chắn muốn thu dứt điểm số dư nợ còn lại ${formatVND(
+        remainingDebt
+      )} của khách "${
+        settleModalBill.debtorName || 'Khách ghi nợ'
+      }" (Bill ${settleModalBill.billCode}) vào ngày ${targetDate} bằng hình thức "${PAYMENT_LABELS[modalSettleMethod]}" không?\n\nKhoản thu này sẽ được ghi nhận vào bảng đối soát doanh thu của ngày ${targetDate}.`,
+      confirmLabel: `Xác nhận Tất Toán (${PAYMENT_LABELS[modalSettleMethod]})`,
+      variant: 'primary',
+      onConfirm: async () => {
+        setIsSettling(true);
+        try {
+          await onSettleDebt(settleModalBill, modalSettleMethod, targetDate);
+          setSettleModalBill(null);
+        } finally {
+          setIsSettling(false);
+        }
+      },
+    });
+  };
+
+  const handleSettle = (bill: BillRecord, method: 'cash' | 'transfer', customDate?: string) => {
     if (!canWrite) return;
     const { remainingDebt } = getBillDebtMetrics(bill);
+    const targetDate = customDate || settleDateInput || getCurrentBusinessDate();
     requestConfirm({
       title: 'Xác nhận Tất Toán Dư Nợ Còn Lại',
       message: `Bạn có chắc chắn muốn thu dứt điểm số dư nợ còn lại ${formatVND(
         remainingDebt
       )} của khách "${
         bill.debtorName || 'Khách ghi nợ'
-      }" (Bill ${bill.billCode}) bằng hình thức "${PAYMENT_LABELS[method]}" không?`,
+      }" (Bill ${bill.billCode}) vào ngày ${targetDate} bằng hình thức "${PAYMENT_LABELS[method]}" không?\n\nKhoản thu này sẽ được ghi nhận vào bảng đối soát doanh thu của ngày ${targetDate}.`,
       confirmLabel: `Xác nhận Thu hết (${PAYMENT_LABELS[method]})`,
       variant: 'primary',
       onConfirm: async () => {
         setIsSettling(true);
         try {
-          await onSettleDebt(bill, method);
+          await onSettleDebt(bill, method, targetDate);
         } finally {
           setIsSettling(false);
         }
@@ -312,6 +386,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
       onConfirm: async () => {
         if (selectedBillId === bill.id) {
           setSelectedBillId(null);
+          setShowBillDetail(false);
         }
         await onDeleteBill(bill);
       },
@@ -327,6 +402,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
       variant: 'danger',
       onConfirm: async () => {
         setSelectedBillId(null);
+        setShowBillDetail(false);
         await onDeleteAllDebtBills(debtBills);
       },
     });
@@ -351,6 +427,8 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
       onConfirm: async () => {
         if (selectedDebtorFilter.trim().toLowerCase() === clean.toLowerCase()) {
           setSelectedDebtorFilter('ALL');
+          setSelectedBillId(null);
+          setShowBillDetail(false);
         }
         await onDeleteDebtor(clean);
       },
@@ -363,6 +441,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
     if (!clean || !onAddDebtor || !canWrite) return;
     await onAddDebtor(clean);
     setNewDebtorInput('');
+    handleSelectDebtorFilter(clean);
   };
 
   const handleSaveInlinePrice = (item: BillItemRecord) => {
@@ -467,7 +546,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => setSelectedDebtorFilter('ALL')}
+            onClick={() => handleSelectDebtorFilter('ALL')}
             className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
               selectedDebtorFilter === 'ALL'
                 ? 'bg-amber-600 text-white border-amber-600'
@@ -503,7 +582,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                 <button
                   type="button"
                   onClick={() =>
-                    setSelectedDebtorFilter(isSelected ? 'ALL' : dName)
+                    handleSelectDebtorFilter(isSelected ? 'ALL' : dName)
                   }
                   className="px-3 py-1.5 font-semibold inline-flex items-center gap-1.5 cursor-pointer"
                 >
@@ -549,7 +628,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
               <input
                 type="text"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 placeholder="Tìm tên khách, mã bill, món..."
                 className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
@@ -560,7 +639,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                 <button
                   key={st}
                   type="button"
-                  onClick={() => setStatusFilter(st)}
+                  onClick={() => handleStatusFilterChange(st)}
                   className={`flex-1 sm:flex-initial px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
                     statusFilter === st
                       ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
@@ -604,15 +683,15 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                   remainingDebt,
                   isFullyPaid: isPaid,
                 } = getBillDebtMetrics(bill);
-                const isSelected = activeDebtBill?.id === bill.id;
+                const isSelected = selectedBillId === bill.id;
 
                 return (
                   <div
                     key={bill.id}
-                    onClick={() => handleInspectAndScroll(bill.id)}
+                    onClick={() => handleSelectBillRow(bill.id)}
                     className={`p-3.5 rounded-xl border transition-all cursor-pointer space-y-2 ${
                       isSelected
-                        ? 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/20'
+                        ? 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/20 ring-1 ring-amber-500/40'
                         : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30'
                     }`}
                   >
@@ -661,13 +740,40 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleInspectAndScroll(bill.id);
+                          handleShowBillDetail(bill.id);
                         }}
-                        className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                        className="px-2.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50/70 dark:bg-amber-950/40 hover:bg-amber-100 text-xs font-semibold text-amber-800 dark:text-amber-200 inline-flex items-center gap-1 cursor-pointer"
                       >
-                        <ArrowDownCircle className="w-3.5 h-3.5 text-amber-500" />
-                        <span>Chi tiết & Thu nợ</span>
+                        <Eye className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                        <span>Hiển thị</span>
                       </button>
+                      {canWrite && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEditBill(bill);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 text-xs font-semibold text-indigo-700 dark:text-indigo-300 inline-flex items-center gap-1 cursor-pointer"
+                          title="Chỉnh sửa bill & ngày tất toán"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                          <span>Sửa</span>
+                        </button>
+                      )}
+                      {!isPaid && canWrite && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openSettleModal(bill);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Tất toán</span>
+                        </button>
+                      )}
                       {allowDeleteDebt && (
                         <button
                           type="button"
@@ -709,15 +815,15 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                       remainingDebt,
                       isFullyPaid: isPaid,
                     } = getBillDebtMetrics(bill);
-                    const isSelected = activeDebtBill?.id === bill.id;
+                    const isSelected = selectedBillId === bill.id;
 
                     return (
                       <tr
                         key={bill.id}
-                        onClick={() => handleInspectAndScroll(bill.id)}
+                        onClick={() => handleSelectBillRow(bill.id)}
                         className={`cursor-pointer transition-colors ${
                           isSelected
-                            ? 'bg-amber-50/70 dark:bg-amber-950/25'
+                            ? 'bg-amber-50/70 dark:bg-amber-950/25 ring-1 ring-amber-500/30'
                             : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
                         }`}
                       >
@@ -763,13 +869,40 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleInspectAndScroll(bill.id);
+                              handleShowBillDetail(bill.id);
                             }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-amber-500 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/30 hover:bg-amber-100 text-xs font-semibold text-amber-800 dark:text-amber-200 cursor-pointer"
                           >
-                            <ArrowDownCircle className="w-3.5 h-3.5 text-amber-500" />
-                            <span>Xem món</span>
+                            <Eye className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                            <span>Hiển thị</span>
                           </button>
+                          {canWrite && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onEditBill(bill);
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 text-xs font-semibold text-indigo-700 dark:text-indigo-300 cursor-pointer"
+                              title="Chỉnh sửa bill & ngày tất toán"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                              <span>Sửa</span>
+                            </button>
+                          )}
+                          {!isPaid && canWrite && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openSettleModal(bill);
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Tất toán</span>
+                            </button>
+                          )}
                           {allowDeleteDebt && (
                             <button
                               type="button"
@@ -790,6 +923,38 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                 </tbody>
               </table>
             </div>
+
+            {/* Prompt bar when a bill is selected but details are not expanded */}
+            {selectedBillId && !showBillDetail && activeDebtBill && (
+              <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-700/70 bg-amber-50/80 dark:bg-amber-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-150">
+                <div className="flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span className="text-xs text-slate-800 dark:text-slate-200">
+                    Đã chọn hóa đơn: <strong>{activeDebtBill.billCode}</strong> - {activeDebtBill.debtorName || 'Khách nợ'} (Còn nợ: <strong className="text-amber-700 dark:text-amber-300 font-mono">{formatVND(getBillDebtMetrics(activeDebtBill).remainingDebt)}</strong>).
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {!getBillDebtMetrics(activeDebtBill).isFullyPaid && canWrite && (
+                    <button
+                      type="button"
+                      onClick={() => openSettleModal(activeDebtBill)}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Tất toán nợ</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleShowBillDetail(activeDebtBill.id)}
+                    className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>Hiển thị toàn bộ Bill</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -797,14 +962,22 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
       {/* Target Scroll Section: Detailed Bill Items Inspector */}
       <div
         ref={detailSectionRef}
-        className="p-4 sm:p-5 border-2 border-amber-500/40 dark:border-amber-500/30 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4 scroll-mt-20"
+        className="scroll-mt-20"
       >
-        {!activeDebtBill ? (
-          <div className="py-8 text-center text-xs text-slate-500 dark:text-slate-400">
-            Chọn một khoản công nợ ở danh sách trên để xem chi tiết các món trong hóa đơn.
+        {!showBillDetail || !activeDebtBill ? (
+          <div className="p-6 border-2 border-dashed border-slate-300 dark:border-slate-800 rounded-2xl bg-slate-50/50 dark:bg-slate-900/40 text-center py-8 space-y-2">
+            <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto">
+              <Eye className="w-5 h-5" />
+            </div>
+            <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+              Chi tiết hóa đơn chưa được hiển thị
+            </p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+              Khi chọn tab công nợ hoặc khách nợ, chi tiết bill được ẩn để giao diện gọn gàng. Vui lòng chọn một hóa đơn ở danh sách bên trên và bấm nút <strong className="text-amber-600 dark:text-amber-400">&quot;Hiển thị&quot;</strong> để xem toàn bộ thông tin món và lịch sử thanh toán.
+            </p>
           </div>
         ) : (
-          <>
+          <div className="p-4 sm:p-5 border-2 border-amber-500/40 dark:border-amber-500/30 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
               <div>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400 font-mono font-semibold">
@@ -825,6 +998,16 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
               </div>
 
               <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBillDetail(false)}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
+                  title="Ẩn chi tiết bill này"
+                >
+                  <EyeOff className="w-3.5 h-3.5" />
+                  <span>Ẩn chi tiết</span>
+                </button>
+
                 {canWrite && (
                   <>
                     <button
@@ -848,6 +1031,25 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                     {activeDebtBill.paymentType === 'debt' &&
                       activeDebtBill.debtStatus !== 'paid' && (
                         <>
+                          <button
+                            type="button"
+                            onClick={() => openSettleModal(activeDebtBill)}
+                            className="col-span-2 sm:col-span-1 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer shadow-xs"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Tất toán công nợ</span>
+                          </button>
+                          <div className="col-span-2 sm:col-span-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                            <span className="text-[11px] font-medium text-slate-500 whitespace-nowrap">
+                              Ngày tất toán:
+                            </span>
+                            <input
+                              type="date"
+                              value={settleDateInput}
+                              onChange={(e) => setSettleDateInput(e.target.value)}
+                              className="w-full text-xs font-mono font-bold rounded border-0 bg-transparent text-slate-900 dark:text-white cursor-pointer focus:outline-none"
+                            />
+                          </div>
                           <button
                             type="button"
                             disabled={isSettling}
@@ -1343,9 +1545,131 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                 </div>
               );
             })()}
-          </>
+          </div>
         )}
       </div>
+
+      {/* POPUP MODAL TẤT TOÁN CÔNG NỢ - CÓ THÊM NGÀY TẤT TOÁN RÕ RÀNG */}
+      {settleModalBill && (
+        <div className="fixed inset-0 z-[100] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-5 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="w-5 h-5" />
+                <h3 className="font-bold text-base text-slate-900 dark:text-white">
+                  Tất Toán Công Nợ
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettleModalBill(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Bill & Debtor Info */}
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Khách ghi nợ:</span>
+                <span className="font-bold text-slate-900 dark:text-white">
+                  {settleModalBill.debtorName || 'Khách ghi nợ'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Hóa đơn:</span>
+                <span className="font-mono text-slate-700 dark:text-slate-300">
+                  {settleModalBill.billCode} (Ngày nợ: {settleModalBill.billDate})
+                </span>
+              </div>
+              <div className="flex justify-between pt-1.5 border-t border-slate-200/70 dark:border-slate-700">
+                <span className="text-slate-700 dark:text-slate-200 font-semibold">
+                  Số dư nợ cần tất toán:
+                </span>
+                <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 text-sm">
+                  {formatVND(getBillDebtMetrics(settleModalBill).remainingDebt)}
+                </span>
+              </div>
+            </div>
+
+            {/* Ngày tất toán Input */}
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
+                <Calendar className="w-4 h-4 text-amber-500" />
+                <span>Ngày tất toán (Ngày thực nhận tiền)*:</span>
+              </label>
+              <input
+                type="date"
+                value={modalSettleDate}
+                onChange={(e) => setModalSettleDate(e.target.value)}
+                className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                required
+              />
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Khoản thu này sẽ được ghi nhận vào doanh thu và đối soát thực thu của ngày {modalSettleDate}.
+              </p>
+            </div>
+
+            {/* Hình thức thanh toán */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                Hình thức thanh toán*:
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalSettleMethod('cash')}
+                  className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                    modalSettleMethod === 'cash'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-700 dark:text-emerald-300 ring-2 ring-emerald-500/20'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Tiền mặt</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalSettleMethod('transfer')}
+                  className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                    modalSettleMethod === 'transfer'
+                      ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-500 text-blue-700 dark:text-blue-300 ring-2 ring-blue-500/20'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <UserCheck className="w-4 h-4 text-blue-600" />
+                  <span>Chuyển khoản</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSettleModalBill(null)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                disabled={isSettling}
+                onClick={handleConfirmModalSettle}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>
+                  {isSettling
+                    ? 'Đang xử lý...'
+                    : `Xác nhận Tất Toán (${PAYMENT_LABELS[modalSettleMethod]})`}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

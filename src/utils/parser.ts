@@ -2785,6 +2785,55 @@ export function mergeInventoryData(
     }
   }
 
+  // 9. Kitchen Inventory, Suppliers, Receipts, Payments
+  const mergedKitchenSuppliers = (() => {
+    const map = new Map<string, any>();
+    for (const s of [...(base.kitchenSuppliers || []), ...(incoming.kitchenSuppliers || [])]) {
+      if (!s || !s.id) continue;
+      const ex = map.get(s.id);
+      if (!ex || (s.updatedAtMs || 0) >= (ex.updatedAtMs || 0)) map.set(s.id, s);
+    }
+    return Array.from(map.values());
+  })();
+
+  const mergedKitchenSupplyItems = (() => {
+    const map = new Map<string, any>();
+    for (const it of [...(base.kitchenSupplyItems || []), ...(incoming.kitchenSupplyItems || [])]) {
+      if (!it || !it.id) continue;
+      const ex = map.get(it.id);
+      if (!ex || (it.updatedAtMs || 0) >= (ex.updatedAtMs || 0)) map.set(it.id, it);
+    }
+    return Array.from(map.values());
+  })();
+
+  const mergedKitchenReceipts = (() => {
+    const map = new Map<string, any>();
+    for (const r of [...(base.kitchenReceipts || []), ...(incoming.kitchenReceipts || [])]) {
+      if (!r || !r.id) continue;
+      const ex = map.get(r.id);
+      if (!ex || (r.updatedAtMs || 0) >= (ex.updatedAtMs || 0)) map.set(r.id, r);
+    }
+    return Array.from(map.values());
+  })();
+
+  const mergedKitchenSupplierPayments = (() => {
+    const map = new Map<string, any>();
+    for (const p of [...(base.kitchenSupplierPayments || []), ...(incoming.kitchenSupplierPayments || [])]) {
+      if (!p || !p.id) continue;
+      map.set(p.id, p);
+    }
+    return Array.from(map.values());
+  })();
+
+  const mergedKitchenStockUsages = (() => {
+    const map = new Map<string, any>();
+    for (const u of [...(base.kitchenStockUsages || []), ...(incoming.kitchenStockUsages || [])]) {
+      if (!u || !u.id) continue;
+      map.set(u.id, u);
+    }
+    return Array.from(map.values());
+  })();
+
   return {
     ...base,
     ...incoming,
@@ -2800,6 +2849,12 @@ export function mergeInventoryData(
         ? incoming.kiotvietSyncLocked
         : base?.kiotvietSyncLocked,
     employees: Array.from(empMap.values()),
+    kitchenCategories: incoming.kitchenCategories || base.kitchenCategories || undefined,
+    kitchenSuppliers: mergedKitchenSuppliers,
+    kitchenSupplyItems: mergedKitchenSupplyItems,
+    kitchenReceipts: mergedKitchenReceipts,
+    kitchenSupplierPayments: mergedKitchenSupplierPayments,
+    kitchenStockUsages: mergedKitchenStockUsages,
     updatedAtMs: Math.max(base.updatedAtMs || 0, incoming.updatedAtMs || 0, Date.now()),
   };
 }

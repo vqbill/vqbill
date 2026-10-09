@@ -18,6 +18,9 @@ import {
   MessageSquareText,
   Percent,
   Zap,
+  MinusCircle,
+  Tag,
+  X,
 } from 'lucide-react';
 import {
   ExtractedBillItem,
@@ -28,6 +31,7 @@ import {
   ProductRecord,
   GeminiKeyStatus,
   BillRecord,
+  DEFAULT_DEDUCTION_CATEGORIES,
 } from '../types';
 import {
   formatVND,
@@ -71,6 +75,16 @@ interface OcrScannerTabProps {
   }) => Promise<BillRecord | void>;
   onDeleteAllMenuProducts: () => void;
   menuProductsCount: number;
+  deductionCategories?: string[];
+  onAddExpenseDeduction?: (params: {
+    deductionDate: string;
+    expenseTitle: string;
+    category: string;
+    quantity?: number;
+    unitPrice?: number;
+    amount: number;
+    note: string;
+  }) => Promise<void>;
   onOpenKiotVietSync?: () => void;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
@@ -92,11 +106,44 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   onSaveExtractedBill,
   onDeleteAllMenuProducts,
   menuProductsCount,
+  deductionCategories,
+  onAddExpenseDeduction,
   onOpenKiotVietSync,
   requestConfirm,
 }) => {
   const todayBusinessStr = getCurrentBusinessDate();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // States for Quick Deduction Popup Modal (Req 4)
+  const [showQuickDeductionModal, setShowQuickDeductionModal] = useState<boolean>(false);
+  const [quickDeductionDate, setQuickDeductionDate] = useState<string>(todayBusinessStr);
+  const [quickExpenseTitle, setQuickExpenseTitle] = useState<string>('');
+  const [quickCategory, setQuickCategory] = useState<string>(
+    deductionCategories?.[0] || DEFAULT_DEDUCTION_CATEGORIES[0] || 'Khác'
+  );
+  const [quickQuantity, setQuickQuantity] = useState<number>(1);
+  const [quickUnitPrice, setQuickUnitPrice] = useState<number>(0);
+  const [quickAmount, setQuickAmount] = useState<number>(0);
+  const [quickNote, setQuickNote] = useState<string>('');
+  const [quickKeepOpen, setQuickKeepOpen] = useState<boolean>(false);
+  const [isSavingDeduction, setIsSavingDeduction] = useState<boolean>(false);
+
+  const availableDeductionCategories = useMemo(() => {
+    const list =
+      deductionCategories && deductionCategories.length > 0
+        ? deductionCategories
+        : DEFAULT_DEDUCTION_CATEGORIES;
+    const s = new Set<string>();
+    const res: string[] = [];
+    for (const c of list) {
+      const clean = (c || '').trim();
+      if (clean && !s.has(clean.toLowerCase())) {
+        s.add(clean.toLowerCase());
+        res.push(clean);
+      }
+    }
+    return res;
+  }, [deductionCategories]);
 
   const [inputMode, setInputMode] = useState<'image' | 'text'>('text');
   const [rawText, setRawText] = useState<string>('');
@@ -720,6 +767,54 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     }
   };
 
+  const handleSaveQuickDeduction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onAddExpenseDeduction) return;
+    const cleanTitle = quickExpenseTitle.trim();
+    if (!cleanTitle) {
+      setErrorMsg('Vui lòng nhập tên khoản trừ / khoản chi.');
+      return;
+    }
+    const finalAmount = quickAmount > 0 ? quickAmount : (quickQuantity || 1) * (quickUnitPrice || 0);
+    if (finalAmount <= 0) {
+      setErrorMsg('Vui lòng nhập số tiền trừ hợp lệ (> 0 VNĐ).');
+      return;
+    }
+
+    try {
+      setIsSavingDeduction(true);
+      await onAddExpenseDeduction({
+        deductionDate: quickDeductionDate || todayBusinessStr,
+        expenseTitle: cleanTitle,
+        category: quickCategory || 'Khác',
+        quantity: quickQuantity || 1,
+        unitPrice: quickUnitPrice > 0 ? quickUnitPrice : finalAmount,
+        amount: finalAmount,
+        note: quickNote.trim(),
+      });
+
+      setSuccessMsg(`Đã lưu khoản trừ "${cleanTitle}" (-${formatVND(finalAmount)}) vào ngày ${quickDeductionDate}!`);
+      setTimeout(() => setSuccessMsg(null), 4000);
+
+      if (quickKeepOpen) {
+        setQuickExpenseTitle('');
+        setQuickAmount(0);
+        setQuickUnitPrice(0);
+        setQuickNote('');
+      } else {
+        setShowQuickDeductionModal(false);
+        setQuickExpenseTitle('');
+        setQuickAmount(0);
+        setQuickUnitPrice(0);
+        setQuickNote('');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Lỗi khi lưu khoản trừ.');
+    } finally {
+      setIsSavingDeduction(false);
+    }
+  };
+
   const handleSaveBill = async () => {
     if (!canWrite) {
       setErrorMsg('Tài khoản của bạn ở chế độ Chỉ xem, không có quyền lưu hóa đơn.');
@@ -1106,6 +1201,20 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     {formatVND(totalAmount)}
                   </span>
                 </div>
+                {onAddExpenseDeduction && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickDeductionDate(billDate || todayBusinessStr);
+                      setShowQuickDeductionModal(true);
+                    }}
+                    className="h-10 px-3.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-900 dark:text-amber-200 font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs shrink-0 transition-colors"
+                    title="Nhập khoản trừ trong ngày (Không cần chuyển qua tab Khoản trừ)"
+                  >
+                    <MinusCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>Nhập Khoản Trừ</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isSaving || !canWrite}
@@ -1226,7 +1335,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   <input
                     type="number"
                     min={0}
-                    step={1000}
+                    step="any"
                     value={discountAmount}
                     onChange={(e) =>
                       setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
@@ -1609,7 +1718,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                           <input
                             type="number"
                             min={0}
-                            step={1000}
+                            step="any"
                             value={item.unitPrice}
                             onChange={(e) =>
                               handleItemChange(idx, 'unitPrice', e.target.value)
@@ -1743,7 +1852,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                             <input
                               type="number"
                               min={0}
-                              step={1000}
+                              step="any"
                               value={item.unitPrice}
                               onChange={(e) =>
                                 handleItemChange(idx, 'unitPrice', e.target.value)
@@ -1847,19 +1956,35 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   {PAYMENT_LABELS[paymentType]}
                 </strong>
               </div>
-              <button
-                type="button"
-                disabled={isSaving || !canWrite}
-                onClick={handleSaveBill}
-                className="h-11 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
-              >
-                <Save className="w-4 h-4 shrink-0" />
-                <span>
-                  {isSaving
-                    ? 'Đang lưu vào hệ thống...'
-                    : 'Lưu Bill & Cộng Số Lượng Thời Gian Thực'}
-                </span>
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                {onAddExpenseDeduction && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickDeductionDate(billDate || todayBusinessStr);
+                      setShowQuickDeductionModal(true);
+                    }}
+                    className="h-11 px-4 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-900 dark:text-amber-200 font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-colors shrink-0"
+                    title="Nhập khoản trừ trong ngày (Không cần chuyển qua tab Khoản trừ)"
+                  >
+                    <MinusCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>+ Nhập Khoản Trừ Trong Ngày</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={isSaving || !canWrite}
+                  onClick={handleSaveBill}
+                  className="h-11 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                >
+                  <Save className="w-4 h-4 shrink-0" />
+                  <span>
+                    {isSaving
+                      ? 'Đang lưu vào hệ thống...'
+                      : 'Lưu Bill & Cộng Số Lượng Thời Gian Thực'}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1958,6 +2083,245 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 <span>Đóng & Nhập Bill Tiếp Theo</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* FLOATING BUTTON AT RIGHT EDGE, VERTICAL CENTER OF SCREEN (REQ 4) */}
+      {onAddExpenseDeduction && (
+        <button
+          type="button"
+          onClick={() => {
+            setQuickDeductionDate(billDate || todayBusinessStr);
+            setShowQuickDeductionModal(true);
+          }}
+          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 px-2.5 py-4 rounded-l-2xl bg-gradient-to-b from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white shadow-2xl flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l border-amber-300/40 hover:pr-4 transition-all group active:scale-95"
+          title="Nhập khoản trừ trong ngày (Không cần chuyển qua tab Khoản trừ)"
+        >
+          <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform shadow-xs">
+            <MinusCircle className="w-4 h-4 text-white" />
+          </div>
+          <span className="[writing-mode:vertical-rl] text-[11px] font-extrabold tracking-wider select-none py-1 uppercase text-amber-100 group-hover:text-white">
+            + Khoản Trừ Trong Ngày
+          </span>
+        </button>
+      )}
+
+      {/* POPUP MODAL: NHẬP KHOẢN TRỪ TRONG NGÀY (REQ 4) */}
+      {showQuickDeductionModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+          onClick={() => setShowQuickDeductionModal(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/30 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                  <MinusCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    Nhập Khoản Trừ Trong Ngày
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Thêm trực tiếp vào khoản chi ngày mà không cần chuyển sang tab Khoản trừ
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuickDeductionModal(false)}
+                className="p-1 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Form Body */}
+            <form onSubmit={handleSaveQuickDeduction} noValidate className="p-5 space-y-4">
+              {/* Date & Category */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Ngày trừ / chi tiêu:
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={quickDeductionDate}
+                    onChange={(e) => setQuickDeductionDate(e.target.value)}
+                    className="w-full h-9 px-3 text-xs font-mono font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Nhóm khoản trừ:
+                  </label>
+                  <select
+                    value={quickCategory}
+                    onChange={(e) => setQuickCategory(e.target.value)}
+                    className="w-full h-9 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-medium cursor-pointer"
+                  >
+                    {availableDeductionCategories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Expense Title */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Tên khoản trừ / khoản chi (*):
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="VD: Mua bánh mì, Rau sống, Đá bi, Tiền gia vị..."
+                  value={quickExpenseTitle}
+                  onChange={(e) => setQuickExpenseTitle(e.target.value)}
+                  className="w-full h-9 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-medium"
+                />
+
+                {/* Quick Chips */}
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span className="text-[11px] text-slate-400">Gợi ý nhanh:</span>
+                  {[
+                    'Mua bánh mì',
+                    'Mua rau củ',
+                    'Tiền đá lạnh',
+                    'Gia vị / Hành tỏi',
+                    'Gas phụ / Nhiên liệu',
+                    'Vật tư quán',
+                    'Hoàn trả món thừa',
+                  ].map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => setQuickExpenseTitle(chip)}
+                      className="px-2 py-0.5 rounded-lg text-[10px] font-medium border border-slate-200 dark:border-slate-700 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:border-amber-300 text-slate-600 dark:text-slate-300 hover:text-amber-800 dark:hover:text-amber-300 cursor-pointer transition-colors"
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Quantity, Unit Price, Amount */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Số lượng:
+                  </label>
+                  <input
+                    type="number"
+                    min={0.01}
+                    step="any"
+                    value={quickQuantity}
+                    onChange={(e) => {
+                      const q = Number(e.target.value) || 1;
+                      setQuickQuantity(q);
+                      if (quickUnitPrice > 0) setQuickAmount(q * quickUnitPrice);
+                    }}
+                    className="w-full h-9 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Đơn giá (VNĐ):
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={quickUnitPrice || ''}
+                    placeholder="0"
+                    onChange={(e) => {
+                      const p = Number(e.target.value) || 0;
+                      setQuickUnitPrice(p);
+                      setQuickAmount(p * (quickQuantity || 1));
+                    }}
+                    className="w-full h-9 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1">
+                    Tổng tiền trừ (*):
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={0}
+                    step="any"
+                    value={quickAmount || ''}
+                    placeholder="0"
+                    onChange={(e) => setQuickAmount(Number(e.target.value) || 0)}
+                    className="w-full h-9 px-3 text-xs font-mono font-bold rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200"
+                  />
+                </div>
+              </div>
+
+              {quickAmount > 0 && (
+                <div className="text-right text-xs font-bold text-amber-600 dark:text-amber-400 font-mono">
+                  Trừ: -{formatVND(quickAmount)}
+                </div>
+              )}
+
+              {/* Note */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Ghi chú chi tiết (nếu có):
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ghi chú người mua, ca trực hoặc lý do..."
+                  value={quickNote}
+                  onChange={(e) => setQuickNote(e.target.value)}
+                  className="w-full h-9 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              {/* Checkbox keep open */}
+              <div className="flex items-center justify-between pt-1 text-xs">
+                <label className="inline-flex items-center gap-2 cursor-pointer select-none text-slate-600 dark:text-slate-400">
+                  <input
+                    type="checkbox"
+                    checked={quickKeepOpen}
+                    onChange={(e) => setQuickKeepOpen(e.target.checked)}
+                    className="rounded border-slate-300 text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
+                  />
+                  <span>Tiếp tục nhập khoản khác sau khi lưu</span>
+                </label>
+              </div>
+
+              {/* Footer Buttons */}
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowQuickDeductionModal(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingDeduction || quickAmount <= 0 || !quickExpenseTitle.trim()}
+                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                >
+                  <MinusCircle className="w-4 h-4" />
+                  <span>{isSavingDeduction ? 'Đang lưu...' : 'Lưu Khoản Trừ'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -53,6 +53,7 @@ import {
   Bot,
   CheckSquare,
   Square,
+  UtensilsCrossed,
 } from 'lucide-react';
 import {
   auth,
@@ -95,6 +96,7 @@ import {
 } from './types';
 import {
   formatVND,
+  formatDateDMY,
   getPrivacyMaskMode,
   setPrivacyMaskMode,
   sanitizeId,
@@ -169,6 +171,7 @@ import { RevenueColumnChart, DailyRevenuePoint } from './components/RevenueChart
 import { OcrScannerTab } from './components/OcrScannerTab';
 import { CategoryAnalyticsTab } from './components/CategoryAnalyticsTab';
 import { BeverageInventoryTab } from './components/BeverageInventoryTab';
+import { KitchenInventoryTab } from './components/KitchenInventoryTab';
 import { OwnerConsumptionTab } from './components/OwnerConsumptionTab';
 import { DebtManagerTab } from './components/DebtManagerTab';
 import { ReturnsDeductionsTab } from './components/ReturnsDeductionsTab';
@@ -354,6 +357,7 @@ export default function App() {
       ocr: '/nhap-bill',
       categories: '/danh-muc',
       inventory: '/kho-do-uong',
+      kitchen_inventory: '/kho-bep-npp',
       owner_use: '/chu-quan-su-dung',
       debts: '/cong-no',
       deductions: '/khoan-tru',
@@ -373,6 +377,7 @@ export default function App() {
       'ocr',
       'categories',
       'inventory',
+      'kitchen_inventory',
       'owner_use',
       'debts',
       'deductions',
@@ -461,6 +466,7 @@ export default function App() {
   const [editingBill, setEditingBill] = useState<BillRecord | null>(null);
   const [splitMergeBill, setSplitMergeBill] = useState<BillRecord | null>(null);
   const [showKiotVietSyncModal, setShowKiotVietSyncModal] = useState<boolean>(false);
+  const [showSettledDebtsModal, setShowSettledDebtsModal] = useState<boolean>(false);
   const [preselectedReturnBillId, setPreselectedReturnBillId] = useState<string | null>(
     null
   );
@@ -469,7 +475,7 @@ export default function App() {
   // Bulk Bill Selection & Payment Method Modification on Dashboard
   const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(new Set());
   const [showBulkPaymentModal, setShowBulkPaymentModal] = useState<boolean>(false);
-  const [bulkPaymentType, setBulkPaymentType] = useState<PaymentType>('transfer');
+  const [bulkPaymentType, setBulkPaymentType] = useState<PaymentType | 'owner_use'>('transfer');
   const [bulkDebtorName, setBulkDebtorName] = useState<string>('');
 
   const showToast = (msg: string) => {
@@ -1918,44 +1924,38 @@ export default function App() {
       );
     }
 
-    const unpaidDebtBillIds = new Set(
-      bills
-        .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
-        .map((b) => b.id)
+    // Các khoản công nợ được thanh toán / tất toán trong kỳ đối soát (isDateInPeriod(p.paidDate))
+    const periodDebtPayments = debtPaymentsList.filter(
+      (p) => p && isDateInPeriod(p.paidDate)
     );
 
-    const periodCashInstallments = debtPaymentsList
-      .filter(
-        (p) =>
-          p.paymentMethod === 'cash' &&
-          unpaidDebtBillIds.has(p.billId) &&
-          isDateInPeriod(p.paidDate)
-      )
+    // Tiền mặt thu hồi công nợ trong kỳ
+    const periodDebtCashCollected = periodDebtPayments
+      .filter((p) => p.paymentMethod === 'cash')
       .reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
-    const periodTransferInstallments = debtPaymentsList
-      .filter(
-        (p) =>
-          p.paymentMethod === 'transfer' &&
-          unpaidDebtBillIds.has(p.billId) &&
-          isDateInPeriod(p.paidDate)
-      )
+    // Chuyển khoản thu hồi công nợ trong kỳ
+    const periodDebtTransferCollected = periodDebtPayments
+      .filter((p) => p.paymentMethod === 'transfer')
       .reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
-    const grossCash =
-      periodBills
-        .filter((b) => b.paymentType === 'cash')
-        .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0) +
-      periodCashInstallments;
+    // Tổng công nợ đã thanh toán / thu hồi trong kỳ
+    const periodSettledDebtTotal = periodDebtCashCollected + periodDebtTransferCollected;
 
-    const grossTransfer =
-      periodBills
-        .filter((b) => b.paymentType === 'transfer')
-        .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0) +
-      periodTransferInstallments;
+    // Doanh thu tiền mặt từ hóa đơn phát sinh trong kỳ (chưa tính khoản thu nợ)
+    const grossCashFromBills = periodBills
+      .filter((b) => b.paymentType === 'cash' && !isOwnerUseBill(b))
+      .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
 
+    // Doanh thu chuyển khoản từ hóa đơn phát sinh trong kỳ
+    const grossTransferFromBills = periodBills
+      .filter((b) => b.paymentType === 'transfer')
+      .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
+
+    // Tổng khoản trừ (chi tiêu ngày)
     const totalDeductions = periodDeductions.reduce((s, d) => s + d.amount, 0);
 
+    // Công nợ mới phát sinh trong kỳ còn chưa thanh toán
     const totalDebt = periodBills
       .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
       .reduce((s, b) => {
@@ -1967,18 +1967,37 @@ export default function App() {
         return s + Math.max(0, netOrig - paidSoFar);
       }, 0);
 
-    const netCashRevenue = grossCash - totalDeductions;
-    const netTransferRevenue = grossTransfer;
-    // Doanh thu tổng ngày = Tiền mặt + Chuyển khoản - Khoản trừ (Công nợ tính riêng)
-    const netDayTotal = grossCash + grossTransfer - totalDeductions;
-    const totalAllBillsGross = grossCash + grossTransfer + totalDebt;
+    // 1. Tiền mặt bán hàng ca ngày (Sau khoản trừ, chưa tính thu nợ)
+    const netCashRevenue = grossCashFromBills - totalDeductions;
+
+    // 2. TỔNG TIỀN MẶT THỰC NHẬN SAU KHI THU CÔNG NỢ (Két tiền mặt cuối ca)
+    // = Tiền mặt ca bán sau chi phí + Tiền mặt thu hồi công nợ
+    const totalNetCashAfterDebt = netCashRevenue + periodDebtCashCollected;
+
+    // 3. Doanh thu chuyển khoản thực nhận (gồm bill CK + Thu nợ CK)
+    const netTransferRevenue = grossTransferFromBills + periodDebtTransferCollected;
+
+    // 4. Doanh thu tổng ngày thực thu = Tổng tiền mặt thực nhận sau thu nợ + Doanh thu chuyển khoản
+    const netDayTotal = totalNetCashAfterDebt + netTransferRevenue;
+
+    // Gross cash (tổng dòng tiền mặt vào trước khi trừ chi tiêu: bill + thu nợ TM)
+    const grossCash = grossCashFromBills + periodDebtCashCollected;
+    const grossTransfer = netTransferRevenue;
+    const totalAllBillsGross = grossCashFromBills + grossTransferFromBills + totalDebt;
 
     return {
       grossCash,
+      grossCashFromBills,
+      periodDebtCashCollected,
       grossTransfer,
+      grossTransferFromBills,
+      periodDebtTransferCollected,
+      periodSettledDebtTotal,
+      periodDebtPayments,
       totalDeductions,
       totalDebt,
       netCashRevenue,
+      totalNetCashAfterDebt,
       netTransferRevenue,
       netDayTotal,
       totalAllBillsGross,
@@ -2018,16 +2037,23 @@ export default function App() {
     if (selectedBillIds.size === 0) return;
     const count = selectedBillIds.size;
     const now = Date.now();
-    const isDebt = bulkPaymentType === 'debt';
-    const targetDebtor = bulkDebtorName.trim() || 'Khách nợ';
+    const isOwner = bulkPaymentType === 'owner_use';
+    const isDebt = bulkPaymentType === 'debt' || isOwner;
+    const resolvedPaymentType: PaymentType = isOwner ? 'debt' : (bulkPaymentType as PaymentType);
+    const targetDebtor = isOwner
+      ? (bulkDebtorName.trim() || 'Chủ quán')
+      : isDebt
+      ? (bulkDebtorName.trim() || 'Khách nợ')
+      : '';
 
     const nextBills: BillRecord[] = bills.map((b) => {
       if (!selectedBillIds.has(b.id)) return b;
       return {
         ...b,
-        paymentType: bulkPaymentType,
+        paymentType: resolvedPaymentType,
         debtorName: isDebt ? targetDebtor : '',
         debtStatus: isDebt ? ('unpaid' as const) : ('none' as const),
+        note: isOwner && !b.note?.includes('[CHỦ/QL SỬ DỤNG]') ? `[CHỦ/QL SỬ DỤNG] ${b.note || ''}`.trim() : b.note,
         updatedAtMs: now,
       };
     });
@@ -2065,7 +2091,14 @@ export default function App() {
   const chartData = useMemo<DailyRevenuePoint[]>(() => {
     const dateMap = new Map<
       string,
-      { cash: number; transfer: number; deduction: number; debt: number }
+      {
+        cash: number;
+        transfer: number;
+        deduction: number;
+        debt: number;
+        debtPaidCash: number;
+        debtPaidTransfer: number;
+      }
     >();
 
     for (const b of periodBills) {
@@ -2074,6 +2107,8 @@ export default function App() {
         transfer: 0,
         deduction: 0,
         debt: 0,
+        debtPaidCash: 0,
+        debtPaidTransfer: 0,
       };
       if (b.paymentType === 'cash') cur.cash += Number(b.totalAmount) || 0;
       else if (b.paymentType === 'transfer') cur.transfer += Number(b.totalAmount) || 0;
@@ -2092,8 +2127,27 @@ export default function App() {
         transfer: 0,
         deduction: 0,
         debt: 0,
+        debtPaidCash: 0,
+        debtPaidTransfer: 0,
       };
       cur.deduction += d.amount;
+      dateMap.set(key, cur);
+    }
+
+    const debtPaymentsList = inventoryData.debtPayments || [];
+    for (const p of debtPaymentsList) {
+      if (!p || !p.paidDate || !isDateInPeriod(p.paidDate)) continue;
+      const key = p.paidDate;
+      const cur = dateMap.get(key) || {
+        cash: 0,
+        transfer: 0,
+        deduction: 0,
+        debt: 0,
+        debtPaidCash: 0,
+        debtPaidTransfer: 0,
+      };
+      if (p.paymentMethod === 'cash') cur.debtPaidCash += Number(p.amount) || 0;
+      else if (p.paymentMethod === 'transfer') cur.debtPaidTransfer += Number(p.amount) || 0;
       dateMap.set(key, cur);
     }
 
@@ -2102,18 +2156,20 @@ export default function App() {
       .map(([date, vals]) => {
         const parts = date.split('-');
         const label = parts.length === 3 ? `${parts[2]}/${parts[1]}` : date;
+        const totalCashWithDebt = vals.cash + vals.debtPaidCash;
+        const totalTransferWithDebt = vals.transfer + vals.debtPaidTransfer;
         return {
           date,
           label,
-          cash: vals.cash,
-          transfer: vals.transfer,
+          cash: totalCashWithDebt,
+          transfer: totalTransferWithDebt,
           deduction: vals.deduction,
           debt: vals.debt,
-          netCash: vals.cash - vals.deduction,
-          netDayTotal: vals.cash + vals.transfer - vals.deduction,
+          netCash: totalCashWithDebt - vals.deduction,
+          netDayTotal: totalCashWithDebt + totalTransferWithDebt - vals.deduction,
         };
       });
-  }, [periodBills, periodDeductions]);
+  }, [periodBills, periodDeductions, inventoryData.debtPayments]);
 
   // Auth Handlers
   const handleStaffLoginSuccess = (acc: StaffAccount) => {
@@ -2813,6 +2869,24 @@ export default function App() {
       ...prev.filter((it) => it.billId !== updatedBill.id),
       ...updatedItems,
     ]);
+
+    if (updatedBill.settleDate) {
+      const existingPayments = inventoryData.debtPayments || [];
+      const hasPaymentsForThisBill = existingPayments.some((p) => p.billId === updatedBill.id);
+      if (hasPaymentsForThisBill) {
+        const nextPayments = existingPayments.map((p) =>
+          p.billId === updatedBill.id ? { ...p, paidDate: updatedBill.settleDate! } : p
+        );
+        const nextInv: WorkspaceInventoryData = {
+          ...inventoryData,
+          debtPayments: nextPayments,
+          updatedAtMs: Date.now(),
+        };
+        setInventoryData(nextInv);
+        saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+      }
+    }
+
     showToast(
       `Đã cập nhật hóa đơn ${updatedBill.billCode} lên Firebase (giá mặc định Menu được giữ nguyên)!`
     );
@@ -3002,17 +3076,58 @@ export default function App() {
 
   const handleSettleDebt = async (
     bill: BillRecord,
-    settledVia: 'cash' | 'transfer'
+    settledVia: 'cash' | 'transfer',
+    settleDate?: string
   ) => {
     setWorkspaceInitialized(true);
+    const now = Date.now();
+    const effectiveSettleDate = settleDate || getCurrentBusinessDate();
+
+    // 1. Tính toán dư nợ còn lại chính xác của hóa đơn
+    const netOrig = Math.max(
+      0,
+      (Number(bill.totalAmount) || 0) - (Number(bill.deductedAmount) || 0)
+    );
+    const existingPayments = inventoryData.debtPayments || [];
+    const paidSoFar = existingPayments
+      .filter((p) => p && p.billId === bill.id)
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const remainingDebt = Math.max(0, netOrig - paidSoFar);
+
+    // 2. Ghi nhận bản ghi thanh toán công nợ cho ngày tất toán
+    let nextPayments = existingPayments;
+    if (remainingDebt > 0) {
+      const newPayment: DebtPaymentRecord = {
+        id: sanitizeId(`dpay_${now}_${Math.random().toString(36).slice(2, 6)}`),
+        billId: bill.id,
+        billCode: bill.billCode,
+        debtorName: bill.debtorName || 'Khách nợ',
+        amount: remainingDebt,
+        paymentMethod: settledVia,
+        paidDate: effectiveSettleDate,
+        note: `Tất toán toàn bộ công nợ còn lại (${PAYMENT_LABELS[settledVia]})`,
+        createdAtMs: now,
+        createdBy: currentStaffAccount?.username || 'admin',
+      };
+      nextPayments = [...existingPayments, newPayment];
+      const nextInventoryData: WorkspaceInventoryData = {
+        ...inventoryData,
+        debtPayments: nextPayments,
+        updatedAtMs: now,
+      };
+      setInventoryData(nextInventoryData);
+      await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
+    }
+
+    // 3. Giữ paymentType: 'debt' và cập nhật debtStatus: 'paid'
     const updatedBill: BillRecord = {
       ...bill,
-      paymentType: settledVia,
+      paymentType: 'debt',
       debtStatus: 'paid',
-      note: `${bill.note ? bill.note + ' · ' : ''}Đã thu nợ (${
+      note: `${bill.note ? bill.note + ' · ' : ''}Đã tất toán (${
         PAYMENT_LABELS[settledVia]
-      }) từ ${bill.debtorName}`,
-      updatedAtMs: Date.now(),
+      } ${formatVND(remainingDebt)}) ngày ${effectiveSettleDate} từ ${bill.debtorName}`,
+      updatedAtMs: now,
     };
     const items = billItems.filter((it) => it.billId === bill.id);
     await updateBillAndItemsInCloud({
@@ -3023,7 +3138,7 @@ export default function App() {
     });
     setBills((prev) => prev.map((b) => (b.id === bill.id ? updatedBill : b)));
     showToast(
-      `Đã tất toán công nợ của ${bill.debtorName} sang ${PAYMENT_LABELS[settledVia]} trên Firebase!`
+      `Đã tất toán công nợ của ${bill.debtorName} (${formatVND(remainingDebt)}) sang ${PAYMENT_LABELS[settledVia]} vào ngày ${effectiveSettleDate}!`
     );
   };
 
@@ -3071,7 +3186,7 @@ export default function App() {
     if (netOrig > 0 && totalPaidForBill >= netOrig) {
       const updatedBill: BillRecord = {
         ...params.bill,
-        paymentType: params.paymentMethod,
+        paymentType: 'debt',
         debtStatus: 'paid',
         note: `${params.bill.note ? params.bill.note + ' · ' : ''}Đã thu đủ công nợ (${nextPayments.filter((p) => p.billId === params.bill.id).length} đợt) từ ${params.bill.debtorName}`,
         updatedAtMs: now,
@@ -4957,6 +5072,12 @@ export default function App() {
       icon: <Boxes className="w-4 h-4" />,
     },
     {
+      id: 'kitchen_inventory',
+      label: 'Kho Bếp, Tạp Vụ & NPP',
+      shortLabel: 'Kho Bếp & NPP',
+      icon: <UtensilsCrossed className="w-4 h-4" />,
+    },
+    {
       id: 'owner_use',
       label: 'Chủ / Quản lý Sử dụng (0đ)',
       shortLabel: 'Chủ / QL dùng',
@@ -5012,6 +5133,7 @@ export default function App() {
     ocr: <Camera className="w-4 h-4" />,
     categories: <Layers className="w-4 h-4" />,
     inventory: <Boxes className="w-4 h-4" />,
+    kitchen_inventory: <UtensilsCrossed className="w-4 h-4" />,
     owner_use: <UserCheck className="w-4 h-4" />,
     debts: <CreditCard className="w-4 h-4" />,
     deductions: <Receipt className="w-4 h-4" />,
@@ -5675,9 +5797,23 @@ export default function App() {
                 </span>
               </div>
               <div className="flex items-center justify-between font-mono">
-                <span className="text-slate-500">Tiền mặt thực:</span>
+                <span className="text-slate-500">Tiền mặt bán:</span>
                 <span className="font-semibold text-emerald-600 dark:text-emerald-400">
                   {formatVND(financialSummary.netCashRevenue)}
+                </span>
+              </div>
+              {financialSummary.periodSettledDebtTotal > 0 && (
+                <div className="flex items-center justify-between font-mono">
+                  <span className="text-amber-600 dark:text-amber-400">Thu nợ:</span>
+                  <span className="font-semibold text-amber-600 dark:text-amber-400">
+                    +{formatVND(financialSummary.periodSettledDebtTotal)}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center justify-between font-mono">
+                <span className="text-slate-700 dark:text-slate-300 font-bold">Két tiền mặt:</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                  {formatVND(financialSummary.totalNetCashAfterDebt)}
                 </span>
               </div>
               <div className="flex items-center justify-between font-mono">
@@ -5688,7 +5824,7 @@ export default function App() {
               </div>
               <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between font-mono">
                 <span className="font-bold text-slate-700 dark:text-slate-300">
-                  Tổng ngày:
+                  Tổng thực thu:
                 </span>
                 <span className="font-bold text-emerald-600 dark:text-emerald-400">
                   {formatVND(financialSummary.netDayTotal)}
@@ -5957,6 +6093,7 @@ export default function App() {
               deductions={effectiveDeductions}
               returns={returns}
               products={products}
+              debtPayments={inventoryData.debtPayments || []}
               hideMoney={hideMoney}
               onToggleHideMoney={handleToggleHideMoney}
               onSelectTab={handleSelectTab}
@@ -5977,12 +6114,20 @@ export default function App() {
                     {formatVND(financialSummary.grossCash)}
                   </div>
                   <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                    {
-                      periodBills.filter(
-                        (b) => b.paymentType === 'cash' && !isOwnerUseBill(b)
-                      ).length
-                    }{' '}
-                    hóa đơn
+                    {financialSummary.periodDebtCashCollected > 0 ? (
+                      <span className="text-emerald-700 dark:text-emerald-300 font-semibold font-mono">
+                        {formatVND(financialSummary.grossCashFromBills)} bill + {formatVND(financialSummary.periodDebtCashCollected)} thu nợ
+                      </span>
+                    ) : (
+                      <span>
+                        {
+                          periodBills.filter(
+                            (b) => b.paymentType === 'cash' && !isOwnerUseBill(b)
+                          ).length
+                        }{' '}
+                        hóa đơn
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -5991,10 +6136,16 @@ export default function App() {
                     2. Chuyển khoản
                   </div>
                   <div className="mt-1 text-base sm:text-2xl font-bold font-mono text-blue-600 dark:text-blue-400 truncate">
-                    {formatVND(financialSummary.grossTransfer)}
+                    {formatVND(financialSummary.netTransferRevenue)}
                   </div>
                   <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                    {periodBills.filter((b) => b.paymentType === 'transfer').length} hóa đơn CK
+                    {financialSummary.periodDebtTransferCollected > 0 ? (
+                      <span className="text-blue-700 dark:text-blue-300 font-semibold font-mono">
+                        {formatVND(financialSummary.grossTransferFromBills)} bill + {formatVND(financialSummary.periodDebtTransferCollected)} thu nợ CK
+                      </span>
+                    ) : (
+                      <span>{periodBills.filter((b) => b.paymentType === 'transfer').length} hóa đơn CK</span>
+                    )}
                   </div>
                 </div>
 
@@ -6018,12 +6169,19 @@ export default function App() {
                     {formatVND(financialSummary.totalDebt)}
                   </div>
                   <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                    {
-                      periodBills.filter(
-                        (b) => b.paymentType === 'debt' && b.debtStatus !== 'paid'
-                      ).length
-                    }{' '}
-                    bill ghi nợ (SL món vẫn tính vào TK ngày)
+                    <span>
+                      {
+                        periodBills.filter(
+                          (b) => b.paymentType === 'debt' && b.debtStatus !== 'paid'
+                        ).length
+                      }{' '}
+                      bill đang nợ
+                    </span>
+                    {financialSummary.periodSettledDebtTotal > 0 && (
+                      <span className="ml-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                        · Đã thu: +{formatVND(financialSummary.periodSettledDebtTotal)}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -6067,75 +6225,194 @@ export default function App() {
                 </div>
 
                 {netFormulaTab === 'net_summary' ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
-                    <div className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
-                      <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                        Tiền Mặt Thực Nhận (Sau Khoản Trừ)
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
+                    {/* Ô 1: Tiền mặt ca bán sau khoản trừ */}
+                    <div className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 flex flex-col justify-between">
+                      <div>
+                        <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                          1. Tiền Mặt Bán Ngày (Sau Trừ Chi)
+                        </div>
+                        <div className="mt-1.5 text-lg sm:text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                          {formatVND(financialSummary.netCashRevenue)}
+                        </div>
                       </div>
-                      <div className="mt-1.5 text-lg sm:text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
-                        {formatVND(financialSummary.netCashRevenue)}
-                      </div>
-                      <div className="mt-1 text-[11px] font-mono text-slate-500">
-                        ({formatVND(financialSummary.grossCash)} -{' '}
-                        {formatVND(financialSummary.totalDeductions)})
-                      </div>
-                    </div>
-
-                    <div className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
-                      <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                        Doanh Thu Chuyển Khoản
-                      </div>
-                      <div className="mt-1.5 text-lg sm:text-xl font-bold font-mono text-blue-600 dark:text-blue-400">
-                        {formatVND(financialSummary.netTransferRevenue)}
-                      </div>
-                      <div className="mt-1 text-[11px] text-slate-500">
-                        Toàn bộ bill CK / VietQR
+                      <div className="mt-2 text-[11px] font-mono text-slate-500">
+                        {formatVND(financialSummary.grossCashFromBills)} bill - {formatVND(financialSummary.totalDeductions)} chi
                       </div>
                     </div>
 
-                    <div className="p-3.5 sm:p-4 rounded-xl border-2 border-emerald-500/50 bg-emerald-50/30 dark:bg-emerald-950/20">
-                      <div className="text-xs font-bold text-slate-900 dark:text-white">
-                        TỔNG NGÀY THỰC THU
+                    {/* Ô 2: CÔNG NỢ ĐÃ THANH TOÁN */}
+                    <div className="p-3.5 sm:p-4 rounded-xl border border-amber-300/80 dark:border-amber-800/80 bg-amber-50/60 dark:bg-amber-950/30 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                            <span>2. Công Nợ Đã Thanh Toán</span>
+                          </span>
+                          {financialSummary.periodDebtPayments.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setShowSettledDebtsModal(true)}
+                              className="text-[10px] font-bold text-amber-700 dark:text-amber-300 hover:underline cursor-pointer"
+                            >
+                              Chi tiết ({financialSummary.periodDebtPayments.length})
+                            </button>
+                          )}
+                        </div>
+                        <div className="mt-1.5 text-lg sm:text-xl font-bold font-mono text-amber-600 dark:text-amber-400">
+                          {formatVND(financialSummary.periodSettledDebtTotal)}
+                        </div>
                       </div>
-                      <div className="mt-1.5 text-xl sm:text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
-                        {formatVND(financialSummary.netDayTotal)}
+                      <div className="mt-2 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                        TM: {formatVND(financialSummary.periodDebtCashCollected)} · CK: {formatVND(financialSummary.periodDebtTransferCollected)}
                       </div>
-                      <div className="mt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                        Tổng gộp cả quán (gồm nợ): {formatVND(financialSummary.totalAllBillsGross)}
+                    </div>
+
+                    {/* Ô 3: TỔNG TIỀN MẶT THỰC NHẬN SAU KHI THU CÔNG NỢ */}
+                    <div className="p-3.5 sm:p-4 rounded-xl border-2 border-emerald-500/80 bg-emerald-50/70 dark:bg-emerald-950/40 shadow-xs ring-1 ring-emerald-500/20 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center gap-1">
+                            <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                            <span>3. Tiền Mặt Sau Thu Nợ</span>
+                          </span>
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-600 text-white">
+                            Két Tiền
+                          </span>
+                        </div>
+                        <div className="mt-1.5 text-xl sm:text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400">
+                          {formatVND(financialSummary.totalNetCashAfterDebt)}
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[11px] font-mono text-emerald-700 dark:text-emerald-300">
+                        = {formatVND(financialSummary.netCashRevenue)} ca bán + {formatVND(financialSummary.periodDebtCashCollected)} thu nợ TM
+                      </div>
+                    </div>
+
+                    {/* Ô 4: Doanh thu chuyển khoản */}
+                    <div className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 flex flex-col justify-between">
+                      <div>
+                        <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                          4. Doanh Thu Chuyển Khoản
+                        </div>
+                        <div className="mt-1.5 text-lg sm:text-xl font-bold font-mono text-blue-600 dark:text-blue-400">
+                          {formatVND(financialSummary.netTransferRevenue)}
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[11px] text-slate-500">
+                        {financialSummary.periodDebtTransferCollected > 0
+                          ? `${formatVND(financialSummary.grossTransferFromBills)} bill + ${formatVND(financialSummary.periodDebtTransferCollected)} thu nợ CK`
+                          : 'Toàn bộ bill CK / VietQR'}
+                      </div>
+                    </div>
+
+                    {/* Ô 5: Tổng ngày thực thu */}
+                    <div className="p-3.5 sm:p-4 rounded-xl border-2 border-blue-500/60 bg-blue-50/40 dark:bg-blue-950/30 flex flex-col justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-slate-900 dark:text-white">
+                          5. TỔNG NGÀY THỰC THU
+                        </div>
+                        <div className="mt-1.5 text-xl sm:text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                          {formatVND(financialSummary.netDayTotal)}
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                        Tiền mặt sau nợ ({formatVND(financialSummary.totalNetCashAfterDebt)}) + CK ({formatVND(financialSummary.netTransferRevenue)})
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-xs space-y-2">
-                    <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-800">
-                      <span>(+) Doanh thu Tiền mặt:</span>
-                      <span className="font-semibold text-emerald-600">
-                        {formatVND(financialSummary.grossCash)}
+                  <div className="p-4 sm:p-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-xs space-y-2.5">
+                    <div className="flex items-center justify-between py-1.5 border-b border-slate-200 dark:border-slate-800">
+                      <span className="text-slate-600 dark:text-slate-400">(+) Doanh thu Tiền mặt từ hóa đơn ca ngày:</span>
+                      <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                        {formatVND(financialSummary.grossCashFromBills)}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-800">
-                      <span>(+) Doanh thu Chuyển khoản:</span>
-                      <span className="font-semibold text-blue-600">
-                        {formatVND(financialSummary.grossTransfer)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-800">
-                      <span>(-) Tổng Khoản trừ (Chi tiêu trong ngày):</span>
-                      <span className="font-semibold text-rose-600">
+                    <div className="flex items-center justify-between py-1.5 border-b border-slate-200 dark:border-slate-800">
+                      <span className="text-slate-600 dark:text-slate-400">(-) Tổng Khoản trừ (Chi tiêu trong ngày):</span>
+                      <span className="font-semibold text-rose-600 dark:text-rose-400">
                         -{formatVND(financialSummary.totalDeductions)}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between pt-2 text-sm font-bold text-slate-900 dark:text-white">
-                      <span>(=) DOANH THU TỔNG NGÀY (Tiền mặt + CK - Khoản trừ):</span>
+                    <div className="flex items-center justify-between py-1.5 border-b border-slate-200 dark:border-slate-800 font-bold text-slate-800 dark:text-slate-200">
+                      <span>(=) Tiền mặt bán hàng ca ngày (Sau chi phí, trước thu nợ):</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
+                        {formatVND(financialSummary.netCashRevenue)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between py-1.5 border-b border-slate-200 dark:border-slate-800 text-amber-600 dark:text-amber-400">
+                      <span>(+) Công nợ đã thanh toán bằng Tiền mặt (tất toán / trả góp):</span>
+                      <span className="font-semibold">
+                        +{formatVND(financialSummary.periodDebtCashCollected)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 px-3 rounded-lg border-2 border-emerald-500/60 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold text-sm">
+                      <span>(=) TỔNG TIỀN MẶT THỰC NHẬN SAU KHI THU CÔNG NỢ (Két tiền):</span>
+                      <span className="text-base font-extrabold">
+                        {formatVND(financialSummary.totalNetCashAfterDebt)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between py-1.5 border-b border-slate-200 dark:border-slate-800 text-blue-600 dark:text-blue-400">
+                      <span>(+) Doanh thu Chuyển khoản (Hóa đơn CK: {formatVND(financialSummary.grossTransferFromBills)} + Thu nợ CK: {formatVND(financialSummary.periodDebtTransferCollected)}):</span>
+                      <span className="font-semibold">
+                        {formatVND(financialSummary.netTransferRevenue)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between pt-2.5 text-sm sm:text-base font-bold text-slate-900 dark:text-white border-t-2 border-slate-300 dark:border-slate-700">
+                      <span>(=) DOANH THU TỔNG NGÀY THỰC THU (Tiền mặt thực nhận + Chuyển khoản):</span>
+                      <span className="text-emerald-600 dark:text-emerald-400 font-extrabold">
                         {formatVND(financialSummary.netDayTotal)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-dashed border-slate-200 dark:border-slate-800 text-xs text-amber-600 dark:text-amber-400">
-                      <span>(Thành phần riêng) Công nợ trong kỳ:</span>
+                      <span>(Thành phần riêng) Công nợ phát sinh mới còn chưa trả:</span>
                       <span className="font-semibold">
                         {formatVND(financialSummary.totalDebt)}
                       </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Danh sách chi tiết các khoản công nợ đã thu trong kỳ (nếu có) */}
+                {financialSummary.periodDebtPayments.length > 0 && (
+                  <div className="p-3.5 sm:p-4 rounded-xl border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                        <span className="text-xs font-bold text-slate-900 dark:text-white">
+                          Danh Sách {financialSummary.periodDebtPayments.length} Khoản Công Nợ Đã Thu Trong Kỳ (Tổng: {formatVND(financialSummary.periodSettledDebtTotal)})
+                        </span>
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                        Tiền mặt: <strong className="text-emerald-600">{formatVND(financialSummary.periodDebtCashCollected)}</strong> · Chuyển khoản: <strong className="text-blue-600">{formatVND(financialSummary.periodDebtTransferCollected)}</strong>
+                      </div>
+                    </div>
+                    <div className="divide-y divide-amber-200/60 dark:divide-amber-900/50 text-xs font-mono">
+                      {financialSummary.periodDebtPayments.map((p) => (
+                        <div key={p.id} className="py-2 flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <span className="font-bold text-slate-900 dark:text-white">{p.debtorName || 'Khách nợ'}</span>
+                            <span className="text-slate-500 text-[11px] ml-1.5 font-sans">({p.billCode})</span>
+                            <span className="text-slate-400 text-[11px] ml-1.5 font-sans">· Ngày trả: {formatDateDMY(p.paidDate)}</span>
+                            {p.note && <span className="text-slate-500 text-[10px] ml-1.5 italic font-sans">· {p.note}</span>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                p.paymentMethod === 'cash'
+                                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                  : 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                              }`}
+                            >
+                              {p.paymentMethod === 'cash' ? 'Tiền mặt' : 'Chuyển khoản'}
+                            </span>
+                            <span className="font-bold text-emerald-600 dark:text-emerald-400 text-sm">
+                              +{formatVND(p.amount)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -6647,6 +6924,8 @@ export default function App() {
               existingBills={bills}
               existingDebtors={effectiveDebtors}
               onDeleteDebtor={handleDeleteDebtor}
+              deductionCategories={effectiveDeductionCategories}
+              onAddExpenseDeduction={handleAddExpenseDeduction}
               autoAddProducts={autoAddProducts}
               onToggleAutoAddProducts={setAutoAddProducts}
               onSaveExtractedBill={handleSaveExtractedBill}
@@ -6737,6 +7016,29 @@ export default function App() {
                 })
               }
               requestConfirm={requestConfirm}
+            />
+          )}
+
+          {/* TAB 3C: KITCHEN & SUPPLIES INVENTORY & SUPPLIER DEBT */}
+          {activeTab === 'kitchen_inventory' && allowedTabs.includes('kitchen_inventory') && (
+            <KitchenInventoryTab
+              inventoryData={inventoryData}
+              onSaveInventoryData={handleSaveInventoryData}
+              products={products}
+              bills={bills}
+              billItems={effectiveBillItems}
+              returns={returns}
+              categories={effectiveCategories}
+              canWrite={canWrite}
+              canDelete={canDelete}
+              currentUsername={currentStaffAccount.username}
+              todayBusinessStr={todayStr}
+              requestConfirm={requestConfirm}
+              onOpenBeverageInventory={
+                allowedTabs.includes('inventory')
+                  ? () => handleSelectTab('inventory')
+                  : undefined
+              }
             />
           )}
 
@@ -7375,6 +7677,108 @@ export default function App() {
                 className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
               >
                 Xác nhận đổi {selectedBillIds.size} hóa đơn
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settled Debts Detail Modal */}
+      {showSettledDebtsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                    Chi Tiết Công Nợ Đã Thanh Toán Trong Kỳ
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Kỳ đối soát: <strong className="text-slate-800 dark:text-slate-200">{periodLabel}</strong> · Tổng thu: <strong className="text-emerald-600 font-mono">{formatVND(financialSummary.periodSettledDebtTotal)}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSettledDebtsModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-700/80 font-mono">
+                <div>
+                  <div className="text-[11px] text-slate-500">Thu bằng Tiền mặt:</div>
+                  <div className="text-base font-bold text-emerald-600 dark:text-emerald-400">
+                    {formatVND(financialSummary.periodDebtCashCollected)}
+                  </div>
+                  <div className="text-[10px] text-slate-400">Đã cộng vào két tiền mặt</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500">Thu bằng Chuyển khoản:</div>
+                  <div className="text-base font-bold text-blue-600 dark:text-blue-400">
+                    {formatVND(financialSummary.periodDebtTransferCollected)}
+                  </div>
+                  <div className="text-[10px] text-slate-400">Đã cộng vào doanh thu CK</div>
+                </div>
+              </div>
+
+              {financialSummary.periodDebtPayments.length === 0 ? (
+                <div className="p-6 text-center text-slate-500 italic">
+                  Không có khoản công nợ nào được thanh toán trong kỳ đối soát này.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Danh sách {financialSummary.periodDebtPayments.length} giao dịch thu nợ:
+                  </div>
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                    {financialSummary.periodDebtPayments.map((p, idx) => (
+                      <div key={p.id} className="p-3 flex flex-wrap items-center justify-between gap-2 hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                        <div>
+                          <div className="font-bold text-slate-900 dark:text-white">
+                            #{idx + 1}. {p.debtorName || 'Khách nợ'}
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5">
+                            Mã bill: <strong className="font-mono text-slate-700 dark:text-slate-300">{p.billCode}</strong> · Ngày trả: {formatDateDMY(p.paidDate)}
+                          </div>
+                          {p.note && (
+                            <div className="text-[11px] text-slate-400 mt-0.5 italic">
+                              Ghi chú: {p.note}
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold font-mono text-sm text-emerald-600 dark:text-emerald-400">
+                            +{formatVND(p.amount)}
+                          </div>
+                          <span
+                            className={`inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                              p.paymentMethod === 'cash'
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                            }`}
+                          >
+                            {p.paymentMethod === 'cash' ? 'Tiền mặt (Két)' : 'Chuyển khoản'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-3.5 sm:p-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setShowSettledDebtsModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold cursor-pointer hover:opacity-90"
+              >
+                Đóng
               </button>
             </div>
           </div>

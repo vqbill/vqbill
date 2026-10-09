@@ -18,6 +18,7 @@ import {
   CheckCircle2,
   Wallet,
   SlidersHorizontal,
+  UtensilsCrossed,
 } from 'lucide-react';
 import {
   ManagementTabId,
@@ -25,6 +26,7 @@ import {
   DeductionRecord,
   ReturnRecord,
   ProductRecord,
+  DebtPaymentRecord,
   StaffAccount,
   ROLE_LABELS,
 } from '../types';
@@ -44,6 +46,7 @@ interface HomeLaunchpadTabProps {
   deductions: DeductionRecord[];
   returns: ReturnRecord[];
   products: ProductRecord[];
+  debtPayments?: DebtPaymentRecord[];
   hideMoney: boolean;
   onToggleHideMoney: () => void;
   onSelectTab: (tab: ManagementTabId) => void;
@@ -58,6 +61,7 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
   deductions,
   returns,
   products,
+  debtPayments = [],
   hideMoney,
   onToggleHideMoney,
   onSelectTab,
@@ -122,8 +126,25 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       (sum, d) => sum + (Number(d.amount) || 0),
       0
     );
+
+    // Công nợ thu được hôm nay
+    const todayDebtPayments = (debtPayments || []).filter(
+      (p) => p && p.paidDate === todayStr
+    );
+    const todayDebtCash = todayDebtPayments
+      .filter((p) => p.paymentMethod === 'cash')
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const todayDebtTransfer = todayDebtPayments
+      .filter((p) => p.paymentMethod === 'transfer')
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const todaySettledDebt = todayDebtCash + todayDebtTransfer;
+
+    // Tiền mặt bán hàng ca ngày (sau khoản trừ)
     const netCash = grossCash - totalDed;
-    const netDayTotal = grossCash + grossTransfer - totalDed;
+    // Tổng tiền mặt thực nhận sau khi thu công nợ
+    const totalCashAfterDebt = netCash + todayDebtCash;
+    // Tổng ngày thực thu (gồm cả thu nợ TM & CK)
+    const netDayTotal = totalCashAfterDebt + grossTransfer + todayDebtTransfer;
 
     const recentBills = [...bills]
       .sort(
@@ -139,9 +160,15 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       transferCount,
       debtCount,
       grossCash,
-      grossTransfer,
+      grossTransfer: grossTransfer + todayDebtTransfer,
+      grossTransferFromBills: grossTransfer,
       totalDed,
       netCash,
+      todayDebtCash,
+      todayDebtTransfer,
+      todaySettledDebt,
+      todayDebtPaymentsCount: todayDebtPayments.length,
+      totalCashAfterDebt,
       netDayTotal,
       todayDebt,
       todayDeductionsCount: todayDeductions.length,
@@ -149,7 +176,7 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       unpaidDebtBillsCount: unpaidDebtBills.length,
       recentBills,
     };
-  }, [bills, deductions, returns, todayStr]);
+  }, [bills, deductions, returns, debtPayments, todayStr]);
 
   const quickActions: {
     id: ManagementTabId;
@@ -215,6 +242,17 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       accentClass:
         'border-cyan-200/90 dark:border-cyan-900/60 hover:border-cyan-500 dark:hover:border-cyan-500',
       btnClass: 'text-cyan-700 dark:text-cyan-300',
+    },
+    {
+      id: 'kitchen_inventory',
+      title: 'Kho Bếp, Tạp Vụ & NPP',
+      pathLabel: '/kho-bep-npp',
+      desc: 'Quản lý nguyên vật liệu bếp (thịt, cá, gia vị...), vật tư tạp vụ (ga, nước rửa chén...), phiếu nhập và đối soát công nợ NPP.',
+      statText: 'Theo dõi tồn kho, nhập mới và đối soát công nợ chi tiết theo từng sản phẩm',
+      icon: <UtensilsCrossed className="w-5 h-5 text-teal-600 dark:text-teal-400" />,
+      accentClass:
+        'border-teal-200/90 dark:border-teal-900/60 hover:border-teal-500 dark:hover:border-teal-500',
+      btnClass: 'text-teal-700 dark:text-teal-300',
     },
     {
       id: 'debts',
@@ -379,13 +417,41 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
 
           <div className="p-3.5 rounded-xl bg-slate-50/80 dark:bg-slate-950/50 border border-slate-200/70 dark:border-slate-800/80">
             <div className="text-xs text-slate-500 dark:text-slate-400">
-              Tiền Mặt Thực Nhận Hôm Nay
+              Tiền Mặt Bán Ngày (Sau Khoản Trừ)
             </div>
             <div className="mt-1 text-lg sm:text-xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
               {formatVND(todayStats.netCash)}
             </div>
             <div className="mt-0.5 text-[11px] text-slate-500 font-mono">
               Đã trừ {todayStats.todayDeductionsCount} khoản chi
+            </div>
+          </div>
+
+          {todayStats.todaySettledDebt > 0 && (
+            <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800">
+              <div className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                Công Nợ Đã Thu Hôm Nay
+              </div>
+              <div className="mt-1 text-lg sm:text-xl font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400">
+                +{formatVND(todayStats.todaySettledDebt)}
+              </div>
+              <div className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400 font-mono">
+                TM: {formatVND(todayStats.todayDebtCash)} · CK: {formatVND(todayStats.todayDebtTransfer)}
+              </div>
+            </div>
+          )}
+
+          <div className="p-3.5 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border-2 border-emerald-500/70 shadow-xs">
+            <div className="text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center justify-between">
+              <span>Tiền Mặt Thực Nhận (Két Cuối Ca)</span>
+            </div>
+            <div className="mt-1 text-lg sm:text-xl font-black font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+              {formatVND(todayStats.totalCashAfterDebt)}
+            </div>
+            <div className="mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-300 font-mono">
+              {todayStats.todayDebtCash > 0
+                ? `${formatVND(todayStats.netCash)} bán + ${formatVND(todayStats.todayDebtCash)} thu nợ`
+                : 'Tiền mặt bán ca ngày sau khoản trừ'}
             </div>
           </div>
 
@@ -397,7 +463,7 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
               {formatVND(todayStats.grossTransfer)}
             </div>
             <div className="mt-0.5 text-[11px] text-slate-500 font-mono">
-              {todayStats.transferCount} hóa đơn chuyển khoản
+              {todayStats.transferCount} hóa đơn CK {todayStats.todayDebtTransfer > 0 ? `+ ${formatVND(todayStats.todayDebtTransfer)} thu nợ CK` : ''}
             </div>
           </div>
 
@@ -409,7 +475,7 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
               {formatVND(todayStats.netDayTotal)}
             </div>
             <div className="mt-0.5 text-[11px] text-slate-500 font-mono">
-              Tiền mặt + CK - Khoản trừ
+              Tiền mặt sau nợ + CK
             </div>
           </div>
         </div>

@@ -12,6 +12,7 @@ export type ManagementTabId =
   | 'ocr'
   | 'categories'
   | 'inventory'
+  | 'kitchen_inventory'
   | 'owner_use'
   | 'debts'
   | 'deductions'
@@ -106,6 +107,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
       'Quản lý tồn đầu, nhập thêm bia/nước ngọt trong ngày, tự động trừ lượng thực bán (đã trừ hoàn trả), kiểm thực tế cuối ca & cảnh báo sắp hết hàng',
   },
   {
+    id: 'kitchen_inventory',
+    label: 'Hàng Hóa & Tồn Kho (Bếp, Tạp Vụ & NPP)',
+    shortLabel: 'Hàng hóa & Tồn kho',
+    description:
+      'Quản lý hàng hóa, tồn kho thực phẩm (tươi sống, hải sản, rau, gia vị...), đồ tạp vụ, đồng bộ bia & nước ngọt, nhà phân phối và phiếu nhập',
+  },
+  {
     id: 'owner_use',
     label: 'Chủ / Quản lý Sử dụng (0đ)',
     shortLabel: 'Chủ / QL dùng',
@@ -188,6 +196,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'ocr',
       'categories',
       'inventory',
+      'kitchen_inventory',
       'owner_use',
       'debts',
       'deductions',
@@ -212,6 +221,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'ocr',
       'categories',
       'inventory',
+      'kitchen_inventory',
       'owner_use',
       'debts',
       'deductions',
@@ -270,7 +280,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.INVENTORY]: {
     role: UserRole.INVENTORY,
-    allowedTabs: ['home', 'categories', 'inventory', 'owner_use'],
+    allowedTabs: ['home', 'categories', 'inventory', 'kitchen_inventory', 'owner_use'],
     canWrite: true,
     canDelete: true,
     actionMode: 'full_crud',
@@ -335,6 +345,7 @@ export interface BillRecord {
   paymentType: PaymentType;
   debtorName: string;
   debtStatus: DebtStatus;
+  settleDate?: string; // Ngày tất toán công nợ (YYYY-MM-DD)
   subtotalAmount?: number;
   discountAmount?: number;
   totalAmount: number;
@@ -551,6 +562,88 @@ export interface CustomCategoryGroup {
   createdAtMs?: number;
 }
 
+export interface KitchenSupplier {
+  id: string;
+  name: string;
+  phone?: string;
+  address?: string;
+  contactPerson?: string;
+  note?: string;
+  createdAtMs: number;
+  updatedAtMs?: number;
+}
+
+export interface KitchenSupplyItem {
+  id: string;
+  name: string;
+  category: string; // 'Bếp - Thịt cá' | 'Bếp - Rau củ quả' | 'Gia vị & Chế biến' | 'Tạp vụ & Vệ sinh' | 'Nhiên liệu & Gas' | 'Bia & Nước ngọt' | 'Khác'
+  unit: string; // kg, con, can, thùng, bình, gói, bao, lốc...
+  currentStock: number; // Tồn kho hiện tại
+  minStockAlert?: number; // Cảnh báo tồn kho tối thiểu
+  defaultUnitPrice?: number; // Đơn giá tham khảo gần nhất
+  defaultSupplierId?: string; // Nhà phân phối mặc định
+  isBeverageLinked?: boolean; // Liên hệ với danh mục Bia / Nước ngọt
+  beverageProductName?: string; // Tên sản phẩm bia/nước ngọt liên kết (nếu có)
+  note?: string;
+  createdAtMs: number;
+  updatedAtMs?: number;
+}
+
+export interface KitchenReceiptItem {
+  supplyItemId: string;
+  supplyItemName: string;
+  category: string;
+  unit: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  note?: string;
+}
+
+export interface KitchenReceipt {
+  id: string;
+  receiptCode: string; // PN-YYYYMMDD-XXX
+  receiptDate: string; // YYYY-MM-DD
+  supplierId: string;
+  supplierName: string;
+  items: KitchenReceiptItem[];
+  totalAmount: number; // Tổng giá trị phiếu nhập
+  paidAmount: number; // Số tiền đã thanh toán
+  debtAmount: number; // Số tiền còn nợ nhà phân phối (= totalAmount - paidAmount)
+  paymentStatus: 'paid' | 'partial' | 'debt'; // Đã thanh toán | Trả một phần | Chưa trả
+  paymentMethod: 'cash' | 'transfer' | 'debt';
+  note?: string;
+  createdAtMs: number;
+  updatedAtMs?: number;
+  createdBy?: string;
+}
+
+export interface KitchenSupplierPayment {
+  id: string;
+  supplierId: string;
+  supplierName: string;
+  receiptId?: string; // Thanh toán theo phiếu cụ thể hoặc thanh toán tổng nợ
+  receiptCode?: string;
+  amount: number;
+  paymentMethod: 'cash' | 'transfer';
+  paidDate: string; // YYYY-MM-DD
+  note?: string;
+  createdAtMs: number;
+  createdBy?: string;
+}
+
+export interface KitchenStockUsageLog {
+  id: string;
+  usageDate: string; // YYYY-MM-DD
+  supplyItemId: string;
+  supplyItemName: string;
+  quantity: number; // Số lượng xuất / sử dụng
+  unit: string;
+  reason?: string; // VD: "Bếp nấu ca trưa", "Tạp vụ dọn khu vực sảnh", "Hao hụt / hỏng"...
+  usedBy?: string;
+  createdAtMs: number;
+}
+
 export interface WorkspaceInventoryData {
   trackedCategories: string[]; // Mặc định ['Bia', 'Nước ngọt']
   deductionCategories?: string[]; // Danh sách nhóm khoản trừ tùy chỉnh & mặc định
@@ -564,6 +657,12 @@ export interface WorkspaceInventoryData {
   importLogs: InventoryImportLog[];
   categoryAliases?: Record<string, string[]>; // Danh mục -> Danh sách tên riêng / bí danh (ví dụ: "Bia" -> ["bia", "beer", "a", "tiger"])
   customCategoryGroups?: CustomCategoryGroup[]; // Danh sách nhóm danh mục do người dùng tự tạo tên & chọn category trên website để xem
+  kitchenCategories?: string[]; // Danh sách nhóm hàng hóa kho bếp & tạp vụ ('Hàng tươi sống', 'Hải sản', 'Rau', 'Gia vị'...)
+  kitchenSuppliers?: KitchenSupplier[]; // Nhà phân phối thực phẩm, bếp, tạp vụ
+  kitchenSupplyItems?: KitchenSupplyItem[]; // Danh mục hàng hóa kho bếp & tạp vụ
+  kitchenReceipts?: KitchenReceipt[]; // Phiếu nhập hàng kho bếp & tạp vụ
+  kitchenSupplierPayments?: KitchenSupplierPayment[]; // Lịch sử trả nợ cho nhà phân phối
+  kitchenStockUsages?: KitchenStockUsageLog[]; // Lịch sử xuất kho / sử dụng nguyên vật liệu
   telegramConfig?: TelegramBotConfig; // Cấu hình kết nối Bot Telegram
   kiotvietSyncLocked?: boolean; // Khóa / Mở khóa chức năng sync KiotViet POS để giảm tải hệ thống
   updatedAtMs: number;
@@ -708,6 +807,9 @@ export function getEffectiveRolePermissions(
     if (!tabs.includes('inventory')) {
       tabs = [...tabs, 'inventory'];
     }
+    if (!tabs.includes('kitchen_inventory')) {
+      tabs = [...tabs, 'kitchen_inventory'];
+    }
     if (!tabs.includes('owner_use')) {
       tabs = [...tabs, 'owner_use'];
     }
@@ -722,9 +824,12 @@ export function getEffectiveRolePermissions(
       account.role === UserRole.INVENTORY ||
       account.role === UserRole.VIEWER)
   ) {
-    // Ensure existing cached roles automatically receive the new 'inventory', 'owner_use', and 'salary_advances' tabs
+    // Ensure existing cached roles automatically receive the new 'inventory', 'kitchen_inventory', 'owner_use', and 'salary_advances' tabs
     if (!tabs.includes('inventory')) {
       tabs = [...tabs, 'inventory'];
+    }
+    if (!tabs.includes('kitchen_inventory')) {
+      tabs = [...tabs, 'kitchen_inventory'];
     }
     if (!tabs.includes('owner_use')) {
       tabs = [...tabs, 'owner_use'];
