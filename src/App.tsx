@@ -108,6 +108,7 @@ import {
   extractReturnTableName,
   formatReturnDeductionTitle,
   isOwnerUseBill,
+  getBillPaymentBreakdown,
   mergeInventoryData,
   shiftDateByDays,
 } from './utils/parser';
@@ -167,7 +168,12 @@ import {
 import { AuthScreen } from './components/AuthScreen';
 import { HomeLaunchpadTab } from './components/HomeLaunchpadTab';
 import { LunarCalendarFloatingWidget } from './components/LunarCalendarFloatingWidget';
-import { RevenueColumnChart, DailyRevenuePoint } from './components/RevenueCharts';
+import {
+  RevenueColumnChart,
+  DailyRevenuePoint,
+  WeeklyRevenueTrendChart,
+  WeeklyTrendDayPoint,
+} from './components/RevenueCharts';
 import { OcrScannerTab } from './components/OcrScannerTab';
 import { CategoryAnalyticsTab } from './components/CategoryAnalyticsTab';
 import { BeverageInventoryTab } from './components/BeverageInventoryTab';
@@ -443,15 +449,27 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, [resolveTabFromLocation]);
 
-  // Settings
-  const [autoAddProducts, setAutoAddProducts] = useState<boolean>(true);
+  // Settings (Default: không tự lưu món mới vào menu)
+  const [autoAddProducts, setAutoAddProductsState] = useState<boolean>(() => {
+    const saved = localStorage.getItem('vqbill_auto_add_products');
+    return saved !== null ? saved === 'true' : false;
+  });
+
+  const setAutoAddProducts = (val: boolean) => {
+    setAutoAddProductsState(val);
+    try {
+      localStorage.setItem('vqbill_auto_add_products', String(val));
+    } catch {
+      // Ignore localStorage write error
+    }
+  };
 
   // Filter & Search State on Dashboard
   const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('all');
   const [customStartDate, setCustomStartDate] = useState<string>('2026-08-01');
   const [customEndDate, setCustomEndDate] = useState<string>(todayStr);
   const [paymentFilter, setPaymentFilter] = useState<
-    'all' | 'cash' | 'transfer' | 'debt' | 'has_return'
+    'all' | 'cash' | 'transfer' | 'debt' | 'split' | 'has_return'
   >('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [searchKeyword, setSearchKeyword] = useState<string>('');
@@ -1879,8 +1897,13 @@ export default function App() {
   const displayedBills = useMemo(() => {
     return periodBills
       .filter((b) => {
-        if (paymentFilter === 'cash') return b.paymentType === 'cash' && !isOwnerUseBill(b);
-        if (paymentFilter === 'transfer') return b.paymentType === 'transfer';
+        if (paymentFilter === 'cash') {
+          return (b.paymentType === 'cash' || (b.paymentType === 'split' && (b.paidCashAmount || 0) > 0)) && !isOwnerUseBill(b);
+        }
+        if (paymentFilter === 'transfer') {
+          return (b.paymentType === 'transfer' || (b.paymentType === 'split' && (b.paidTransferAmount || 0) > 0)) && !isOwnerUseBill(b);
+        }
+        if (paymentFilter === 'split') return b.paymentType === 'split';
         if (paymentFilter === 'debt') return b.paymentType === 'debt';
         if (paymentFilter === 'has_return') return (b.deductedAmount || 0) > 0;
         if ((paymentFilter as string) === 'owner_use') return isOwnerUseBill(b);
@@ -1944,13 +1967,18 @@ export default function App() {
 
     // Doanh thu tiền mặt từ hóa đơn phát sinh trong kỳ (chưa tính khoản thu nợ)
     const grossCashFromBills = periodBills
-      .filter((b) => b.paymentType === 'cash' && !isOwnerUseBill(b))
-      .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
+      .filter((b) => !isOwnerUseBill(b))
+      .reduce((s, b) => {
+        const bd = getBillPaymentBreakdown(b);
+        return s + bd.cash;
+      }, 0);
 
     // Doanh thu chuyển khoản từ hóa đơn phát sinh trong kỳ
     const grossTransferFromBills = periodBills
-      .filter((b) => b.paymentType === 'transfer')
-      .reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
+      .reduce((s, b) => {
+        const bd = getBillPaymentBreakdown(b);
+        return s + bd.transfer;
+      }, 0);
 
     // Tổng khoản trừ (chi tiêu ngày)
     const totalDeductions = periodDeductions.reduce((s, d) => s + d.amount, 0);
@@ -2110,13 +2138,12 @@ export default function App() {
         debtPaidCash: 0,
         debtPaidTransfer: 0,
       };
-      if (b.paymentType === 'cash') cur.cash += Number(b.totalAmount) || 0;
-      else if (b.paymentType === 'transfer') cur.transfer += Number(b.totalAmount) || 0;
-      else if (b.paymentType === 'debt' && b.debtStatus !== 'paid')
-        cur.debt += Math.max(
-          0,
-          (Number(b.totalAmount) || 0) - (Number(b.deductedAmount) || 0)
-        );
+      if (!isOwnerUseBill(b)) {
+        const bd = getBillPaymentBreakdown(b);
+        cur.cash += bd.cash;
+        cur.transfer += bd.transfer;
+        cur.debt += bd.debt;
+      }
       dateMap.set(b.billDate, cur);
     }
 
@@ -2170,6 +2197,121 @@ export default function App() {
         };
       });
   }, [periodBills, periodDeductions, inventoryData.debtPayments]);
+
+  // Weekly Revenue Trend Line Chart Data (Last 7 Days from todayStr)
+  const weeklyTrendData = useMemo<WeeklyTrendDayPoint[]>(() => {
+    // Generate 7 consecutive dates ending today
+    const dates: string[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().slice(0, 10));
+    }
+
+    const dayLabelsMap = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+
+    // Map bills, deductions, debtPayments for these 7 dates across all bills
+    const dateMetrics = new Map<
+      string,
+      {
+        cashBills: number;
+        transferBills: number;
+        debtBills: number;
+        deductions: number;
+        debtPaidCash: number;
+        debtPaidTransfer: number;
+        billsCount: number;
+      }
+    >();
+
+    for (const d of dates) {
+      dateMetrics.set(d, {
+        cashBills: 0,
+        transferBills: 0,
+        debtBills: 0,
+        deductions: 0,
+        debtPaidCash: 0,
+        debtPaidTransfer: 0,
+        billsCount: 0,
+      });
+    }
+
+    // Process all bills
+    for (const b of bills) {
+      if (!b || !b.billDate || !dateMetrics.has(b.billDate)) continue;
+      const m = dateMetrics.get(b.billDate)!;
+      m.billsCount += 1;
+      if (!isOwnerUseBill(b)) {
+        const bd = getBillPaymentBreakdown(b);
+        m.cashBills += bd.cash;
+        m.transferBills += bd.transfer;
+        m.debtBills += bd.debt;
+      }
+    }
+
+    // Process all deductions
+    for (const d of effectiveDeductions) {
+      const dateKey = d.deductionDate || d.billDate;
+      if (!dateKey || !dateMetrics.has(dateKey)) continue;
+      const m = dateMetrics.get(dateKey)!;
+      m.deductions += Number(d.amount) || 0;
+    }
+
+    // Process all debt payments
+    const debtPaymentsList = inventoryData.debtPayments || [];
+    for (const p of debtPaymentsList) {
+      if (!p || !p.paidDate || !dateMetrics.has(p.paidDate)) continue;
+      const m = dateMetrics.get(p.paidDate)!;
+      const pAmt = Number(p.amount) || 0;
+      if (p.paymentMethod === 'cash') {
+        m.debtPaidCash += pAmt;
+      } else if (p.paymentMethod === 'transfer') {
+        m.debtPaidTransfer += pAmt;
+      }
+    }
+
+    // Build WeeklyTrendDayPoint list
+    let prevNet: number | null = null;
+    return dates.map((dStr) => {
+      const m = dateMetrics.get(dStr)!;
+      const dt = new Date(`${dStr}T00:00:00`);
+      const dayLabel = dayLabelsMap[dt.getDay()] || 'T?';
+      const parts = dStr.split('-');
+      const shortDate = parts.length === 3 ? `${parts[2]}/${parts[1]}` : dStr;
+
+      const cashRevenue = m.cashBills + m.debtPaidCash - m.deductions;
+      const transferRevenue = m.transferBills + m.debtPaidTransfer;
+      const debtCollected = m.debtPaidCash + m.debtPaidTransfer;
+      const netRevenue = m.cashBills + m.transferBills + debtCollected - m.deductions;
+      const grossRevenue = m.cashBills + m.transferBills + m.debtBills;
+
+      let growthRatePct: number | undefined;
+      if (prevNet !== null) {
+        if (prevNet > 0) {
+          growthRatePct = Math.round(((netRevenue - prevNet) / prevNet) * 100);
+        } else if (netRevenue > 0) {
+          growthRatePct = 100;
+        } else {
+          growthRatePct = 0;
+        }
+      }
+      prevNet = netRevenue;
+
+      return {
+        date: dStr,
+        dayLabel,
+        shortDate,
+        netRevenue,
+        grossRevenue,
+        cashRevenue,
+        transferRevenue,
+        debtCollected,
+        deductions: m.deductions,
+        billsCount: m.billsCount,
+        growthRatePct,
+      };
+    });
+  }, [bills, effectiveDeductions, inventoryData.debtPayments, todayStr]);
 
   // Auth Handlers
   const handleStaffLoginSuccess = (acc: StaffAccount) => {
@@ -2627,6 +2769,8 @@ export default function App() {
     checkOutTime?: string;
     paymentType: PaymentType;
     debtorName: string;
+    paidCashAmount?: number;
+    paidTransferAmount?: number;
     note: string;
     subtotalAmount?: number;
     discountAmount?: number;
@@ -2679,6 +2823,8 @@ export default function App() {
       checkOutTime: params.checkOutTime,
       paymentType: params.paymentType,
       debtorName: params.debtorName,
+      paidCashAmount: params.paidCashAmount,
+      paidTransferAmount: params.paidTransferAmount,
       note: params.note,
       subtotalAmount: params.subtotalAmount,
       discountAmount: params.discountAmount,
@@ -2755,7 +2901,11 @@ export default function App() {
                 ? 'transfer'
                 : incoming.paymentType === 'debt'
                 ? 'debt'
+                : incoming.paymentType === 'split'
+                ? 'split'
                 : 'cash',
+            paidCashAmount: incoming.paymentType === 'split' ? incoming.paidCashAmount : undefined,
+            paidTransferAmount: incoming.paymentType === 'split' ? incoming.paidTransferAmount : undefined,
             debtorName: incoming.debtorName || '',
             note: incoming.tableName || 'Bàn KiotViet',
             subtotalAmount: subtotal,
@@ -2870,21 +3020,56 @@ export default function App() {
       ...updatedItems,
     ]);
 
-    if (updatedBill.settleDate) {
+    const isBillSettled =
+      updatedBill.debtStatus === 'paid' ||
+      (updatedBill.settleDate && (updatedBill.paymentType === 'debt' || Boolean(updatedBill.debtorName)));
+
+    if (isBillSettled && updatedBill.settleDate) {
       const existingPayments = inventoryData.debtPayments || [];
       const hasPaymentsForThisBill = existingPayments.some((p) => p.billId === updatedBill.id);
+      const effectiveMethod: 'cash' | 'transfer' =
+        updatedBill.settledMethod === 'transfer' ? 'transfer' : 'cash';
+      const netOrig = Math.max(
+        0,
+        (Number(updatedBill.totalAmount) || 0) - (Number(updatedBill.deductedAmount) || 0)
+      );
+
+      let nextPayments: DebtPaymentRecord[];
       if (hasPaymentsForThisBill) {
-        const nextPayments = existingPayments.map((p) =>
-          p.billId === updatedBill.id ? { ...p, paidDate: updatedBill.settleDate! } : p
+        // Cập nhật ngày trả và hình thức thanh toán cho các đợt thanh toán của bill này
+        nextPayments = existingPayments.map((p) =>
+          p.billId === updatedBill.id
+            ? {
+                ...p,
+                paidDate: updatedBill.settleDate!,
+                paymentMethod: updatedBill.settledMethod || p.paymentMethod || effectiveMethod,
+              }
+            : p
         );
-        const nextInv: WorkspaceInventoryData = {
-          ...inventoryData,
-          debtPayments: nextPayments,
-          updatedAtMs: Date.now(),
+      } else {
+        // Bill được đánh dấu đã tất toán nhưng chưa từng có bản ghi debtPayment, tạo bản ghi tất toán đầy đủ
+        const newPayment: DebtPaymentRecord = {
+          id: sanitizeId(`dpay_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
+          billId: updatedBill.id,
+          billCode: updatedBill.billCode,
+          debtorName: updatedBill.debtorName || 'Khách nợ',
+          amount: netOrig,
+          paymentMethod: effectiveMethod,
+          paidDate: updatedBill.settleDate!,
+          note: `Tất toán toàn bộ công nợ (${PAYMENT_LABELS[effectiveMethod]})`,
+          createdAtMs: Date.now(),
+          createdBy: currentStaffAccount?.username || 'admin',
         };
-        setInventoryData(nextInv);
-        saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+        nextPayments = [...existingPayments, newPayment];
       }
+
+      const nextInv: WorkspaceInventoryData = {
+        ...inventoryData,
+        debtPayments: nextPayments,
+        updatedAtMs: Date.now(),
+      };
+      setInventoryData(nextInv);
+      saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
     }
 
     showToast(
@@ -6418,7 +6603,12 @@ export default function App() {
                 )}
               </div>
 
-              {/* Row 3: Interactive Column Chart */}
+              {/* Row 3A: Weekly Revenue Trend Line Chart (7 Days) */}
+              <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs">
+                <WeeklyRevenueTrendChart data={weeklyTrendData} todayStr={todayStr} />
+              </div>
+
+              {/* Row 3B: Interactive Column Chart */}
               <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs">
                 <RevenueColumnChart data={chartData} />
               </div>
@@ -6457,6 +6647,7 @@ export default function App() {
                         <option value="all">Mọi hình thức</option>
                         <option value="cash">Tiền mặt</option>
                         <option value="transfer">Chuyển khoản</option>
+                        <option value="split">Tiền mặt + Chuyển khoản</option>
                         <option value="debt">Công nợ</option>
                         <option value="has_return">Có hoàn trả</option>
                         <option value="owner_use">Chủ / QL dùng (0đ)</option>
@@ -6636,6 +6827,8 @@ export default function App() {
                                     ? `Chủ / QL dùng (0đ)${
                                         bill.debtorName ? ` — ${bill.debtorName}` : ''
                                       }`
+                                    : bill.paymentType === 'split'
+                                    ? `TM: ${formatVND(getBillPaymentBreakdown(bill).cash)} + CK: ${formatVND(getBillPaymentBreakdown(bill).transfer)}`
                                     : `${PAYMENT_LABELS[bill.paymentType]}${
                                         bill.debtorName ? ` — Nợ: ${bill.debtorName}` : ''
                                       }`}
@@ -6804,8 +6997,15 @@ export default function App() {
                                   <div className="font-semibold text-slate-900 dark:text-white">
                                     {isOwnerUseBill(bill)
                                       ? 'Chủ / QL dùng (0đ)'
+                                      : bill.paymentType === 'split'
+                                      ? 'Tiền mặt + CK'
                                       : PAYMENT_LABELS[bill.paymentType]}
                                   </div>
+                                  {bill.paymentType === 'split' && (
+                                    <div className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
+                                      TM: {formatVND(getBillPaymentBreakdown(bill).cash)} · CK: {formatVND(getBillPaymentBreakdown(bill).transfer)}
+                                    </div>
+                                  )}
                                   {bill.debtorName && (
                                     <div
                                       className={`text-[11px] font-medium ${

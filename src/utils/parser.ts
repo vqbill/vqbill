@@ -71,6 +71,71 @@ export function formatReceiptMoney(amount: number): string {
   return num.toLocaleString('en-US');
 }
 
+/**
+ * Phân rã số tiền thanh toán của hóa đơn thành { cash, transfer, debt }
+ * - Hỗ trợ hóa đơn thanh toán kết hợp (split): VD bill 5 triệu, trả tiền mặt 1 triệu, chuyển khoản 4 triệu
+ * - Hỗ trợ hóa đơn thuần tiền mặt, thuần chuyển khoản, thuần công nợ
+ */
+export function getBillPaymentBreakdown(bill: {
+  paymentType: PaymentType;
+  totalAmount?: number;
+  paidCashAmount?: number;
+  paidTransferAmount?: number;
+  debtStatus?: string;
+  deductedAmount?: number;
+}): { cash: number; transfer: number; debt: number } {
+  const total = Math.max(0, Number(bill.totalAmount) || 0);
+
+  if (bill.paymentType === 'split') {
+    const rawCash = Number(bill.paidCashAmount);
+    const rawTransfer = Number(bill.paidTransferAmount);
+
+    let cash = 0;
+    let transfer = 0;
+
+    if (!isNaN(rawCash) && !isNaN(rawTransfer) && (rawCash > 0 || rawTransfer > 0)) {
+      cash = Math.max(0, rawCash);
+      transfer = Math.max(0, rawTransfer);
+      // Nếu tổng cash + transfer chưa khớp chính xác với total, ưu tiên giữ tỷ lệ hoặc phần còn lại
+      if (cash + transfer !== total) {
+        if (rawCash >= 0 && rawCash <= total) {
+          transfer = Math.max(0, total - cash);
+        } else if (rawTransfer >= 0 && rawTransfer <= total) {
+          cash = Math.max(0, total - transfer);
+        }
+      }
+    } else if (!isNaN(rawCash) && rawCash >= 0 && rawCash <= total) {
+      cash = rawCash;
+      transfer = Math.max(0, total - cash);
+    } else if (!isNaN(rawTransfer) && rawTransfer >= 0 && rawTransfer <= total) {
+      transfer = rawTransfer;
+      cash = Math.max(0, total - transfer);
+    } else {
+      // Mặc định nửa này nửa kia nếu chưa nhập
+      cash = Math.round(total / 2);
+      transfer = total - cash;
+    }
+
+    return { cash, transfer, debt: 0 };
+  }
+
+  if (bill.paymentType === 'cash') {
+    return { cash: total, transfer: 0, debt: 0 };
+  }
+
+  if (bill.paymentType === 'transfer') {
+    return { cash: 0, transfer: total, debt: 0 };
+  }
+
+  if (bill.paymentType === 'debt') {
+    const netOrig = Math.max(0, total - (Number(bill.deductedAmount) || 0));
+    const debt = bill.debtStatus !== 'paid' ? netOrig : 0;
+    return { cash: 0, transfer: 0, debt };
+  }
+
+  return { cash: total, transfer: 0, debt: 0 };
+}
+
 export function formatDateDMY(ymd?: string): string {
   if (!ymd) return '';
   const m = ymd.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);

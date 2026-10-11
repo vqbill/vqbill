@@ -35,6 +35,7 @@ import {
   formatDateDMY,
   extractBillTableName,
   isOwnerUseBill,
+  getBillPaymentBreakdown,
 } from '../utils/parser';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -109,16 +110,20 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
 
     for (const b of todayBills) {
       if (isOwnerUseBill(b)) continue;
-      const amt = Number(b.totalAmount) || 0;
+      const bd = getBillPaymentBreakdown(b);
+      grossCash += bd.cash;
+      grossTransfer += bd.transfer;
+      todayDebt += bd.debt;
+
       if (b.paymentType === 'cash') {
-        grossCash += amt;
         cashCount += 1;
       } else if (b.paymentType === 'transfer') {
-        grossTransfer += amt;
         transferCount += 1;
-      } else if (b.paymentType === 'debt' && b.debtStatus !== 'paid') {
-        todayDebt += amt;
+      } else if (b.paymentType === 'debt') {
         debtCount += 1;
+      } else if (b.paymentType === 'split') {
+        if (bd.cash > 0) cashCount += 1;
+        if (bd.transfer > 0) transferCount += 1;
       }
     }
 

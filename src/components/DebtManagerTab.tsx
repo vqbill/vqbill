@@ -97,12 +97,15 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
   const [inlinePrices, setInlinePrices] = useState<Record<string, number>>({});
   const [inlineNotes, setInlineNotes] = useState<Record<string, string>>({});
 
-  // Settle Debt Modal state (Tất toán công nợ kèm ngày tất toán)
+  // Settle Debt & Partial Payment Modal state
   const [settleModalBill, setSettleModalBill] = useState<BillRecord | null>(null);
+  const [settleModalMode, setSettleModalMode] = useState<'full' | 'partial'>('full');
   const [modalSettleDate, setModalSettleDate] = useState<string>(() => getCurrentBusinessDate());
   const [modalSettleMethod, setModalSettleMethod] = useState<'cash' | 'transfer'>('cash');
+  const [modalPartialAmount, setModalPartialAmount] = useState<string>('');
+  const [modalPartialNote, setModalPartialNote] = useState<string>('');
 
-  // Partial Debt Payment (Trả góp từng đợt) form state
+  // Partial Debt Payment (Trả góp từng đợt) form state inside bill details
   const [partialAmountInput, setPartialAmountInput] = useState<string>('');
   const [partialMethod, setPartialMethod] = useState<'cash' | 'transfer'>('cash');
   const [partialDate, setPartialDate] = useState<string>(() => getCurrentBusinessDate());
@@ -279,16 +282,59 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
     handleShowBillDetail(billId);
   };
 
-  const openSettleModal = (bill: BillRecord) => {
+  const openSettleModal = (bill: BillRecord, mode: 'full' | 'partial' = 'full') => {
     setSettleModalBill(bill);
+    setSettleModalMode(mode);
     setModalSettleDate(settleDateInput || getCurrentBusinessDate());
     setModalSettleMethod('cash');
+    setModalPartialAmount('');
+    setModalPartialNote('');
   };
 
   const handleConfirmModalSettle = async () => {
     if (!settleModalBill || !canWrite) return;
     const { remainingDebt } = getBillDebtMetrics(settleModalBill);
     const targetDate = modalSettleDate || getCurrentBusinessDate();
+
+    // Partial installment mode
+    if (settleModalMode === 'partial') {
+      const cleanAmt = Math.round(Number(modalPartialAmount.replace(/[^\d]/g, '')) || 0);
+      if (cleanAmt <= 0) return;
+      const cappedAmt = Math.min(remainingDebt, cleanAmt);
+      if (cappedAmt <= 0) return;
+      const afterRemain = Math.max(0, remainingDebt - cappedAmt);
+
+      requestConfirm({
+        title: 'Xác nhận Thu Nợ Từng Phần (Trả Góp Công Nợ)',
+        message: `Ghi nhận khách "${
+          settleModalBill.debtorName || 'Khách nợ'
+        }" trả trước ${formatVND(cappedAmt)} (${PAYMENT_LABELS[modalSettleMethod]}) vào ngày ${targetDate} cho Bill ${
+          settleModalBill.billCode
+        }?\n\nDư nợ còn lại sau đợt này: ${formatVND(afterRemain)}.`,
+        confirmLabel: `Thu ${formatVND(cappedAmt)}`,
+        variant: 'primary',
+        onConfirm: async () => {
+          setIsSettling(true);
+          try {
+            if (onRecordPartialDebtPayment) {
+              await onRecordPartialDebtPayment({
+                bill: settleModalBill,
+                amount: cappedAmt,
+                paymentMethod: modalSettleMethod,
+                paidDate: targetDate,
+                note: modalPartialNote.trim(),
+              });
+            }
+            setSettleModalBill(null);
+          } finally {
+            setIsSettling(false);
+          }
+        },
+      });
+      return;
+    }
+
+    // Full settlement mode
     requestConfirm({
       title: 'Xác nhận Tất Toán Dư Nợ Còn Lại',
       message: `Bạn có chắc chắn muốn thu dứt điểm số dư nợ còn lại ${formatVND(
@@ -762,17 +808,31 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                         </button>
                       )}
                       {!isPaid && canWrite && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openSettleModal(bill);
-                          }}
-                          className="px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Tất toán</span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openSettleModal(bill, 'partial');
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg border border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 text-xs font-semibold text-blue-700 dark:text-blue-300 inline-flex items-center gap-1 cursor-pointer"
+                            title="Thu nợ đợt này (Trả góp một phần)"
+                          >
+                            <Wallet className="w-3.5 h-3.5 text-blue-600" />
+                            <span>Thu đợt này</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openSettleModal(bill, 'full');
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Tất toán</span>
+                          </button>
+                        </>
                       )}
                       {allowDeleteDebt && (
                         <button
@@ -891,17 +951,31 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
                             </button>
                           )}
                           {!isPaid && canWrite && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openSettleModal(bill);
-                              }}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 cursor-pointer"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Tất toán</span>
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openSettleModal(bill, 'partial');
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 text-xs font-semibold text-blue-700 dark:text-blue-300 cursor-pointer"
+                                title="Thu nợ đợt này (Trả góp một phần)"
+                              >
+                                <Wallet className="w-3.5 h-3.5 text-blue-600" />
+                                <span>Thu đợt này</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openSettleModal(bill, 'full');
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 dark:text-emerald-300 cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Tất toán</span>
+                              </button>
+                            </>
                           )}
                           {allowDeleteDebt && (
                             <button
@@ -1549,127 +1623,261 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
         )}
       </div>
 
-      {/* POPUP MODAL TẤT TOÁN CÔNG NỢ - CÓ THÊM NGÀY TẤT TOÁN RÕ RÀNG */}
-      {settleModalBill && (
-        <div className="fixed inset-0 z-[100] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-5 space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="w-5 h-5" />
-                <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                  Tất Toán Công Nợ
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSettleModalBill(null)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* POPUP MODAL TẤT TOÁN CÔNG NỢ & THU NỢ TỪNG PHẦN */}
+      {settleModalBill && (() => {
+        const metrics = getBillDebtMetrics(settleModalBill);
+        const cleanEntered = Math.round(Number(modalPartialAmount.replace(/[^\d]/g, '')) || 0);
+        const cappedEntered = Math.min(metrics.remainingDebt, cleanEntered);
+        const afterRemain = Math.max(0, metrics.remainingDebt - cappedEntered);
 
-            {/* Bill & Debtor Info */}
-            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-500">Khách ghi nợ:</span>
-                <span className="font-bold text-slate-900 dark:text-white">
-                  {settleModalBill.debtorName || 'Khách ghi nợ'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Hóa đơn:</span>
-                <span className="font-mono text-slate-700 dark:text-slate-300">
-                  {settleModalBill.billCode} (Ngày nợ: {settleModalBill.billDate})
-                </span>
-              </div>
-              <div className="flex justify-between pt-1.5 border-t border-slate-200/70 dark:border-slate-700">
-                <span className="text-slate-700 dark:text-slate-200 font-semibold">
-                  Số dư nợ cần tất toán:
-                </span>
-                <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 text-sm">
-                  {formatVND(getBillDebtMetrics(settleModalBill).remainingDebt)}
-                </span>
-              </div>
-            </div>
-
-            {/* Ngày tất toán Input */}
-            <div className="space-y-1.5">
-              <label className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
-                <Calendar className="w-4 h-4 text-amber-500" />
-                <span>Ngày tất toán (Ngày thực nhận tiền)*:</span>
-              </label>
-              <input
-                type="date"
-                value={modalSettleDate}
-                onChange={(e) => setModalSettleDate(e.target.value)}
-                className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                required
-              />
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Khoản thu này sẽ được ghi nhận vào doanh thu và đối soát thực thu của ngày {modalSettleDate}.
-              </p>
-            </div>
-
-            {/* Hình thức thanh toán */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
-                Hình thức thanh toán*:
-              </label>
-              <div className="grid grid-cols-2 gap-2">
+        return (
+          <div className="fixed inset-0 z-[100] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+            <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-5 sm:p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
+              {/* Modal Header with Mode Switcher */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                    settleModalMode === 'partial'
+                      ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400'
+                      : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                  }`}>
+                    {settleModalMode === 'partial' ? <Wallet className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-white">
+                      {settleModalMode === 'partial' ? 'Thu Nợ Từng Phần (Trả Góp)' : 'Tất Toán Toàn Bộ Công Nợ'}
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Bill {settleModalBill.billCode} · {settleModalBill.debtorName || 'Khách nợ'}
+                    </p>
+                  </div>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setModalSettleMethod('cash')}
-                  className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all ${
-                    modalSettleMethod === 'cash'
-                      ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-700 dark:text-emerald-300 ring-2 ring-emerald-500/20'
-                      : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  onClick={() => setSettleModalBill(null)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Mode Switch Tabs */}
+              <div className="grid grid-cols-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setSettleModalMode('partial')}
+                  className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    settleModalMode === 'partial'
+                      ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Tiền mặt</span>
+                  <Wallet className="w-3.5 h-3.5" />
+                  <span>1. Trả nợ từng đợt</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setModalSettleMethod('transfer')}
-                  className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all ${
-                    modalSettleMethod === 'transfer'
-                      ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-500 text-blue-700 dark:text-blue-300 ring-2 ring-blue-500/20'
-                      : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  onClick={() => setSettleModalMode('full')}
+                  className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    settleModalMode === 'full'
+                      ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
-                  <UserCheck className="w-4 h-4 text-blue-600" />
-                  <span>Chuyển khoản</span>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>2. Tất toán hết (100%)</span>
                 </button>
               </div>
-            </div>
 
-            {/* Buttons */}
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => setSettleModalBill(null)}
-                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-              >
-                Hủy bỏ
-              </button>
-              <button
-                type="button"
-                disabled={isSettling}
-                onClick={handleConfirmModalSettle}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>
-                  {isSettling
-                    ? 'Đang xử lý...'
-                    : `Xác nhận Tất Toán (${PAYMENT_LABELS[modalSettleMethod]})`}
-                </span>
-              </button>
+              {/* Debtor & Balance Summary Card */}
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 space-y-2 text-xs">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500">Khách ghi nợ:</span>
+                  <span className="font-bold text-slate-900 dark:text-white">
+                    {settleModalBill.debtorName || 'Khách ghi nợ'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center font-mono">
+                  <span className="text-slate-500 font-sans">Nợ gốc ban đầu:</span>
+                  <span className="text-slate-700 dark:text-slate-300">
+                    {formatVND(metrics.netOriginal)}
+                  </span>
+                </div>
+                {metrics.paidInstallments > 0 && (
+                  <div className="flex justify-between items-center font-mono text-emerald-600 dark:text-emerald-400">
+                    <span className="text-slate-500 font-sans">Đã trả các đợt trước ({metrics.paymentsList.length} đợt):</span>
+                    <span>+{formatVND(metrics.paidInstallments)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center pt-1.5 border-t border-slate-200/70 dark:border-slate-700">
+                  <span className="text-slate-800 dark:text-slate-200 font-bold">
+                    Dư nợ còn lại hiện tại:
+                  </span>
+                  <span className="font-mono font-bold text-amber-600 dark:text-amber-400 text-sm">
+                    {formatVND(metrics.remainingDebt)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Partial Mode: Input Amount & Presets */}
+              {settleModalMode === 'partial' && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      Số tiền khách trả đợt này (VNĐ)*:
+                    </label>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      Tối đa: {formatVND(metrics.remainingDebt)}
+                    </span>
+                  </div>
+
+                  {/* Quick Preset Buttons */}
+                  <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+                    {[500000, 1000000, 2000000, Math.round(metrics.remainingDebt / 2), metrics.remainingDebt]
+                      .filter((v, i, arr) => v > 0 && v <= metrics.remainingDebt && arr.indexOf(v) === i)
+                      .map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setModalPartialAmount(String(preset))}
+                          className={`px-2 py-1 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
+                            cleanEntered === preset
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          {preset === metrics.remainingDebt
+                            ? `Trả hết (${formatVND(preset)})`
+                            : preset === Math.round(metrics.remainingDebt / 2)
+                            ? `50% (${formatVND(preset)})`
+                            : formatVND(preset)}
+                        </button>
+                      ))}
+                  </div>
+
+                  <input
+                    type="number"
+                    min={1000}
+                    max={metrics.remainingDebt}
+                    step={1000}
+                    value={modalPartialAmount}
+                    onChange={(e) => setModalPartialAmount(e.target.value)}
+                    placeholder={`Nhập số tiền trả (VD: 500000)...`}
+                    className="w-full h-10 px-3 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-800 font-mono font-bold text-sm text-blue-600 dark:text-blue-400 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    autoFocus
+                  />
+
+                  {/* Real-time remaining balance calculation */}
+                  {cleanEntered > 0 && (
+                    <div className="p-2.5 rounded-xl border border-blue-100 dark:border-blue-900/50 bg-blue-50/50 dark:bg-blue-950/20 text-xs font-mono flex items-center justify-between">
+                      <span className="text-slate-600 dark:text-slate-400 font-sans">
+                        Dư nợ còn lại sau đợt này:
+                      </span>
+                      <span className={`font-bold ${afterRemain === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {afterRemain === 0 ? '0 ₫ (Tự động tất toán đủ 100%)' : formatVND(afterRemain)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Ngày thực nhận tiền */}
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
+                  <Calendar className="w-4 h-4 text-amber-500" />
+                  <span>{settleModalMode === 'partial' ? 'Ngày thu tiền đợt này*' : 'Ngày tất toán (Ngày thực nhận)*'}:</span>
+                </label>
+                <input
+                  type="date"
+                  value={modalSettleDate}
+                  onChange={(e) => setModalSettleDate(e.target.value)}
+                  className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold text-xs sm:text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  required
+                />
+              </div>
+
+              {/* Hình thức thanh toán */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Hình thức thanh toán*:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalSettleMethod('cash')}
+                    className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                      modalSettleMethod === 'cash'
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-700 dark:text-emerald-300 ring-2 ring-emerald-500/20'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>Tiền mặt</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalSettleMethod('transfer')}
+                    className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                      modalSettleMethod === 'transfer'
+                        ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-500 text-blue-700 dark:text-blue-300 ring-2 ring-blue-500/20'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <UserCheck className="w-4 h-4 text-blue-600" />
+                    <span>Chuyển khoản</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Ghi chú đợt trả nợ (trong mode partial) */}
+              {settleModalMode === 'partial' && (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                    Ghi chú đợt trả (Tùy chọn):
+                  </label>
+                  <input
+                    type="text"
+                    value={modalPartialNote}
+                    onChange={(e) => setModalPartialNote(e.target.value)}
+                    placeholder="VD: Khách trả trước đợt 1, hẹn cuối tháng trả nốt..."
+                    className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-900 dark:text-white"
+                  />
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setSettleModalBill(null)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="button"
+                  disabled={isSettling || (settleModalMode === 'partial' && (!cleanEntered || cleanEntered <= 0))}
+                  onClick={handleConfirmModalSettle}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold text-white disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer shadow-sm ${
+                    settleModalMode === 'partial'
+                      ? 'bg-blue-600 hover:bg-blue-700'
+                      : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
+                >
+                  {settleModalMode === 'partial' ? <Wallet className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                  <span>
+                    {isSettling
+                      ? 'Đang xử lý...'
+                      : settleModalMode === 'partial'
+                      ? `Xác nhận Thu ${formatVND(cappedEntered || 0)} (${PAYMENT_LABELS[modalSettleMethod]})`
+                      : `Xác nhận Tất Toán Hết ${formatVND(metrics.remainingDebt)}`}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

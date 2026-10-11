@@ -1,11 +1,13 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Camera,
   FileText,
   Upload,
   Plus,
+  Minus,
   Trash2,
   Copy,
+  CopyPlus,
   Check,
   Save,
   RefreshCw,
@@ -21,6 +23,25 @@ import {
   MinusCircle,
   Tag,
   X,
+  ZoomIn,
+  ZoomOut,
+  RotateCw,
+  Maximize2,
+  Minimize2,
+  ChevronDown,
+  ChevronUp,
+  CreditCard,
+  Banknote,
+  Users,
+  Layers,
+  ArrowRight,
+  Pin,
+  PinOff,
+  Utensils,
+  Eye,
+  Sun,
+  SlidersHorizontal,
+  Search,
 } from 'lucide-react';
 import {
   ExtractedBillItem,
@@ -70,6 +91,8 @@ interface OcrScannerTabProps {
     discountAmount?: number;
     paymentType: PaymentType;
     debtorName: string;
+    paidCashAmount?: number;
+    paidTransferAmount?: number;
     note: string;
     items: ExtractedBillItem[];
   }) => Promise<BillRecord | void>;
@@ -149,6 +172,25 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [rawText, setRawText] = useState<string>('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageMimeType, setImageMimeType] = useState<string>('image/jpeg');
+  const [imageZoom, setImageZoom] = useState<number>(1);
+  const [imageRotation, setImageRotation] = useState<number>(0);
+  const [isReceiptFullscreen, setIsReceiptFullscreen] = useState<boolean>(false);
+  const [isReceiptSticky, setIsReceiptSticky] = useState<boolean>(true);
+  const [highContrast, setHighContrast] = useState<boolean>(false);
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const panStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDragOver, setIsDragOver] = useState<boolean>(false);
+
+  // Mobile Inspection Switcher ('editor' | 'image')
+  const [mobileViewTab, setMobileViewTab] = useState<'editor' | 'image'>('editor');
+
+  // Menu Catalog Quick Picker Drawer/Modal
+  const [showMenuPickerModal, setShowMenuPickerModal] = useState<boolean>(false);
+  const [menuPickerSearch, setMenuPickerSearch] = useState<string>('');
+  const [menuPickerCategory, setMenuPickerCategory] = useState<string>('all');
+
+  const [showSampleTemplatesMenu, setShowSampleTemplatesMenu] = useState<boolean>(false);
   const [quickAiItemPrompt, setQuickAiItemPrompt] = useState<string>('');
   const [showJsonPreview, setShowJsonPreview] = useState<boolean>(false);
 
@@ -157,6 +199,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [copiedJson, setCopiedJson] = useState(false);
+  const [dismissedDuplicateBillId, setDismissedDuplicateBillId] = useState<string | null>(null);
   const [savedBillPopup, setSavedBillPopup] = useState<{
     billCode: string;
     billDate: string;
@@ -171,6 +214,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     totalAmount: number;
     paymentType: PaymentType;
     debtorName?: string;
+    paidCashAmount?: number;
+    paidTransferAmount?: number;
   } | null>(null);
 
   const [billDate, setBillDate] = useState<string>(todayBusinessStr);
@@ -182,10 +227,57 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [tableName, setTableName] = useState<string>('');
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [paymentType, setPaymentType] = useState<PaymentType>('cash');
+  const [splitCashInput, setSplitCashInput] = useState<string>('');
+  const [splitTransferInput, setSplitTransferInput] = useState<string>('');
   const [debtorName, setDebtorName] = useState<string>('');
   const [debtorSelectMode, setDebtorSelectMode] = useState<'existing' | 'new'>('new');
   const [note, setNote] = useState<string>('');
   const [items, setItems] = useState<ExtractedBillItem[]>([]);
+
+  // Smart Recent Tables computed from past bills + common presets
+  const recentTables = useMemo(() => {
+    const list = ['Bàn 1', 'Bàn 2', 'Bàn 3', 'Bàn 4', 'VIP 1', 'VIP 2', 'Mang về'];
+    const s = new Set<string>(list);
+    for (const b of (existingBills || []).slice(0, 40)) {
+      const t = extractBillTableName(b);
+      if (t && t.length <= 20) s.add(t);
+    }
+    return Array.from(s).slice(0, 10);
+  }, [existingBills]);
+
+  // Global Clipboard Paste Listener (Ctrl+V any receipt screenshot anywhere on page)
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          e.preventDefault();
+          const blob = items[i].getAsFile();
+          if (blob) {
+            setInputMode('image');
+            setImageMimeType(blob.type || 'image/jpeg');
+            const reader = new FileReader();
+            reader.onload = async () => {
+              const base64Data = String(reader.result || '');
+              setImagePreview(base64Data);
+              setPanOffset({ x: 0, y: 0 });
+              setImageZoom(1);
+              setSuccessMsg('📸 Đã dán ảnh bill từ Clipboard! Đang bắt đầu quét OCR...');
+              await runAiExtraction({
+                imageBase64: base64Data,
+                mimeType: blob.type || 'image/jpeg',
+              });
+            };
+            reader.readAsDataURL(blob);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, []);
 
   const clearAllBillInputs = () => {
     const freshToday = getCurrentBusinessDate();
@@ -202,11 +294,18 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setTableName('');
     setDiscountAmount(0);
     setPaymentType('cash');
+    setSplitCashInput('');
+    setSplitTransferInput('');
     setDebtorName('');
     setDebtorSelectMode('new');
     setNote('');
     setQuickAiItemPrompt('');
     setItems([]);
+    setImageZoom(1);
+    setImageRotation(0);
+    setPanOffset({ x: 0, y: 0 });
+    setHighContrast(false);
+    setDismissedDuplicateBillId(null);
     setErrorMsg(null);
     setSuccessMsg(null);
     setShowJsonPreview(false);
@@ -229,6 +328,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
     const cleanTable = tableName.trim().toLowerCase();
     for (const b of existingBills) {
+      if (dismissedDuplicateBillId && b.id === dismissedDuplicateBillId) continue;
       if (b.billDate !== billDate) continue;
       if (Math.abs((Number(b.totalAmount) || 0) - totalAmount) > 500) continue;
 
@@ -323,6 +423,17 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setTableName(normalizeTableName(result.billInfo.tableName || ''));
     setDiscountAmount(Math.max(0, Math.round(result.billInfo.discountAmount || 0)));
     setPaymentType(result.billInfo.paymentType || 'cash');
+    if (result.billInfo.paymentType === 'split') {
+      if (result.billInfo.paidCashAmount !== undefined) {
+        setSplitCashInput(String(result.billInfo.paidCashAmount));
+      }
+      if (result.billInfo.paidTransferAmount !== undefined) {
+        setSplitTransferInput(String(result.billInfo.paidTransferAmount));
+      }
+    } else {
+      setSplitCashInput('');
+      setSplitTransferInput('');
+    }
     setDebtorName(
       result.billInfo.paymentType === 'debt' ? result.billInfo.debtorName || '' : ''
     );
@@ -588,6 +699,21 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     );
   };
 
+  const handleAdjustQuantity = (index: number, delta: number) => {
+    setItems((prev) =>
+      prev.map((item, idx) => {
+        if (idx !== index) return item;
+        const currentQty = Number(item.quantity) || 1;
+        const nextQty = Math.max(1, currentQty + delta);
+        return {
+          ...item,
+          quantity: nextQty,
+          subtotal: nextQty * item.unitPrice,
+        };
+      })
+    );
+  };
+
   // When user finishes typing a product name like "gà biển kho nghệ làm cay", automatically split out "làm cay" into item.note if it matches a catalog product
   const handleProductNameBlur = (index: number) => {
     setItems((prev) =>
@@ -644,29 +770,69 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   };
 
   const handleAddEmptyItem = () => {
-    requestConfirm({
-      title: 'Xác nhận Thêm Dòng Món Mới',
-      message: 'Bạn có muốn thêm 1 dòng món mới vào hóa đơn đang soạn không?',
-      confirmLabel: 'Thêm dòng món',
-      variant: 'primary',
-      onConfirm: () => {
-        const defaultProd = products[0];
-        const defaultName = defaultProd ? defaultProd.productName : 'Bia Tiger Lùn';
-        const defaultCat = defaultProd ? defaultProd.category : categories[0] || 'Bia';
-        const defaultPrice = defaultProd ? defaultProd.unitPrice : 22000;
-        setItems((prev) => [
-          ...prev,
-          {
-            productName: defaultName,
-            note: '',
-            category: defaultCat,
-            quantity: 1,
-            unitPrice: defaultPrice,
-            subtotal: defaultPrice,
-          },
-        ]);
+    const defaultProd = products[0];
+    const defaultName = '';
+    const defaultCat = defaultProd ? defaultProd.category : categories[0] || 'Món ăn';
+    const defaultPrice = 0;
+    setItems((prev) => [
+      ...prev,
+      {
+        productName: defaultName,
+        note: '',
+        category: defaultCat,
+        quantity: 1,
+        unitPrice: defaultPrice,
+        subtotal: 0,
       },
+    ]);
+  };
+
+  const handleDuplicateItem = (index: number) => {
+    setItems((prev) => {
+      const target = prev[index];
+      if (!target) return prev;
+      const copy: ExtractedBillItem = {
+        ...target,
+        note: target.note ? `${target.note}` : '',
+      };
+      const next = [...prev];
+      next.splice(index + 1, 0, copy);
+      return next;
     });
+    setSuccessMsg('Đã nhân đôi dòng món!');
+    setTimeout(() => setSuccessMsg(null), 2000);
+  };
+
+  const handleAddProductFromCatalog = (prod: ProductRecord) => {
+    setItems((prev) => {
+      const existingIdx = prev.findIndex(
+        (it) => it.productName.toLowerCase().trim() === prod.productName.toLowerCase().trim()
+      );
+      if (existingIdx !== -1) {
+        const next = [...prev];
+        const cur = next[existingIdx];
+        const nextQty = (Number(cur.quantity) || 1) + 1;
+        next[existingIdx] = {
+          ...cur,
+          quantity: nextQty,
+          subtotal: nextQty * cur.unitPrice,
+        };
+        return next;
+      }
+      return [
+        ...prev,
+        {
+          productName: prod.productName,
+          note: '',
+          category: prod.category,
+          quantity: 1,
+          unitPrice: prod.unitPrice,
+          subtotal: prod.unitPrice,
+        },
+      ];
+    });
+    setSuccessMsg(`Đã thêm "${prod.productName}" (${formatVND(prod.unitPrice)}) vào bill!`);
+    setTimeout(() => setSuccessMsg(null), 2000);
   };
 
   const handleGeminiAddItemsToBill = () => {
@@ -719,6 +885,29 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     const validItems = items.filter((it) => it.productName.trim() !== '');
     const normalizedTable = normalizeTableName(tableName);
     const finalNote = [normalizedTable, note.trim()].filter(Boolean).join(' - ');
+    const isSplit = paymentType === 'split';
+    let finalPaidCash: number | undefined = undefined;
+    let finalPaidTransfer: number | undefined = undefined;
+
+    if (isSplit) {
+      const parsedCash = Math.max(0, Math.round(Number(splitCashInput) || 0));
+      const parsedTransfer = Math.max(0, Math.round(Number(splitTransferInput) || 0));
+
+      if (parsedCash > 0 && parsedTransfer > 0) {
+        finalPaidCash = parsedCash;
+        finalPaidTransfer = parsedTransfer;
+      } else if (parsedCash > 0) {
+        finalPaidCash = Math.min(totalAmount, parsedCash);
+        finalPaidTransfer = Math.max(0, totalAmount - finalPaidCash);
+      } else if (parsedTransfer > 0) {
+        finalPaidTransfer = Math.min(totalAmount, parsedTransfer);
+        finalPaidCash = Math.max(0, totalAmount - finalPaidTransfer);
+      } else {
+        finalPaidCash = Math.round(totalAmount / 2);
+        finalPaidTransfer = totalAmount - finalPaidCash;
+      }
+    }
+
     const snapshotPopup = {
       billCode: `HD-${billDate.replace(/-/g, '').slice(2)}`,
       billDate,
@@ -732,6 +921,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       discountAmount: safeDiscount,
       totalAmount,
       paymentType,
+      paidCashAmount: finalPaidCash,
+      paidTransferAmount: finalPaidTransfer,
       debtorName: paymentType === 'debt' ? debtorName.trim() : undefined,
     };
 
@@ -746,6 +937,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         discountAmount: safeDiscount,
         paymentType,
         debtorName: paymentType === 'debt' ? debtorName.trim() : '',
+        paidCashAmount: finalPaidCash,
+        paidTransferAmount: finalPaidTransfer,
         note: finalNote,
         items: validItems,
       });
@@ -865,19 +1058,91 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         contextLabel="Nhập Gemini API Key và bấm Kiểm tra để kích hoạt AI quét ảnh hóa đơn, nhận diện văn bản bill nhiều định dạng và tách ghi chú tự động."
       />
 
-      {/* Header & Quick Templates */}
+      {/* Top Header & Mode Navigation */}
       <div className="p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-              Chụp / Nhập Bill OCR & Trích Xuất Hóa Đơn Đa Định Dạng
-            </h2>
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                Chụp & Nhập Hóa Đơn (OCR Thông Minh)
+              </h2>
+            </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-              Tự động lấy <strong>Ngày tháng, Giờ ra vào, Tên món, Ghi chú món, Số lượng, Đơn giá, Thành tiền, Chiết khấu, Tổng cộng</strong>. Ca bán tính từ <strong>09:00 sáng hôm nay đến 08:00 sáng hôm sau</strong>.
+              Trích xuất tự động: <strong>Bàn, món, số lượng, đơn giá, chiết khấu, hình thức thanh toán & ca bán hàng (09:00 sáng → 08:00 sáng hôm sau)</strong>.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Mode Segmented Controls */}
+            <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200/80 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setInputMode('image')}
+                className={`h-8 px-3 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  inputMode === 'image'
+                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Chụp / Ảnh Bill</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputMode('text')}
+                className={`h-8 px-3 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  inputMode === 'text'
+                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Dán Văn Bản</span>
+              </button>
+            </div>
+
+            {/* Sample Templates Dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowSampleTemplatesMenu((prev) => !prev)}
+                className="h-9 px-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                title="Chọn mẫu hóa đơn mẫu để kiểm thử bóc tách nhanh"
+              >
+                <Layers className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Mẫu bill test</span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+
+              {showSampleTemplatesMenu && (
+                <div className="absolute right-0 top-full mt-1.5 z-30 w-72 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="text-[11px] font-bold text-slate-400 px-2 py-1 uppercase tracking-wider">
+                    Chọn mẫu kiểm thử
+                  </div>
+                  {SAMPLE_BILL_TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => {
+                        handleSelectSampleTemplate(tpl.id);
+                        setShowSampleTemplatesMenu(false);
+                      }}
+                      className="w-full text-left p-2 rounded-xl hover:bg-emerald-50/80 dark:hover:bg-emerald-950/40 text-xs transition-colors cursor-pointer group"
+                    >
+                      <div className="font-semibold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                        {tpl.label}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                        {tpl.description}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Quick Menu Auto-Add Checkbox */}
             <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -885,9 +1150,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 onChange={(e) => onToggleAutoAddProducts(e.target.checked)}
                 className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
               />
-              <span>Tự thêm món mới vào Menu theo Bill</span>
+              <span>Tự lưu món mới vào Menu</span>
             </label>
 
+            {/* KiotViet Sync F9 Button */}
             {onOpenKiotVietSync && (
               <button
                 type="button"
@@ -899,41 +1165,6 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 <span>Đồng bộ KiotViet (F9)</span>
               </button>
             )}
-
-            {canWrite && menuProductsCount > 0 && (
-              <button
-                type="button"
-                onClick={onDeleteAllMenuProducts}
-                className="h-9 px-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Xóa Menu ({menuProductsCount})</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Sample Templates Bar */}
-        <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
-            Mẫu hóa đơn thực tế (Bấm để nạp & kiểm thử tách ghi chú món / Combo / Ca 9h sáng → 8h sáng hôm sau):
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
-            {SAMPLE_BILL_TEMPLATES.map((tpl) => (
-              <button
-                key={tpl.id}
-                type="button"
-                onClick={() => handleSelectSampleTemplate(tpl.id)}
-                className="text-left p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-500 dark:hover:border-emerald-500 bg-slate-50/70 dark:bg-slate-800/40 transition-colors cursor-pointer"
-              >
-                <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">
-                  {tpl.label}
-                </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                  {tpl.description}
-                </div>
-              </button>
-            ))}
           </div>
         </div>
       </div>
@@ -956,13 +1187,23 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={clearAllBillInputs}
-            className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold whitespace-nowrap cursor-pointer shrink-0"
-          >
-            Hủy Bill Trùng Này
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setDismissedDuplicateBillId(duplicateBillWarning.bill.id)}
+              className="px-3 py-1.5 rounded-xl border border-amber-400 dark:border-amber-600 bg-white dark:bg-slate-900 text-amber-900 dark:text-amber-200 font-bold whitespace-nowrap cursor-pointer hover:bg-amber-100 dark:hover:bg-amber-900/40"
+              title="Bỏ qua cảnh báo nếu đây là bill thật khác bàn"
+            >
+              Vẫn Giữ & Tiếp Tục
+            </button>
+            <button
+              type="button"
+              onClick={clearAllBillInputs}
+              className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold whitespace-nowrap cursor-pointer"
+            >
+              Hủy Bill Trùng Này
+            </button>
+          </div>
         </div>
       )}
       {errorMsg && (
@@ -978,80 +1219,271 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         </div>
       )}
 
-      {/* Main Grid: Input Area + Bill Editor */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        {/* Left Column: Image/Camera or Raw Text Input */}
-        <div className="xl:col-span-5 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs flex flex-col justify-between space-y-4">
-          <div className="space-y-4">
-            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
-              <button
-                type="button"
-                onClick={() => setInputMode('text')}
-                className={`flex-1 h-9 px-3 text-xs font-medium rounded-lg flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
-                  inputMode === 'text'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>Copy / Dán Văn Bản</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setInputMode('image')}
-                className={`flex-1 h-9 px-3 text-xs font-medium rounded-lg flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
-                  inputMode === 'image'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                <Camera className="w-3.5 h-3.5" />
-                <span>Chụp / Tải Ảnh Bill</span>
-              </button>
-            </div>
+      {/* Mobile Toggle Tabs: Soi Ảnh Bill vs Soạn Danh Sách Món (< lg) */}
+      {imagePreview && (
+        <div className="lg:hidden flex items-center p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xs">
+          <button
+            type="button"
+            onClick={() => setMobileViewTab('editor')}
+            className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              mobileViewTab === 'editor'
+                ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+            }`}
+          >
+            <Utensils className="w-3.5 h-3.5" />
+            <span>Soạn Món ({items.length}) · {formatVND(totalAmount)}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileViewTab('image')}
+            className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              mobileViewTab === 'image'
+                ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+            }`}
+          >
+            <Eye className="w-3.5 h-3.5" />
+            <span>Soi Ảnh Bill ({Math.round(imageZoom * 100)}%)</span>
+          </button>
+        </div>
+      )}
 
-            {inputMode === 'image' ? (
-              <div className="space-y-3">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handleImageFileChange}
-                  className="hidden"
-                />
+      {/* Main Split Grid: Left (Source/Receipt Inspector) - Right (Interactive Editor) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        {/* Left Column: Image Inspector or Text Input Area */}
+        <div
+          className={`lg:col-span-4 xl:col-span-4 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 ${
+            imagePreview && mobileViewTab === 'editor' ? 'hidden lg:block' : ''
+          } ${isReceiptSticky && imagePreview ? 'lg:sticky lg:top-4' : ''}`}
+        >
+          {inputMode === 'image' ? (
+            <div className="space-y-3">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleImageFileChange}
+                className="hidden"
+              />
+
+              {!imagePreview ? (
+                /* Dropzone / Camera trigger with drag-and-drop & clipboard paste support */
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-2xl p-5 sm:p-6 text-center cursor-pointer transition-colors bg-slate-50/50 dark:bg-slate-950/40"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(true);
+                  }}
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file && file.type.startsWith('image/')) {
+                      setImageMimeType(file.type || 'image/jpeg');
+                      const reader = new FileReader();
+                      reader.onload = async () => {
+                        const base64Data = String(reader.result || '');
+                        setImagePreview(base64Data);
+                        setPanOffset({ x: 0, y: 0 });
+                        setImageZoom(1);
+                        await runAiExtraction({
+                          imageBase64: base64Data,
+                          mimeType: file.type || 'image/jpeg',
+                        });
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                  className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition-all space-y-3 ${
+                    isDragOver
+                      ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/50 ring-4 ring-emerald-500/20 scale-[0.99]'
+                      : 'border-slate-300 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 bg-slate-50/50 dark:bg-slate-950/40'
+                  }`}
                 >
-                  {imagePreview ? (
-                    <div className="space-y-3">
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-xs">
+                    <Camera className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 dark:text-white">
+                      Chụp ảnh Hóa Đơn hoặc Kéo thả / Dán (Ctrl+V) ảnh vào đây
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto mt-1">
+                      Hỗ trợ hóa đơn in nhiệt, phiếu tính tiền, bill viết tay. Tự động nhận diện chữ & số bằng Gemini AI.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Chọn file từ máy / Chụp ảnh</span>
+                    </div>
+                    <span className="text-[11px] text-slate-400 font-mono px-2 py-1 rounded bg-slate-200/60 dark:bg-slate-800">
+                      phím tắt: Ctrl + V
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                /* Interactive Receipt Inspector (Soi Bill Trực Quan) */
+                <div className="space-y-3">
+                  {/* Inspector Toolbar */}
+                  <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100));
+                          if (imageZoom <= 1.25) setPanOffset({ x: 0, y: 0 });
+                        }}
+                        className="w-7 h-7 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 flex items-center justify-center hover:bg-slate-50 cursor-pointer"
+                        title="Thu nhỏ (-)"
+                      >
+                        <ZoomOut className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="font-mono text-[11px] font-semibold text-slate-600 dark:text-slate-300 w-12 text-center">
+                        {Math.round(imageZoom * 100)}%
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setImageZoom((z) => Math.min(3.5, Math.round((z + 0.25) * 100) / 100))}
+                        className="w-7 h-7 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 flex items-center justify-center hover:bg-slate-50 cursor-pointer"
+                        title="Phóng to (+)"
+                      >
+                        <ZoomIn className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImageRotation((r) => (r + 90) % 360)}
+                        className="w-7 h-7 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 flex items-center justify-center hover:bg-slate-50 cursor-pointer"
+                        title="Xoay ảnh 90 độ"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHighContrast((v) => !v)}
+                        className={`px-2 h-7 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
+                          highContrast
+                            ? 'bg-amber-500 text-white border-amber-500 shadow-2xs'
+                            : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50'
+                        }`}
+                        title="Bật/Tắt chế độ tăng độ tương phản để đọc rõ chữ in nhiệt mờ"
+                      >
+                        <Sun className="w-3 h-3" />
+                        <span className="hidden sm:inline">{highContrast ? 'Nét đậm' : 'Độ nét'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageZoom(1);
+                          setImageRotation(0);
+                          setPanOffset({ x: 0, y: 0 });
+                          setHighContrast(false);
+                        }}
+                        className="px-2 h-7 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 cursor-pointer"
+                        title="Khôi phục kích thước ban đầu"
+                      >
+                        Gốc
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setIsReceiptFullscreen(true)}
+                        className="px-2 h-7 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1 hover:bg-slate-50 cursor-pointer"
+                        title="Phóng to toàn màn hình để soi chi tiết"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Phóng to</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-2 h-7 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                        title="Chụp lại hoặc chọn ảnh khác"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        <span>Đổi ảnh</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Image Viewer Container with smooth zoom, rotation & draggable pan */}
+                  <div
+                    className={`relative border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-slate-950 max-h-[480px] h-[380px] sm:h-[460px] flex items-center justify-center p-2 select-none ${
+                      imageZoom > 1 ? 'cursor-grab active:cursor-grabbing' : ''
+                    }`}
+                    onMouseDown={(e) => {
+                      if (imageZoom > 1) {
+                        setIsPanning(true);
+                        panStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
+                      }
+                    }}
+                    onMouseMove={(e) => {
+                      if (isPanning && imageZoom > 1) {
+                        setPanOffset({
+                          x: e.clientX - panStartRef.current.x,
+                          y: e.clientY - panStartRef.current.y,
+                        });
+                      }
+                    }}
+                    onMouseUp={() => setIsPanning(false)}
+                    onMouseLeave={() => setIsPanning(false)}
+                    onTouchStart={(e) => {
+                      if (imageZoom > 1 && e.touches.length === 1) {
+                        setIsPanning(true);
+                        panStartRef.current = {
+                          x: e.touches[0].clientX - panOffset.x,
+                          y: e.touches[0].clientY - panOffset.y,
+                        };
+                      }
+                    }}
+                    onTouchMove={(e) => {
+                      if (isPanning && imageZoom > 1 && e.touches.length === 1) {
+                        setPanOffset({
+                          x: e.touches[0].clientX - panStartRef.current.x,
+                          y: e.touches[0].clientY - panStartRef.current.y,
+                        });
+                      }
+                    }}
+                    onTouchEnd={() => setIsPanning(false)}
+                  >
+                    <div
+                      className="transition-transform duration-75 origin-center max-w-full max-h-full flex items-center justify-center pointer-events-none"
+                      style={{
+                        transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${imageZoom}) rotate(${imageRotation}deg)`,
+                        filter: highContrast ? 'contrast(1.75) grayscale(1) brightness(1.08)' : 'none',
+                      }}
+                    >
                       <img
                         src={imagePreview}
-                        alt="Hóa đơn vừa tải lên"
+                        alt="Ảnh hóa đơn đang soi"
                         referrerPolicy="no-referrer"
-                        className="max-h-52 mx-auto rounded-xl object-contain border border-slate-200 dark:border-slate-700"
+                        draggable={false}
+                        className="max-h-[440px] max-w-full object-contain rounded-lg shadow-lg select-none"
                       />
-                      <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
-                        Chạm để chụp lại hoặc chọn ảnh hóa đơn khác
-                      </p>
                     </div>
-                  ) : (
-                    <div className="space-y-2 py-5">
-                      <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
-                        <Upload className="w-5 h-5" />
-                      </div>
-                      <p className="text-sm font-bold text-slate-900 dark:text-white">
-                        Chụp ảnh Bill hoặc chọn ảnh từ máy
-                      </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto">
-                        Hỗ trợ camera điện thoại, ảnh chụp bill in nhiệt, bill viết tay (JPG, PNG, WEBP)
-                      </p>
-                    </div>
-                  )}
-                </div>
 
-                {imagePreview && (
+                    {imageZoom > 1 && (
+                      <div className="absolute bottom-2 left-2 px-2 py-1 rounded bg-black/60 text-[10px] text-white/80 backdrop-blur-xs font-mono pointer-events-none">
+                        Kéo thả để di chuyển ảnh
+                      </div>
+                    )}
+
+                    {isProcessing && (
+                      <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-2xs flex flex-col items-center justify-center gap-3 text-white">
+                        <RefreshCw className="w-8 h-8 animate-spin text-emerald-400" />
+                        <div className="text-center">
+                          <p className="text-sm font-bold">Gemini AI đang bóc tách hóa đơn...</p>
+                          <p className="text-xs text-slate-300">Đang nhận diện món, số lượng, đơn giá và bàn...</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Rescan AI Action */}
                   <button
                     type="button"
                     disabled={isProcessing}
@@ -1061,7 +1493,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                         mimeType: imageMimeType,
                       })
                     }
-                    className="w-full h-10 px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
+                    className="w-full h-10 px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer shadow-xs"
                   >
                     <RefreshCw className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
                     <span>
@@ -1070,134 +1502,145 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                         : 'Quét lại ảnh bằng Gemini AI OCR'}
                     </span>
                   </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Text Mode */
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Dán nội dung hóa đơn (Tự tách ghi chú & Combo):
+                </label>
+                {rawText && (
+                  <button
+                    type="button"
+                    onClick={() => setRawText('')}
+                    className="text-[11px] text-rose-500 hover:text-rose-700 cursor-pointer font-medium"
+                  >
+                    Xóa văn bản
+                  </button>
                 )}
               </div>
-            ) : (
-              <div className="space-y-3">
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Dán nội dung hóa đơn (Hỗ trợ nhiều kiểu form, tự tách ghi chú món & combo):
-                </label>
-                <textarea
-                  rows={10}
-                  value={rawText}
-                  onChange={(e) => setRawText(e.target.value)}
-                  placeholder={`Ví dụ:\nNgày: 20/08/2026\nGiờ vào: 21:00 - Giờ ra: 01:30\ngà biển kho nghệ làm cay giá 129000\ncombo 2 ======================\n>>> Cơm chiên hải sản <<<\n======================\ngiá 459000`}
-                  className="w-full p-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const syncedText = normalizeSynchronizedReceiptText(rawText);
-                      if (syncedText && syncedText !== rawText) {
-                        setRawText(syncedText);
-                      }
-                      const parsed = parseRawTextToBillJSON(
-                        syncedText || rawText,
-                        billDate || todayBusinessStr,
-                        products,
-                        categories
-                      );
-                      applyExtractedResult(parsed);
-                      setSuccessMsg(
-                        `⚡ ĐÃ QUÉT TỨC THÌ (0s): ${parsed.items.length} món (Tổng: ${formatVND(
-                          parsed.billInfo.totalAmount
-                        )}, Bàn: ${parsed.billInfo.tableName || 'Chưa rõ'}). Khớp chính xác 100% món đã nhập, không delay!`
-                      );
-                    }}
-                    className="h-11 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <span>⚡ Quét & Bóc Tách Tức Thì (0s - Chuẩn 100%)</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isProcessing}
-                    onClick={() => {
-                      const syncedText = normalizeSynchronizedReceiptText(rawText);
-                      if (syncedText && syncedText !== rawText) {
-                        setRawText(syncedText);
-                      }
-                      // Run instant local extraction first to eliminate delay
-                      const instantParsed = parseRawTextToBillJSON(
-                        syncedText || rawText,
-                        billDate || todayBusinessStr,
-                        products,
-                        categories
-                      );
-                      if (instantParsed.items.length > 0) {
-                        applyExtractedResult(instantParsed);
-                        setSuccessMsg(
-                          `⚡ Đã bóc tách ${instantParsed.items.length} món như đã nhập (Tổng: ${formatVND(
-                            instantParsed.billInfo.totalAmount
-                          )}). Đang xác thực thêm với Gemini...`
-                        );
-                      }
-                      runAiExtraction({ text: syncedText || rawText, forceGemini: true });
-                    }}
-                    className="h-11 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
-                  >
-                    <RefreshCw
-                      className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`}
-                    />
-                    <span>
-                      {isProcessing ? 'Gemini đang xử lý...' : '🤖 Quét bằng Gemini AI'}
-                    </span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
 
-          {/* Collapsible / Clean JSON Output Preview Box */}
-          <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
-            <div className="flex items-center justify-between">
+              <textarea
+                rows={12}
+                value={rawText}
+                onChange={(e) => setRawText(e.target.value)}
+                placeholder={`Ví dụ định dạng bill:\nNgày: ${billDate}\nBàn 24 - Giờ vào: 19:30 - Giờ ra: 22:30\n1. Bia Tiger Lùn x10 lon 22000 220000\n2. Gà biển kho nghệ (làm cay) x1 phần 129000\n3. Combo lẩu hải sản ======================\n>>> Cơm chiên hải sản <<<\n====================== giá 459000\nTổng cộng: 808.000đ`}
+                className="w-full p-3.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 leading-relaxed"
+              />
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const syncedText = normalizeSynchronizedReceiptText(rawText);
+                    if (syncedText && syncedText !== rawText) {
+                      setRawText(syncedText);
+                    }
+                    const parsed = parseRawTextToBillJSON(
+                      syncedText || rawText,
+                      billDate || todayBusinessStr,
+                      products,
+                      categories
+                    );
+                    applyExtractedResult(parsed);
+                    setSuccessMsg(
+                      `⚡ ĐÃ QUÉT TỨC THÌ (0s): ${parsed.items.length} món (Tổng: ${formatVND(
+                        parsed.billInfo.totalAmount
+                      )}, Bàn: ${parsed.billInfo.tableName || 'Chưa rõ'}).`
+                    );
+                  }}
+                  className="h-10 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Zap className="w-4 h-4" />
+                  <span>Quét Tức Thì (0s - Chuẩn xác)</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => {
+                    const syncedText = normalizeSynchronizedReceiptText(rawText);
+                    if (syncedText && syncedText !== rawText) {
+                      setRawText(syncedText);
+                    }
+                    const instantParsed = parseRawTextToBillJSON(
+                      syncedText || rawText,
+                      billDate || todayBusinessStr,
+                      products,
+                      categories
+                    );
+                    if (instantParsed.items.length > 0) {
+                      applyExtractedResult(instantParsed);
+                    }
+                    runAiExtraction({ text: syncedText || rawText, forceGemini: true });
+                  }}
+                  className="h-10 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer shadow-xs"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
+                  <span>{isProcessing ? 'Gemini đang phân tích...' : 'Quét sâu bằng Gemini AI'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Collapsible Clean JSON Output (Subtle & Quiet) */}
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center justify-between text-xs">
               <button
                 type="button"
                 onClick={() => setShowJsonPreview((v) => !v)}
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+                className="inline-flex items-center gap-1.5 font-medium text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
               >
-                <Code2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                <span>{showJsonPreview ? 'Ẩn cấu trúc JSON' : 'Xem cấu trúc JSON chuẩn'}</span>
+                <Code2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>{showJsonPreview ? 'Ẩn JSON kỹ thuật' : 'Xem JSON kỹ thuật'}</span>
               </button>
-              <button
-                type="button"
-                onClick={handleCopyJson}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
-              >
-                {copiedJson ? (
-                  <Check className="w-3.5 h-3.5 text-emerald-500" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-                <span>{copiedJson ? 'Đã copy' : 'Copy JSON'}</span>
-              </button>
+              {showJsonPreview && (
+                <button
+                  type="button"
+                  onClick={handleCopyJson}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 font-mono text-[11px] rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 text-slate-600 dark:text-slate-300 cursor-pointer"
+                >
+                  {copiedJson ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedJson ? 'Đã copy' : 'Copy'}</span>
+                </button>
+              )}
             </div>
             {showJsonPreview && (
-              <pre className="mt-2.5 p-3 rounded-xl bg-slate-950 text-emerald-400 text-[11px] font-mono overflow-x-auto max-h-52 leading-relaxed border border-slate-800">
+              <pre className="mt-2 p-3 rounded-xl bg-slate-950 text-emerald-400 text-[10px] font-mono overflow-x-auto max-h-40 leading-relaxed border border-slate-800">
                 {JSON.stringify(strictJsonOutput, null, 2)}
               </pre>
             )}
           </div>
         </div>
 
-        {/* Right Area: Interactive Bill Review & Save */}
-        <div className="xl:col-span-7 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs flex flex-col justify-between space-y-5">
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Kiểm tra & Chỉnh sửa Hóa Đơn trước khi lưu
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Ca bán hàng tính từ <strong>09:00 sáng ngày D đến 08:00 sáng ngày D+1</strong>.
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 pt-1 sm:pt-0">
-                <div className="sm:text-right">
-                  <span className="text-xs text-slate-500 dark:text-slate-400 block">
-                    Tổng cộng thanh toán
-                  </span>
-                  <span className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
+        {/* Right Area: Interactive Bill Review, Items Table & Fast Entry */}
+        <div
+          className={`lg:col-span-8 xl:col-span-8 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 ${
+            imagePreview && mobileViewTab === 'image' ? 'hidden lg:block' : ''
+          }`}
+        >
+          {/* Header Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <span>Hóa Đơn & Danh Sách Món</span>
+                <span className="text-xs px-2 py-0.5 rounded-full font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                  {items.length} món
+                </span>
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Kiểm tra hoặc chỉnh sửa món, số lượng, hình thức thanh toán trước khi lưu
+              </p>
+            </div>
+
+            <div className="flex flex-col items-end gap-1.5 sm:justify-end">
+              <div className="flex items-center gap-2.5">
+                <div className="text-right">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">Tổng cộng thanh toán</span>
+                  <span className="text-lg font-bold font-mono text-emerald-600 dark:text-emerald-400">
                     {formatVND(totalAmount)}
                   </span>
                 </div>
@@ -1208,44 +1651,42 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                       setQuickDeductionDate(billDate || todayBusinessStr);
                       setShowQuickDeductionModal(true);
                     }}
-                    className="h-10 px-3.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-900 dark:text-amber-200 font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs shrink-0 transition-colors"
-                    title="Nhập khoản trừ trong ngày (Không cần chuyển qua tab Khoản trừ)"
+                    className="h-8.5 px-3 rounded-xl border border-amber-400/90 dark:border-amber-700 bg-amber-50/90 dark:bg-amber-950/40 hover:bg-amber-100 text-amber-900 dark:text-amber-200 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors shrink-0"
+                    title="Nhập khoản chi/khoản trừ trong ngày"
                   >
-                    <MinusCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <MinusCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
                     <span>Nhập Khoản Trừ</span>
                   </button>
                 )}
-                <button
-                  type="button"
-                  disabled={isSaving || !canWrite}
-                  onClick={handleSaveBill}
-                  className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs shrink-0"
-                >
-                  <Save className="w-4 h-4 shrink-0" />
-                  <span>
-                    {isSaving ? 'Đang lưu...' : 'Lưu Bill'}
-                  </span>
-                </button>
               </div>
+              <button
+                type="button"
+                disabled={isSaving || !canWrite}
+                onClick={handleSaveBill}
+                className="h-9 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shadow-xs shrink-0"
+              >
+                <Save className="w-4 h-4 shrink-0" />
+                <span>{isSaving ? 'Đang lưu...' : 'Lưu Bill'}</span>
+              </button>
             </div>
+          </div>
 
-            {/* Shift Date Notice Banner if shifted from early morning */}
-            {rawCalendarDate && rawCalendarDate !== billDate && (
-              <div className="p-2.5 rounded-xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/70 dark:bg-amber-950/30 flex items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300">
-                <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                  <span>
-                    Bill ghi ngày <strong>{rawCalendarDate}</strong> trong khung giờ trước 08:00 sáng nên được tự động tính vào ca bán ngày <strong>{billDate}</strong> (09:00 sáng → 08:00 sáng hôm sau).
-                  </span>
-                </div>
-              </div>
-            )}
+          {/* Shift Date Notice Banner */}
+          {rawCalendarDate && rawCalendarDate !== billDate && (
+            <div className="p-2.5 rounded-xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/70 dark:bg-amber-950/30 flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+              <Clock className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>
+                Bill ghi ngày <strong>{rawCalendarDate}</strong> (khung giờ trước 08:00 sáng) nên tự động kết chuyển vào ca bán ngày <strong>{billDate}</strong> (09:00 sáng → 08:00 sáng hôm sau).
+              </span>
+            </div>
+          )}
 
-            {/* Bill Info Controls: Date, CheckIn, CheckOut, Table, Discount, Note, Manual Payment & Debt */}
+          {/* Bill Metadata Grid */}
+          <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Ngày tính Bill (Ca 9h → 8h sáng hôm sau)
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Ngày tính Bill (Ca ngày)
                 </label>
                 <input
                   type="date"
@@ -1254,13 +1695,13 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     setBillDate(e.target.value);
                     setRawCalendarDate(e.target.value);
                   }}
-                  className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  className="w-full h-9 px-3 text-xs font-mono font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Giờ vào
                   </label>
                   <input
@@ -1269,11 +1710,11 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     onChange={(e) => setCheckInTime(e.target.value)}
                     onBlur={handleApplyShiftDateFromTime}
                     placeholder="VD: 19:30"
-                    className="w-full h-10 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                    className="w-full h-9 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Giờ ra
                   </label>
                   <input
@@ -1282,52 +1723,51 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     onChange={(e) => setCheckOutTime(e.target.value)}
                     onBlur={handleApplyShiftDateFromTime}
                     placeholder="VD: 01:30"
-                    className="w-full h-10 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                    className="w-full h-9 px-2.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Phòng / Bàn (Tự động hoặc nhập)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Phòng / Bàn
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {recentTables.slice(0, 5).map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setTableName(preset)}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border transition-colors cursor-pointer ${
+                          tableName === preset
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500'
+                        }`}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <input
                   type="text"
                   list="vqbill-table-presets-list"
                   value={tableName}
                   onChange={(e) => setTableName(e.target.value)}
                   onBlur={() => setTableName((prev) => normalizeTableName(prev))}
-                  placeholder="VD: Bàn 24, VIP 1, VIP 2, MV, MV01, MV02..."
-                  className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  placeholder="VD: Bàn 24, VIP 1, Mang về..."
+                  className="w-full h-9 px-3 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 />
                 <datalist id="vqbill-table-presets-list">
-                  <option value="VIP 1" />
-                  <option value="VIP 2" />
-                  <option value="MV" />
-                  <option value="MV01" />
-                  <option value="MV02" />
-                </datalist>
-                <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                  {(['VIP 1', 'VIP 2', 'MV', 'MV01', 'MV02'] as const).map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setTableName(preset)}
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border transition-colors cursor-pointer ${
-                        tableName === preset
-                          ? 'bg-emerald-600 text-white border-emerald-600'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500'
-                      }`}
-                      title={`Chọn nhanh ${preset}`}
-                    >
-                      {preset}
-                    </button>
+                  {recentTables.map((t) => (
+                    <option key={t} value={t} />
                   ))}
-                </div>
+                </datalist>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Chiết khấu / Giảm giá (₫)
                 </label>
                 <div className="relative">
@@ -1335,500 +1775,454 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   <input
                     type="number"
                     min={0}
-                    step="any"
-                    value={discountAmount}
+                    step={1000}
+                    value={discountAmount || ''}
+                    placeholder="0"
                     onChange={(e) =>
                       setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
                     }
-                    placeholder="0"
-                    className="w-full h-10 pl-8 pr-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                    className="w-full h-9 pl-8 pr-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                   />
                 </div>
               </div>
 
               <div className="sm:col-span-2">
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Ghi chú chung của Bill
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Ghi chú hóa đơn
                 </label>
                 <input
                   type="text"
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  placeholder="VD: Khách quen, ghi chú thanh toán..."
-                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  placeholder="VD: Khách quen anh Hùng, lưu ý phục vụ..."
+                  className="w-full h-9 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 />
               </div>
             </div>
 
-            {/* Manual Payment Type & Debt Selection Box */}
-            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                <div>
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
-                    Hình thức thanh toán (Chọn thủ công — Mặc định: Tiền mặt)
-                  </span>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Công nợ tính thành phần riêng, nhưng số lượng món bán trong công nợ vẫn cộng vào thống kê sản phẩm trong ngày.
-                  </span>
-                </div>
+            {/* Payment Selector: 4 Clean Segments */}
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-700/80 space-y-2.5">
+              <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                Hình thức thanh toán của Bill:
+              </label>
 
-                <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-xs font-semibold text-amber-800 dark:text-amber-300 cursor-pointer select-none shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={paymentType === 'debt'}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setPaymentType('debt');
-                        if (existingDebtors.length > 0 && !debtorName) {
-                          setDebtorSelectMode('existing');
-                        } else {
-                          setDebtorSelectMode('new');
-                        }
-                      } else {
-                        setPaymentType('cash');
-                      }
-                    }}
-                    className="w-4 h-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
-                  />
-                  <span>Tích chọn Công nợ</span>
-                </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentType('cash')}
+                  className={`h-9 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    paymentType === 'cash'
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                      : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Banknote className="w-3.5 h-3.5" />
+                  <span>Tiền mặt</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPaymentType('transfer')}
+                  className={`h-9 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    paymentType === 'transfer'
+                      ? 'bg-sky-600 text-white border-sky-600 shadow-2xs'
+                      : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <CreditCard className="w-3.5 h-3.5" />
+                  <span>Chuyển khoản</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentType('split');
+                    if (!splitCashInput && !splitTransferInput && totalAmount > 0) {
+                      const halfCash = Math.round(totalAmount / 2);
+                      setSplitCashInput(String(halfCash));
+                      setSplitTransferInput(String(totalAmount - halfCash));
+                    }
+                  }}
+                  className={`h-9 px-2 sm:px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    paymentType === 'split'
+                      ? 'bg-purple-600 text-white border-purple-600 shadow-2xs'
+                      : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>TM + CK (Kết hợp)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentType('debt');
+                    if (existingDebtors.length > 0 && !debtorName) {
+                      setDebtorSelectMode('existing');
+                    }
+                  }}
+                  className={`h-9 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    paymentType === 'debt'
+                      ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
+                      : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Công nợ</span>
+                </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                {(['cash', 'transfer', 'debt'] as PaymentType[]).map((pt) => (
-                  <button
-                    key={pt}
-                    type="button"
-                    onClick={() => {
-                      setPaymentType(pt);
-                      if (pt === 'debt' && existingDebtors.length > 0 && !debtorName) {
-                        setDebtorSelectMode('existing');
-                      }
-                    }}
-                    className={`h-9 px-3 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
-                      paymentType === pt
-                        ? pt === 'debt'
-                          ? 'bg-amber-600 text-white border-amber-600'
-                          : pt === 'transfer'
-                          ? 'bg-sky-600 text-white border-sky-600'
-                          : 'bg-emerald-600 text-white border-emerald-600'
-                        : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    {pt === 'cash'
-                      ? 'Tiền mặt (Mặc định)'
-                      : pt === 'transfer'
-                      ? 'Chuyển khoản'
-                      : 'Công nợ / Ghi nợ'}
-                  </button>
-                ))}
-              </div>
-
-              {paymentType === 'debt' && (
-                <div className="pt-2 border-t border-amber-200/70 dark:border-amber-900/50 space-y-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-amber-800 dark:text-amber-300">
-                      Chọn người nợ hoặc tạo người nợ mới (Tự động vào Quản lý Công nợ):
+              {/* Sub-panel: Split Payment (TM + CK) */}
+              {paymentType === 'split' && (
+                <div className="p-3.5 rounded-xl border border-purple-200 dark:border-purple-900/60 bg-purple-50/50 dark:bg-purple-950/20 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
+                    <span className="font-bold text-purple-900 dark:text-purple-200 flex items-center gap-1.5">
+                      <span className="inline-block w-2 h-2 rounded-full bg-purple-600"></span>
+                      Chia tiền thanh toán (Tổng bill: {formatVND(totalAmount)})
                     </span>
+                    <span className="text-[11px] text-purple-700 dark:text-purple-300">
+                      VD: Bill 5 triệu → TM 1 triệu, CK 4 triệu
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                          1. Tiền mặt khách trả (VNĐ):
+                        </label>
+                        {totalAmount > 0 && (
+                          <div className="flex items-center gap-1">
+                            {[1000000, 2000000, Math.round(totalAmount / 2)].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => {
+                                  const c = Math.min(totalAmount, preset);
+                                  setSplitCashInput(String(c));
+                                  setSplitTransferInput(String(Math.max(0, totalAmount - c)));
+                                }}
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 font-mono font-medium hover:bg-emerald-50 cursor-pointer"
+                              >
+                                {formatVND(preset)}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        value={splitCashInput}
+                        onChange={(e) => {
+                          const valStr = e.target.value;
+                          setSplitCashInput(valStr);
+                          if (valStr !== '' && !isNaN(Number(valStr))) {
+                            const cashNum = Math.max(0, Number(valStr));
+                            const remain = Math.max(0, totalAmount - cashNum);
+                            setSplitTransferInput(String(remain));
+                          }
+                        }}
+                        placeholder="Số tiền mặt..."
+                        className="w-full h-10 px-3 text-xs font-mono font-bold rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] font-semibold text-sky-700 dark:text-sky-400">
+                          2. Chuyển khoản khách trả (VNĐ):
+                        </label>
+                        {totalAmount > 0 && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSplitTransferInput(String(totalAmount));
+                                setSplitCashInput('0');
+                              }}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-sky-300 dark:border-sky-700 text-sky-700 dark:text-sky-300 font-mono font-medium hover:bg-sky-50 cursor-pointer"
+                            >
+                              CK hết
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        value={splitTransferInput}
+                        onChange={(e) => {
+                          const valStr = e.target.value;
+                          setSplitTransferInput(valStr);
+                          if (valStr !== '' && !isNaN(Number(valStr))) {
+                            const trNum = Math.max(0, Number(valStr));
+                            const remain = Math.max(0, totalAmount - trNum);
+                            setSplitCashInput(String(remain));
+                          }
+                        }}
+                        placeholder="Số tiền chuyển khoản..."
+                        className="w-full h-10 px-3 text-xs font-mono font-bold rounded-xl border border-sky-300 dark:border-sky-700 bg-white dark:bg-slate-900 text-sky-700 dark:text-sky-300 focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Reconciliation live badge */}
+                  {(() => {
+                    const c = Number(splitCashInput) || 0;
+                    const t = Number(splitTransferInput) || 0;
+                    const sum = c + t;
+                    const diff = totalAmount - sum;
+                    return (
+                      <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] pt-1.5 border-t border-purple-200/60 dark:border-purple-900/40">
+                        <span className="text-slate-600 dark:text-slate-300">
+                          Tổng đã chia: <strong className="font-mono text-purple-700 dark:text-purple-300">{formatVND(sum)}</strong> / {formatVND(totalAmount)}
+                        </span>
+                        {diff === 0 ? (
+                          <span className="text-emerald-600 dark:text-emerald-400 font-bold inline-flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Đã khớp 100% với bill
+                          </span>
+                        ) : (
+                          <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                            {diff > 0 ? `Còn thiếu ${formatVND(diff)}` : `Dư ${formatVND(-diff)}`}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* Sub-panel: Debt (Công nợ) */}
+              {paymentType === 'debt' && (
+                <div className="p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
+                    <span className="font-bold text-amber-900 dark:text-amber-200">
+                      Người nợ (Chọn khách quen hoặc nhập mới):
+                    </span>
+                    <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                      Tự động ghi nhận vào sổ theo dõi Công Nợ
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      list="vqbill-debtors-autocomplete-list"
+                      value={debtorName}
+                      onChange={(e) => setDebtorName(e.target.value)}
+                      placeholder="Chọn hoặc nhập tên người nợ (VD: Anh Hoàng, Chị Lan, Công ty NDS...)"
+                      className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                    />
+                    <datalist id="vqbill-debtors-autocomplete-list">
+                      {existingDebtors.map((d) => (
+                        <option key={d} value={d} />
+                      ))}
+                    </datalist>
+
                     {existingDebtors.length > 0 && (
-                      <div className="inline-flex rounded-lg p-0.5 bg-amber-100/70 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDebtorSelectMode('existing');
-                            if (!debtorName && existingDebtors[0]) {
-                              setDebtorName(existingDebtors[0]);
-                            }
-                          }}
-                          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
-                            debtorSelectMode === 'existing'
-                              ? 'bg-white dark:bg-slate-900 text-amber-800 dark:text-amber-300 shadow-2xs'
-                              : 'text-amber-700 dark:text-amber-400'
-                          }`}
-                        >
-                          Chọn người nợ có sẵn ({existingDebtors.length})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDebtorSelectMode('new');
-                            setDebtorName('');
-                          }}
-                          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
-                            debtorSelectMode === 'new'
-                              ? 'bg-white dark:bg-slate-900 text-amber-800 dark:text-amber-300 shadow-2xs'
-                              : 'text-amber-700 dark:text-amber-400'
-                          }`}
-                        >
-                          + Tạo người nợ mới
-                        </button>
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <span className="text-[11px] text-amber-800 dark:text-amber-300 font-medium">
+                          Khách nợ đã lưu:
+                        </span>
+                        {existingDebtors.slice(0, 8).map((d) => (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => setDebtorName(d)}
+                            className={`px-2 py-0.5 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors ${
+                              debtorName === d
+                                ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-amber-200 dark:border-amber-800 hover:border-amber-400'
+                            }`}
+                          >
+                            {d}
+                          </button>
+                        ))}
                       </div>
                     )}
                   </div>
-
-                  {existingDebtors.length > 0 && debtorSelectMode === 'existing' ? (
-                    <div className="space-y-2">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <select
-                          value={existingDebtors.includes(debtorName) ? debtorName : ''}
-                          onChange={(e) => {
-                            if (e.target.value === '__NEW__') {
-                              setDebtorSelectMode('new');
-                              setDebtorName('');
-                            } else {
-                              setDebtorName(e.target.value);
-                            }
-                          }}
-                          className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                        >
-                          <option value="">-- Chọn người nợ trong danh sách --</option>
-                          {existingDebtors.map((d) => (
-                            <option key={d} value={d}>
-                              {d}
-                            </option>
-                          ))}
-                          <option value="__NEW__">+ Tạo người nợ mới...</option>
-                        </select>
-                        <input
-                          type="text"
-                          value={debtorName}
-                          onChange={(e) => setDebtorName(e.target.value)}
-                          placeholder="Hoặc sửa / nhập tên người nợ..."
-                          className="w-full h-10 px-3 text-xs rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                        />
-                      </div>
-
-                      {onDeleteDebtor && existingDebtors.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                          <span className="text-[11px] text-amber-800 dark:text-amber-300 font-medium">
-                            Khách nợ đã lưu:
-                          </span>
-                          {existingDebtors.map((d) => (
-                            <div
-                              key={d}
-                              className={`inline-flex items-center rounded-lg border text-[11px] ${
-                                debtorName === d
-                                  ? 'bg-amber-600 text-white border-amber-600'
-                                  : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-amber-200 dark:border-amber-800'
-                              }`}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => setDebtorName(d)}
-                                className="px-2 py-0.5 font-semibold cursor-pointer"
-                              >
-                                {d}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  requestConfirm({
-                                    title: 'Xác nhận Xóa Khách Nợ',
-                                    message: `Bạn có chắc chắn muốn xóa khách nợ "${d}" khỏi danh sách không?`,
-                                    confirmLabel: 'Xóa khách nợ',
-                                    variant: 'danger',
-                                    onConfirm: async () => {
-                                      if (debtorName === d) setDebtorName('');
-                                      await onDeleteDebtor(d);
-                                    },
-                                  });
-                                }}
-                                title={`Xóa khách nợ ${d}`}
-                                className={`pr-1.5 pl-0.5 py-0.5 cursor-pointer ${
-                                  debtorName === d
-                                    ? 'text-white/90 hover:text-white'
-                                    : 'text-rose-500 hover:text-rose-700'
-                                }`}
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <input
-                      type="text"
-                      value={debtorName}
-                      onChange={(e) => setDebtorName(e.target.value)}
-                      placeholder="Nhập tên người nợ mới (VD: Anh Hoàng, Chị Lan...) -> Sẽ tự động tạo trong Quản lý Công nợ"
-                      className="w-full h-10 px-3 text-xs font-semibold rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                    />
-                  )}
                 </div>
               )}
             </div>
+          </div>
 
-            {/* Quick Gemini AI Add Item to Bill Bar */}
-            <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-              <input
-                type="text"
-                value={quickAiItemPrompt}
-                onChange={(e) => setQuickAiItemPrompt(e.target.value)}
-                placeholder="Nhập nhanh món (VD: gà biển kho nghệ làm cay giá 129000, 10 Tiger Lùn 22k)..."
-                className="flex-1 h-9 px-3 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-              />
+          {/* Quick Item Add Bar */}
+          <div className="p-2.5 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <input
+              type="text"
+              value={quickAiItemPrompt}
+              onChange={(e) => setQuickAiItemPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleGeminiAddItemsToBill();
+                }
+              }}
+              placeholder="Nhập nhanh món (VD: 2 gà hấp 290k, 10 tiger bạc 24k, gỏi ngó sen)..."
+              className="flex-1 h-9 px-3 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+            />
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 disabled={isProcessing || !quickAiItemPrompt.trim()}
                 onClick={handleGeminiAddItemsToBill}
-                className="h-9 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                className="h-9 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50 whitespace-nowrap shadow-2xs"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Tách & Thêm Món</span>
+                <span>Thêm nhanh</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setShowMenuPickerModal(true)}
+                className="h-9 px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap shadow-2xs"
+                title="Mở bảng Thực đơn để bấm chọn món nhanh"
+              >
+                <Utensils className="w-3.5 h-3.5" />
+                <span>Chọn từ Menu</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleAddEmptyItem}
+                className="h-9 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 text-slate-700 dark:text-slate-300 text-xs font-semibold inline-flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5 text-emerald-600" />
+                <span>+ Thêm dòng</span>
+              </button>
+              {onAddExpenseDeduction && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickDeductionDate(billDate || todayBusinessStr);
+                    setShowQuickDeductionModal(true);
+                  }}
+                  className="h-9 px-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-amber-800 dark:text-amber-200 text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap shadow-2xs transition-colors"
+                  title="Nhập khoản chi/khoản trừ trong ngày"
+                >
+                  <MinusCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  <span>+ Khoản trừ</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Datalist for autocomplete from Menu Catalog */}
+          <datalist id="vqbill-menu-products-list">
+            {products.map((p) => (
+              <option key={p.id} value={p.productName}>
+                {p.category} — Giá chuẩn: {formatVND(p.unitPrice)}
+              </option>
+            ))}
+          </datalist>
+
+          {/* Items Table & Editor */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+              <span>Danh sách món trong hóa đơn ({items.length})</span>
+              {items.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearAllDraftItems}
+                  className="text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:underline cursor-pointer flex items-center gap-1"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Xóa hết món</span>
+                </button>
+              )}
             </div>
 
-            {/* Datalist for autocomplete from Menu Catalog */}
-            <datalist id="vqbill-menu-products-list">
-              {products.map((p) => (
-                <option key={p.id} value={p.productName}>
-                  {p.category} — Giá chuẩn: {formatVND(p.unitPrice)}
-                </option>
-              ))}
-            </datalist>
-
-            {/* Items Section */}
-            <div className="space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                  Danh sách món & Ghi chú từng món ({items.length} món)
-                </span>
-                <div className="flex items-center gap-2">
-                  {items.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleClearAllDraftItems}
-                      className="h-8 px-2.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg inline-flex items-center gap-1 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Xóa hết</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleAddEmptyItem}
-                    className="h-8 px-3 text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 rounded-lg inline-flex items-center gap-1 transition-colors cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Thêm món</span>
-                  </button>
-                </div>
+            {items.length === 0 ? (
+              <div className="py-12 px-4 text-center border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-500 dark:text-slate-400 space-y-2">
+                <p className="font-semibold text-slate-700 dark:text-slate-300">
+                  Chưa có món nào trong hóa đơn
+                </p>
+                <p className="max-w-xs mx-auto">
+                  Chụp/tải ảnh bill bên trái, dán văn bản, hoặc bấm <strong>+ Thêm dòng</strong> để bắt đầu soạn bill.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleAddEmptyItem}
+                  className="mt-2 px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-semibold inline-flex items-center gap-1 text-xs cursor-pointer shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Thêm món đầu tiên</span>
+                </button>
               </div>
+            ) : (
+              <>
+                {/* Mobile Cards (< md) */}
+                <div className="md:hidden space-y-2.5">
+                  {items.map((item, idx) => {
+                    const catalogMatch = products.find(
+                      (p) =>
+                        p.productName.toLowerCase().trim() ===
+                        item.productName.toLowerCase().trim()
+                    );
+                    const categoryOptions = Array.from(
+                      new Set([...categories, item.category].filter(Boolean))
+                    );
 
-              {/* Empty state when no items in draft bill */}
-              {items.length === 0 ? (
-                <div className="py-10 px-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500 dark:text-slate-400">
-                  Chưa có món nào trong hóa đơn. Hãy dán văn bản bill, tải ảnh bill, nhập nhanh món ở trên hoặc bấm <strong>+ Thêm món</strong> để bắt đầu.
-                </div>
-              ) : (
-                <>
-              {/* Mobile Cards (< md) */}
-              <div className="md:hidden space-y-2.5">
-                {items.map((item, idx) => {
-                  const catalogMatch = products.find(
-                    (p) =>
-                      p.productName.toLowerCase().trim() ===
-                      item.productName.toLowerCase().trim()
-                  );
-                  const categoryOptions = Array.from(
-                    new Set([...categories, item.category].filter(Boolean))
-                  );
-
-                  return (
-                    <div
-                      key={idx}
-                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-2.5"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <input
-                          type="text"
-                          list="vqbill-menu-products-list"
-                          value={item.productName}
-                          onChange={(e) =>
-                            handleItemChange(idx, 'productName', e.target.value)
-                          }
-                          onBlur={() => handleProductNameBlur(idx)}
-                          placeholder="Tên món ăn / đồ uống..."
-                          className="flex-1 h-9 px-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveItem(idx)}
-                          className="w-9 h-9 rounded-lg border border-rose-200 dark:border-rose-900/50 text-rose-600 flex items-center justify-center shrink-0 cursor-pointer"
-                          title="Xóa món"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="relative">
-                        <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="text"
-                          value={item.note || ''}
-                          onChange={(e) =>
-                            handleItemChange(idx, 'note', e.target.value)
-                          }
-                          placeholder="Ghi chú món (VD: làm cay, hoặc chi tiết món trong Combo)..."
-                          className="w-full h-8 pl-8 pr-2.5 rounded-lg border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 text-slate-800 dark:text-amber-200 text-[11px]"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-2">
-                        <div>
-                          <label className="block text-[10px] text-slate-500 mb-0.5">
-                            Danh mục
-                          </label>
-                          <select
-                            value={item.category}
+                    return (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-2.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <input
+                            type="text"
+                            list="vqbill-menu-products-list"
+                            value={item.productName}
                             onChange={(e) =>
-                              handleItemChange(idx, 'category', e.target.value)
+                              handleItemChange(idx, 'productName', e.target.value)
                             }
-                            className="w-full h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
-                          >
-                            {categoryOptions.map((cat) => (
-                              <option key={cat} value={cat}>
-                                {cat}
-                              </option>
-                            ))}
-                          </select>
+                            onBlur={() => handleProductNameBlur(idx)}
+                            placeholder="Tên món..."
+                            className="flex-1 h-9 px-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold"
+                          />
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicateItem(idx)}
+                              className="w-9 h-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-500 hover:text-emerald-600 flex items-center justify-center shrink-0 cursor-pointer transition-colors"
+                              title="Nhân bản dòng món này"
+                            >
+                              <CopyPlus className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItem(idx)}
+                              className="w-9 h-9 rounded-lg border border-rose-200 dark:border-rose-900/50 text-rose-600 flex items-center justify-center shrink-0 cursor-pointer"
+                              title="Xóa món"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
-                        <div>
-                          <label className="block text-[10px] text-slate-500 mb-0.5">
-                            Số lượng
-                          </label>
+                        <div className="relative">
+                          <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
                           <input
-                            type="number"
-                            min={1}
-                            value={item.quantity}
+                            type="text"
+                            value={item.note || ''}
                             onChange={(e) =>
-                              handleItemChange(idx, 'quantity', e.target.value)
+                              handleItemChange(idx, 'note', e.target.value)
                             }
-                            className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                            placeholder="Ghi chú món (làm cay, không đá...)"
+                            className="w-full h-8 pl-8 pr-2.5 rounded-lg border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 text-slate-800 dark:text-amber-200 text-[11px]"
                           />
                         </div>
 
-                        <div>
-                          <label className="block text-[10px] text-slate-500 mb-0.5">
-                            Đơn giá (₫)
-                          </label>
-                          <input
-                            type="number"
-                            min={0}
-                            step="any"
-                            value={item.unitPrice}
-                            onChange={(e) =>
-                              handleItemChange(idx, 'unitPrice', e.target.value)
-                            }
-                            className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-1 border-t border-slate-200/70 dark:border-slate-800 text-xs font-mono">
-                        <span className="text-[11px] text-slate-500">
-                          {item.originalUnitPrice && item.originalUnitPrice > item.unitPrice ? (
-                            <span className="text-amber-600 dark:text-amber-400 font-semibold">
-                              Giá gốc: {formatVND(item.originalUnitPrice)} • Giảm{' '}
-                              {item.discountPercent ??
-                                Math.round(
-                                  ((item.originalUnitPrice - item.unitPrice) /
-                                    item.originalUnitPrice) *
-                                    10000
-                                ) / 100}
-                              % (-
-                              {formatVND(
-                                item.discountAmount ??
-                                  item.originalUnitPrice - item.unitPrice
-                              )}
-                              )
-                            </span>
-                          ) : catalogMatch ? (
-                            `Giá Menu: ${formatVND(catalogMatch.unitPrice)}`
-                          ) : (
-                            'Món mới / Tùy chỉnh'
-                          )}
-                        </span>
-                        <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                          = {formatVND(item.quantity * item.unitPrice)}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Desktop Table (>= md) */}
-              <div className="hidden md:block border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      <th className="py-2.5 px-3">Tên món & Ghi chú món (Combo / Yêu cầu)</th>
-                      <th className="py-2.5 px-2 w-32">Danh mục</th>
-                      <th className="py-2.5 px-2 w-20 text-right">SL</th>
-                      <th className="py-2.5 px-2 w-36 text-right">
-                        Đơn giá (₫)
-                      </th>
-                      <th className="py-2.5 px-3 w-28 text-right">Thành tiền</th>
-                      <th className="py-2.5 px-2 w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
-                    {items.map((item, idx) => {
-                      const catalogMatch = products.find(
-                        (p) =>
-                          p.productName.toLowerCase().trim() ===
-                          item.productName.toLowerCase().trim()
-                      );
-                      const isCustomBillPrice =
-                        catalogMatch &&
-                        catalogMatch.unitPrice > 0 &&
-                        catalogMatch.unitPrice !== item.unitPrice;
-
-                      const categoryOptions = Array.from(
-                        new Set([...categories, item.category].filter(Boolean))
-                      );
-
-                      return (
-                        <tr
-                          key={idx}
-                          className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30"
-                        >
-                          <td className="p-2 align-top space-y-1.5">
-                            <input
-                              type="text"
-                              list="vqbill-menu-products-list"
-                              value={item.productName}
-                              onChange={(e) =>
-                                handleItemChange(idx, 'productName', e.target.value)
-                              }
-                              onBlur={() => handleProductNameBlur(idx)}
-                              placeholder="Tên món ăn / nước uống..."
-                              className="w-full h-9 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold"
-                            />
-                            <div className="relative">
-                              <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                              <input
-                                type="text"
-                                value={item.note || ''}
-                                onChange={(e) =>
-                                  handleItemChange(idx, 'note', e.target.value)
-                                }
-                                placeholder="Ghi chú món (VD: làm cay, hoặc các món trong Combo)..."
-                                className="w-full h-7 pl-8 pr-2.5 rounded-lg border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 text-slate-700 dark:text-amber-200 text-[11px]"
-                              />
-                            </div>
-                          </td>
-                          <td className="p-2 align-top">
+                        <div className="grid grid-cols-12 gap-2 items-center">
+                          <div className="col-span-5">
                             <select
                               value={item.category}
                               onChange={(e) =>
                                 handleItemChange(idx, 'category', e.target.value)
                               }
-                              className="w-full h-9 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              className="w-full h-8 px-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
                             >
                               {categoryOptions.map((cat) => (
                                 <option key={cat} value={cat}>
@@ -1836,8 +2230,17 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                                 </option>
                               ))}
                             </select>
-                          </td>
-                          <td className="p-2 align-top">
+                          </div>
+
+                          {/* Stepper buttons for Mobile */}
+                          <div className="col-span-3 flex items-center border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 overflow-hidden h-8">
+                            <button
+                              type="button"
+                              onClick={() => handleAdjustQuantity(idx, -1)}
+                              className="w-6 h-full text-slate-500 hover:text-slate-900 flex items-center justify-center cursor-pointer border-r border-slate-200 dark:border-slate-800"
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
                             <input
                               type="number"
                               min={1}
@@ -1845,117 +2248,247 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               onChange={(e) =>
                                 handleItemChange(idx, 'quantity', e.target.value)
                               }
-                              className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              className="flex-1 text-center font-mono font-bold text-xs bg-transparent focus:outline-none"
                             />
-                          </td>
-                          <td className="p-2 align-top">
+                            <button
+                              type="button"
+                              onClick={() => handleAdjustQuantity(idx, 1)}
+                              className="w-6 h-full text-slate-500 hover:text-slate-900 flex items-center justify-center cursor-pointer border-l border-slate-200 dark:border-slate-800"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+
+                          <div className="col-span-4">
                             <input
                               type="number"
                               min={0}
-                              step="any"
-                              value={item.unitPrice}
+                              step={1000}
+                              value={item.unitPrice || ''}
+                              placeholder="0"
                               onChange={(e) =>
                                 handleItemChange(idx, 'unitPrice', e.target.value)
                               }
-                              className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              className="w-full h-8 px-2 text-right font-mono font-semibold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
                             />
-                            {item.originalUnitPrice && item.originalUnitPrice > item.unitPrice ? (
-                              <div className="text-[10px] text-right mt-0.5 font-mono text-amber-600 dark:text-amber-400 font-semibold leading-tight">
-                                <span className="line-through opacity-75 mr-1">
-                                  {formatVND(item.originalUnitPrice)}
-                                </span>
-                                <span>
-                                  -
-                                  {item.discountPercent ??
-                                    Math.round(
-                                      ((item.originalUnitPrice - item.unitPrice) /
-                                        item.originalUnitPrice) *
-                                        10000
-                                    ) / 100}
-                                  %
-                                </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-1 border-t border-slate-200/70 dark:border-slate-800 text-xs font-mono">
+                          <span className="text-[11px] text-slate-500">
+                            {catalogMatch ? `Menu: ${formatVND(catalogMatch.unitPrice)}` : 'Món mới'}
+                          </span>
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                            = {formatVND((Number(item.quantity) || 1) * (Number(item.unitPrice) || 0))}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop Table (>= md) with Stepper */}
+                <div className="hidden md:block border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto shadow-2xs">
+                  <table className="w-full text-left border-collapse min-w-[660px]">
+                    <thead>
+                      <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                        <th className="py-2.5 px-3 min-w-[220px]">Tên món & Ghi chú (Yêu cầu làm món)</th>
+                        <th className="py-2.5 px-2 w-28">Danh mục</th>
+                        <th className="py-2.5 px-1 w-20 text-center">Số lượng</th>
+                        <th className="py-2.5 px-2 w-28 text-right">Đơn giá (₫)</th>
+                        <th className="py-2.5 px-2.5 w-28 text-right">Thành tiền</th>
+                        <th className="py-2.5 px-1 w-14 text-center">Tác vụ</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
+                      {items.map((item, idx) => {
+                        const catalogMatch = products.find(
+                          (p) =>
+                            p.productName.toLowerCase().trim() ===
+                            item.productName.toLowerCase().trim()
+                        );
+                        const isCustomBillPrice =
+                          catalogMatch &&
+                          catalogMatch.unitPrice > 0 &&
+                          catalogMatch.unitPrice !== item.unitPrice;
+
+                        const categoryOptions = Array.from(
+                          new Set([...categories, item.category].filter(Boolean))
+                        );
+
+                        return (
+                          <tr
+                            key={idx}
+                            className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors"
+                          >
+                            <td className="p-2.5 align-top space-y-1.5 min-w-[220px]">
+                              <input
+                                type="text"
+                                list="vqbill-menu-products-list"
+                                value={item.productName}
+                                onChange={(e) =>
+                                  handleItemChange(idx, 'productName', e.target.value)
+                                }
+                                onBlur={() => handleProductNameBlur(idx)}
+                                placeholder="Tên món ăn / đồ uống..."
+                                className="w-full min-w-[180px] h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold"
+                              />
+                              <div className="relative">
+                                <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2 top-1/2 -translate-y-1/2" />
+                                <input
+                                  type="text"
+                                  value={item.note || ''}
+                                  onChange={(e) =>
+                                    handleItemChange(idx, 'note', e.target.value)
+                                  }
+                                  placeholder="Ghi chú món (làm cay, chi tiết combo)..."
+                                  className="w-full min-w-[180px] h-6.5 pl-7 pr-2 rounded-md border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 text-slate-700 dark:text-amber-200 text-[11px]"
+                                />
                               </div>
-                            ) : (
-                              catalogMatch && (
-                                <div className="text-[10px] text-right mt-0.5 font-mono text-slate-400">
+                            </td>
+
+                            <td className="p-2.5 align-top w-28">
+                              <select
+                                value={item.category}
+                                onChange={(e) =>
+                                  handleItemChange(idx, 'category', e.target.value)
+                                }
+                                className="w-full h-8 px-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              >
+                                {categoryOptions.map((cat) => (
+                                  <option key={cat} value={cat}>
+                                    {cat}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+
+                            {/* Stepper Quantity Control - Compact w-20 */}
+                            <td className="p-2.5 align-top w-20 text-center">
+                              <div className="inline-flex items-center border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 overflow-hidden h-8 w-20 mx-auto">
+                                <button
+                                  type="button"
+                                  onClick={() => handleAdjustQuantity(idx, -1)}
+                                  className="w-6 h-full text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center cursor-pointer border-r border-slate-200 dark:border-slate-800 transition-colors"
+                                  title="Giảm 1"
+                                >
+                                  <Minus className="w-3 h-3" />
+                                </button>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={item.quantity}
+                                  onChange={(e) =>
+                                    handleItemChange(idx, 'quantity', e.target.value)
+                                  }
+                                  className="w-8 text-center font-mono font-bold text-xs bg-transparent focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleAdjustQuantity(idx, 1)}
+                                  className="w-6 h-full text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center cursor-pointer border-l border-slate-200 dark:border-slate-800 transition-colors"
+                                  title="Tăng 1"
+                                >
+                                  <Plus className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </td>
+
+                            <td className="p-2.5 align-top w-28">
+                              <input
+                                type="number"
+                                min={0}
+                                step={1000}
+                                value={item.unitPrice || ''}
+                                placeholder="0"
+                                onChange={(e) =>
+                                  handleItemChange(idx, 'unitPrice', e.target.value)
+                                }
+                                className="w-full h-8 px-2 text-right font-mono font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                              />
+                              {catalogMatch && (
+                                <div className="text-[10px] text-right mt-1 font-mono text-slate-400 truncate">
                                   {isCustomBillPrice ? (
                                     <span className="text-amber-600 dark:text-amber-400">
-                                      Giá gốc: {formatVND(catalogMatch.unitPrice)}
+                                      Menu: {formatVND(catalogMatch.unitPrice)}
                                     </span>
                                   ) : (
-                                    <span>Giá chuẩn: {formatVND(catalogMatch.unitPrice)}</span>
+                                    <span>Chuẩn menu</span>
                                   )}
                                 </div>
-                              )
-                            )}
-                          </td>
-                          <td className="p-2 align-top text-right font-mono font-semibold text-slate-900 dark:text-white pt-3.5">
-                            {formatVND(item.quantity * item.unitPrice)}
-                          </td>
-                          <td className="p-2 align-top text-center pt-3">
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveItem(idx)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                              title="Xóa món"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-                </>
-              )}
-            </div>
+                              )}
+                            </td>
+
+                            <td className="p-2.5 align-top w-28 text-right font-mono font-bold text-slate-900 dark:text-white pt-3.5">
+                              {formatVND((Number(item.quantity) || 1) * (Number(item.unitPrice) || 0))}
+                            </td>
+
+                            <td className="p-2.5 align-top w-14 text-center pt-2.5">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDuplicateItem(idx)}
+                                  className="p-1.5 text-slate-400 hover:text-emerald-600 rounded-lg transition-colors cursor-pointer"
+                                  title="Nhân bản dòng món này"
+                                >
+                                  <CopyPlus className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveItem(idx)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                                  title="Xóa món"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
 
-          {/* Summary & Save Button Footer */}
+          {/* Sticky Summary & Bottom Action Bar */}
           <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
-            <div className="grid grid-cols-3 gap-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 text-xs font-mono">
+            <div className="grid grid-cols-3 gap-2 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800 text-xs font-mono">
               <div>
-                <span className="text-slate-500 block font-sans text-[11px]">Tạm tính</span>
+                <span className="text-slate-500 dark:text-slate-400 block font-sans text-[11px]">
+                  Tạm tính ({items.reduce((s, it) => s + (Number(it.quantity) || 1), 0)} phần)
+                </span>
                 <span className="font-semibold text-slate-800 dark:text-slate-200">
                   {formatVND(subtotalAmount)}
                 </span>
               </div>
               <div>
-                <span className="text-slate-500 block font-sans text-[11px]">Chiết khấu</span>
+                <span className="text-slate-500 dark:text-slate-400 block font-sans text-[11px]">
+                  Chiết khấu
+                </span>
                 <span className="font-semibold text-rose-600 dark:text-rose-400">
                   {safeDiscount > 0 ? `-${formatVND(safeDiscount)}` : '0 ₫'}
                 </span>
               </div>
               <div className="text-right">
-                <span className="text-slate-500 block font-sans text-[11px]">Tổng cộng</span>
-                <span className="font-bold text-sm text-emerald-600 dark:text-emerald-400">
+                <span className="text-slate-500 dark:text-slate-400 block font-sans text-[11px]">
+                  Tổng thanh toán
+                </span>
+                <span className="font-bold text-sm sm:text-base text-emerald-600 dark:text-emerald-400">
                   {formatVND(totalAmount)}
                 </span>
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
               <div className="text-xs text-slate-500 dark:text-slate-400">
-                Ca ngày:{' '}
-                <strong className="font-mono text-slate-800 dark:text-slate-200">
-                  {billDate}
-                </strong>
-                {(checkInTime || checkOutTime) && (
-                  <>
-                    {' '}
-                    · Giờ:{' '}
-                    <strong className="font-mono text-slate-800 dark:text-slate-200">
-                      {checkInTime || '--:--'} → {checkOutTime || '--:--'}
-                    </strong>
-                  </>
-                )}{' '}
-                · Hình thức:{' '}
-                <strong className="text-slate-800 dark:text-slate-200">
-                  {PAYMENT_LABELS[paymentType]}
-                </strong>
+                Ca ngày: <strong className="font-mono text-slate-800 dark:text-slate-200">{billDate}</strong> · Bàn:{' '}
+                <strong className="text-slate-800 dark:text-slate-200">{tableName || 'Chưa chọn'}</strong> · Hình thức:{' '}
+                <strong className="text-slate-800 dark:text-slate-200">{PAYMENT_LABELS[paymentType]}</strong>
               </div>
+
               <div className="flex items-center gap-2 flex-wrap">
                 {onAddExpenseDeduction && (
                   <button
@@ -1964,31 +2497,115 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                       setQuickDeductionDate(billDate || todayBusinessStr);
                       setShowQuickDeductionModal(true);
                     }}
-                    className="h-11 px-4 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-900 dark:text-amber-200 font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-colors shrink-0"
-                    title="Nhập khoản trừ trong ngày (Không cần chuyển qua tab Khoản trừ)"
+                    className="h-11 px-3.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-amber-900 dark:text-amber-200 font-semibold text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs transition-colors shrink-0"
+                    title="Nhập khoản chi/khoản trừ trong ngày"
                   >
                     <MinusCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                    <span>+ Nhập Khoản Trừ Trong Ngày</span>
+                    <span>+ Khoản Trừ Ngày</span>
                   </button>
                 )}
+
                 <button
                   type="button"
                   disabled={isSaving || !canWrite}
                   onClick={handleSaveBill}
-                  className="h-11 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                  className="h-11 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
                 >
                   <Save className="w-4 h-4 shrink-0" />
-                  <span>
-                    {isSaving
-                      ? 'Đang lưu vào hệ thống...'
-                      : 'Lưu Bill & Cộng Số Lượng Thời Gian Thực'}
-                  </span>
+                  <span>{isSaving ? 'Đang lưu vào hệ thống...' : 'Lưu Bill & Cập Nhật Doanh Thu'}</span>
                 </button>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Fullscreen Receipt Inspector Modal */}
+      {isReceiptFullscreen && imagePreview && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-between p-4"
+          onClick={() => setIsReceiptFullscreen(false)}
+        >
+          {/* Top Modal Controls */}
+          <div
+            className="w-full max-w-4xl flex items-center justify-between p-3 rounded-2xl bg-slate-900/90 border border-slate-800 text-white shadow-2xl shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2">
+              <Camera className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs font-bold">Soi Hóa Đơn Toàn Màn Hình</span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setImageZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center cursor-pointer text-xs"
+                title="Thu nhỏ"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+              <span className="font-mono text-xs font-bold w-12 text-center text-emerald-400">
+                {Math.round(imageZoom * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() => setImageZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center cursor-pointer text-xs"
+                title="Phóng to"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setImageRotation((r) => (r + 90) % 360)}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center cursor-pointer text-xs"
+                title="Xoay 90 độ"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setImageZoom(1);
+                  setImageRotation(0);
+                }}
+                className="px-2.5 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold cursor-pointer"
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsReceiptFullscreen(false)}
+                className="w-8 h-8 rounded-lg bg-rose-600 hover:bg-rose-700 flex items-center justify-center cursor-pointer ml-2"
+                title="Đóng xem toàn màn hình"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Large Canvas */}
+          <div
+            className="flex-1 w-full max-w-5xl flex items-center justify-center overflow-auto p-4 select-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="transition-transform duration-150 origin-center"
+              style={{
+                transform: `scale(${imageZoom}) rotate(${imageRotation}deg)`,
+              }}
+            >
+              <img
+                src={imagePreview}
+                alt="Ảnh hóa đơn toàn màn hình"
+                referrerPolicy="no-referrer"
+                className="max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Save Bill Success Popup Modal */}
       {savedBillPopup && (
@@ -2050,6 +2667,14 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     {savedBillPopup.debtorName ? ` (${savedBillPopup.debtorName})` : ''}
                   </span>
                 </div>
+                {savedBillPopup.paymentType === 'split' && (
+                  <div className="flex items-center justify-between font-mono text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">Tách tiền:</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                      TM: {formatVND(savedBillPopup.paidCashAmount || 0)} · CK: {formatVND(savedBillPopup.paidTransferAmount || 0)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500 dark:text-slate-400">Số lượng món:</span>
                   <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
@@ -2087,7 +2712,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         </div>
       )}
 
-      {/* FLOATING BUTTON AT RIGHT EDGE, VERTICAL CENTER OF SCREEN (REQ 4) */}
+      {/* Nút Khoản Trừ ở giữa bên cạnh phải theo đúng như ảnh chụp của người dùng */}
       {onAddExpenseDeduction && (
         <button
           type="button"
@@ -2095,14 +2720,14 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
             setQuickDeductionDate(billDate || todayBusinessStr);
             setShowQuickDeductionModal(true);
           }}
-          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 px-2.5 py-4 rounded-l-2xl bg-gradient-to-b from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white shadow-2xl flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l border-amber-300/40 hover:pr-4 transition-all group active:scale-95"
-          title="Nhập khoản trừ trong ngày (Không cần chuyển qua tab Khoản trừ)"
+          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 bg-[#d97706] hover:bg-[#b45309] text-white shadow-2xl rounded-l-2xl py-4 px-2.5 flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l border-amber-300/40 hover:-translate-x-1 transition-all select-none group"
+          title="Nhập khoản chi/khoản trừ trong ngày"
         >
-          <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform shadow-xs">
+          <div className="w-6 h-6 rounded-full border border-white/60 flex items-center justify-center shrink-0 shadow-xs group-hover:scale-110 transition-transform">
             <MinusCircle className="w-4 h-4 text-white" />
           </div>
-          <span className="[writing-mode:vertical-rl] text-[11px] font-extrabold tracking-wider select-none py-1 uppercase text-amber-100 group-hover:text-white">
-            + Khoản Trừ Trong Ngày
+          <span className="text-[11px] font-bold tracking-widest text-white [writing-mode:vertical-rl] select-none uppercase">
+            + KHOẢN TRỪ TRONG NGÀY
           </span>
         </button>
       )}
@@ -2322,6 +2947,187 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Menu Catalog Quick Picker Modal (Chọn Món Nhanh từ Menu) */}
+      {showMenuPickerModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5"
+          onClick={() => setShowMenuPickerModal(false)}
+        >
+          <div
+            className="w-full max-w-2xl max-h-[85vh] rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                  <Utensils className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <span>Thực Đơn Quán</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full font-mono bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold">
+                      {products.length} món
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Chạm hoặc click vào món để thêm ngay vào hóa đơn (tự động cộng dồn số lượng)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMenuPickerModal(false)}
+                className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search & Category Filter Toolbar */}
+            <div className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-800 space-y-2.5 bg-white dark:bg-slate-900 shrink-0">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={menuPickerSearch}
+                  onChange={(e) => setMenuPickerSearch(e.target.value)}
+                  placeholder="Tìm theo tên món (VD: lẩu, bia, gà, bò, nước suối...)"
+                  className="w-full h-10 pl-9 pr-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  autoFocus
+                />
+              </div>
+
+              {/* Category Filter Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar">
+                <button
+                  type="button"
+                  onClick={() => setMenuPickerCategory('all')}
+                  className={`px-2.5 py-1 rounded-lg font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                    menuPickerCategory === 'all'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  Tất cả ({products.length})
+                </button>
+                {categories.map((cat) => {
+                  const count = products.filter((p) => p.category === cat).length;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setMenuPickerCategory(cat)}
+                      className={`px-2.5 py-1 rounded-lg font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                        menuPickerCategory === cat
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      {cat} {count > 0 ? `(${count})` : ''}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Menu Products Grid */}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 divide-y divide-slate-100 dark:divide-slate-800/60">
+              {(() => {
+                const searchLower = menuPickerSearch.trim().toLowerCase();
+                const filtered = products.filter((p) => {
+                  if (menuPickerCategory !== 'all' && p.category !== menuPickerCategory) return false;
+                  if (searchLower && !p.productName.toLowerCase().includes(searchLower)) return false;
+                  return true;
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="py-12 text-center text-xs text-slate-400 space-y-2">
+                      <p className="font-semibold text-slate-600 dark:text-slate-300">
+                        Không tìm thấy món nào phù hợp
+                      </p>
+                      <p>Thử tìm với từ khóa khác hoặc chuyển sang danh mục Tất cả.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {filtered.map((prod) => {
+                      const inBill = items.find(
+                        (it) => it.productName.toLowerCase().trim() === prod.productName.toLowerCase().trim()
+                      );
+                      const inBillQty = inBill ? Number(inBill.quantity) || 1 : 0;
+
+                      return (
+                        <div
+                          key={prod.id}
+                          onClick={() => handleAddProductFromCatalog(prod)}
+                          className={`p-3 rounded-xl border text-xs cursor-pointer transition-all flex items-center justify-between gap-3 ${
+                            inBillQty > 0
+                              ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/30 hover:border-emerald-500 shadow-2xs'
+                              : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                          }`}
+                        >
+                          <div className="space-y-0.5 min-w-0">
+                            <div className="font-bold text-slate-900 dark:text-white truncate">
+                              {prod.productName}
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                              <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 font-medium">
+                                {prod.category}
+                              </span>
+                              <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                                {formatVND(prod.unitPrice)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {inBillQty > 0 && (
+                              <span className="px-2 py-0.5 rounded-full font-mono text-[11px] font-bold bg-emerald-600 text-white">
+                                x{inBillQty}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              className="w-8 h-8 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-xs cursor-pointer"
+                              title="Thêm vào bill"
+                            >
+                              <Plus className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Modal Bottom Sticky Summary */}
+            <div className="p-3 sm:p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/50 flex items-center justify-between gap-3 shrink-0">
+              <div className="text-xs">
+                <span className="text-slate-500">Hóa đơn đang có: </span>
+                <strong className="text-slate-900 dark:text-white">{items.length} món</strong>
+                <span className="mx-1 text-slate-300">·</span>
+                <strong className="font-mono text-emerald-600 dark:text-emerald-400">
+                  {formatVND(totalAmount)}
+                </strong>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMenuPickerModal(false)}
+                className="h-9 px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold cursor-pointer hover:opacity-90"
+              >
+                Xong
+              </button>
+            </div>
           </div>
         </div>
       )}

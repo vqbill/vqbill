@@ -290,7 +290,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
 };
 
-export type PaymentType = 'cash' | 'transfer' | 'debt';
+export type PaymentType = 'cash' | 'transfer' | 'debt' | 'split';
 export type DebtStatus = 'none' | 'unpaid' | 'paid';
 
 export const STANDARD_CATEGORIES = [
@@ -327,6 +327,8 @@ export interface ExtractedBillJSON {
     tableName?: string;
     paymentType: PaymentType;
     debtorName: string;
+    paidCashAmount?: number; // Số tiền thanh toán Tiền mặt (đặc biệt khi paymentType = 'split')
+    paidTransferAmount?: number; // Số tiền thanh toán Chuyển khoản (đặc biệt khi paymentType = 'split')
     subtotalAmount?: number;
     discountAmount?: number;
     totalAmount: number;
@@ -346,6 +348,9 @@ export interface BillRecord {
   debtorName: string;
   debtStatus: DebtStatus;
   settleDate?: string; // Ngày tất toán công nợ (YYYY-MM-DD)
+  settledMethod?: 'cash' | 'transfer'; // Hình thức thanh toán khi tất toán công nợ (Tiền mặt hoặc Chuyển khoản)
+  paidCashAmount?: number; // Số tiền trả tiền mặt khi thanh toán kết hợp
+  paidTransferAmount?: number; // Số tiền trả chuyển khoản khi thanh toán kết hợp
   subtotalAmount?: number;
   discountAmount?: number;
   totalAmount: number;
@@ -721,6 +726,7 @@ export const PAYMENT_LABELS: Record<PaymentType, string> = {
   cash: 'Tiền mặt',
   transfer: 'Chuyển khoản',
   debt: 'Công nợ',
+  split: 'Tiền mặt + Chuyển khoản',
 };
 
 const VALID_TAB_IDS = new Set<ManagementTabId>(

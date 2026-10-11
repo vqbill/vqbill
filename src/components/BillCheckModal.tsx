@@ -28,6 +28,7 @@ import {
   formatDateDMY,
   extractReceiptOriginalPrice,
   reconstructBillItemsFromSummary,
+  getBillPaymentBreakdown,
 } from '../utils/parser';
 
 interface BillCheckModalProps {
@@ -507,10 +508,14 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
                   ? 'text-emerald-600 dark:text-emerald-400'
                   : bill.paymentType === 'transfer'
                   ? 'text-blue-600 dark:text-blue-400'
+                  : bill.paymentType === 'split'
+                  ? 'text-purple-600 dark:text-purple-400'
                   : 'text-amber-600 dark:text-amber-400'
               }`}
             >
-              {PAYMENT_LABELS[bill.paymentType]}
+              {bill.paymentType === 'split'
+                ? `TM: ${formatReceiptMoney(getBillPaymentBreakdown(bill).cash)} + CK: ${formatReceiptMoney(getBillPaymentBreakdown(bill).transfer)}`
+                : PAYMENT_LABELS[bill.paymentType]}
             </span>
             <span className="text-slate-300 dark:text-slate-700">·</span>
             <span className="inline-flex items-center gap-1 text-slate-700 dark:text-slate-300 font-medium">
@@ -746,6 +751,22 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
                 <span>Tổng Cộng:</span>
                 <span>{formatReceiptMoney(bill.totalAmount)}</span>
               </div>
+
+              {bill.paymentType === 'split' && (() => {
+                const bd = getBillPaymentBreakdown(bill);
+                return (
+                  <div className="pt-1.5 pb-1 space-y-1 text-xs border-t border-dashed border-slate-400 font-medium">
+                    <div className="flex items-center justify-between text-emerald-800">
+                      <span>• Thanh toán Tiền mặt:</span>
+                      <span className="font-bold">{formatReceiptMoney(bd.cash)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-blue-800">
+                      <span>• Thanh toán Chuyển khoản:</span>
+                      <span className="font-bold">{formatReceiptMoney(bd.transfer)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {bill.deductedAmount > 0 && (
                 <>

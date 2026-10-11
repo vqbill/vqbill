@@ -5,6 +5,7 @@ import {
   BillItemRecord,
   ProductRecord,
   PaymentType,
+  DebtStatus,
   ConfirmRequestOptions,
 } from '../types';
 import {
@@ -45,6 +46,18 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   const [checkOutTime, setCheckOutTime] = useState(bill.checkOutTime || '');
   const [discountAmount, setDiscountAmount] = useState<number>(bill.discountAmount || 0);
   const [paymentType, setPaymentType] = useState<PaymentType>(bill.paymentType);
+  const [splitCashInput, setSplitCashInput] = useState<string>(() => {
+    if (bill.paymentType === 'split') {
+      return bill.paidCashAmount !== undefined ? String(bill.paidCashAmount) : '';
+    }
+    return '';
+  });
+  const [splitTransferInput, setSplitTransferInput] = useState<string>(() => {
+    if (bill.paymentType === 'split') {
+      return bill.paidTransferAmount !== undefined ? String(bill.paidTransferAmount) : '';
+    }
+    return '';
+  });
   const [debtorName, setDebtorName] = useState(bill.debtorName);
   const [debtStatus, setDebtStatus] = useState<'none' | 'unpaid' | 'paid'>(bill.debtStatus);
   const [settleDate, setSettleDate] = useState<string>(() => {
@@ -74,6 +87,13 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
       return true;
     }
     if (paymentType !== bill.paymentType) return true;
+    if (paymentType === 'split') {
+      const currentCash = Math.max(0, Number(splitCashInput) || 0);
+      const currentTransfer = Math.max(0, Number(splitTransferInput) || 0);
+      const oldCash = Math.max(0, Number(bill.paidCashAmount) || 0);
+      const oldTransfer = Math.max(0, Number(bill.paidTransferAmount) || 0);
+      if (currentCash !== oldCash || currentTransfer !== oldTransfer) return true;
+    }
     if ((debtorName || '').trim() !== (bill.debtorName || '').trim()) return true;
     if (debtStatus !== bill.debtStatus) return true;
     if ((settleDate || '').trim() !== (bill.settleDate || '').trim()) return true;
@@ -100,6 +120,8 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     checkOutTime,
     discountAmount,
     paymentType,
+    splitCashInput,
+    splitTransferInput,
     debtorName,
     debtStatus,
     settleDate,
@@ -277,30 +299,71 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             1000,
             ''
           );
+          const isSettled =
+            paymentType !== 'split' &&
+            paymentType !== 'cash' &&
+            paymentType !== 'transfer' &&
+            (debtStatus === 'paid' ||
+              (bill.debtStatus === 'paid' && debtStatus !== 'unpaid'));
+          const isDebtBill =
+            paymentType === 'debt' ||
+            (paymentType !== 'split' &&
+              paymentType !== 'cash' &&
+              paymentType !== 'transfer' &&
+              (Boolean(debtorName.trim()) || Boolean(bill.debtorName) || isSettled));
+
+          const finalSettleDate = isSettled
+            ? (settleDate.trim() || bill.settleDate || bill.billDate)
+            : undefined;
+
+          // Khi đã tất toán: Hóa đơn vẫn giữ bản chất công nợ phát sinh ngày billDate với debtStatus = 'paid',
+          // và ngày tiền thực thu được ghi nhận chính xác vào settleDate với hình thức tương ứng (tiền mặt / chuyển khoản).
+          const finalPaymentType: PaymentType = isDebtBill ? 'debt' : paymentType;
+          const finalDebtStatus: DebtStatus = isSettled
+            ? 'paid'
+            : isDebtBill
+            ? 'unpaid'
+            : 'none';
+          const finalSettledMethod: 'cash' | 'transfer' | undefined = isSettled
+            ? (bill.settledMethod === 'transfer' ? 'transfer' : 'cash')
+            : undefined;
+
+          let finalPaidCash: number | undefined = undefined;
+          let finalPaidTransfer: number | undefined = undefined;
+          if (finalPaymentType === 'split') {
+            let c = Math.max(0, Number(splitCashInput) || 0);
+            let t = Math.max(0, Number(splitTransferInput) || 0);
+            if (c === 0 && t === 0 && computedTotal > 0) {
+              c = Math.round(computedTotal / 2);
+              t = computedTotal - c;
+            } else if (c + t !== computedTotal) {
+              if (c > 0 && t === 0) {
+                t = Math.max(0, computedTotal - c);
+              } else if (t > 0 && c === 0) {
+                c = Math.max(0, computedTotal - t);
+              }
+            }
+            finalPaidCash = c;
+            finalPaidTransfer = t;
+          }
+
           const updatedBill: BillRecord = {
             ...bill,
             billDate,
             checkInTime: checkInTime.trim() || undefined,
             checkOutTime: checkOutTime.trim() || undefined,
-            paymentType,
-            debtorName: paymentType === 'debt' ? debtorName.trim() : bill.debtorName,
-            debtStatus:
-              paymentType === 'debt'
-                ? debtStatus === 'none'
-                  ? 'unpaid'
-                  : debtStatus
-                : bill.debtStatus === 'paid'
-                ? 'paid'
-                : 'none',
+            paymentType: finalPaymentType,
+            paidCashAmount: finalPaidCash,
+            paidTransferAmount: finalPaidTransfer,
+            debtorName: isDebtBill ? (debtorName.trim() || bill.debtorName || 'Khách nợ') : '',
+            debtStatus: finalDebtStatus,
+            settleDate: finalSettleDate,
+            settledMethod: finalSettledMethod,
             subtotalAmount,
             discountAmount: safeDiscount,
             totalAmount: computedTotal,
             itemsSummary: summaryStr,
             note: note.trim(),
-            settleDate:
-              debtStatus === 'paid' || bill.debtStatus === 'paid'
-                ? (settleDate.trim() || bill.settleDate || bill.billDate)
-                : bill.settleDate,
             updatedAtMs: now,
           };
 
@@ -433,6 +496,13 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                 onChange={(e) => {
                   const nextType = e.target.value as PaymentType;
                   setPaymentType(nextType);
+                  if (nextType === 'split') {
+                    if (!splitCashInput && !splitTransferInput && computedTotal > 0) {
+                      const halfCash = Math.round(computedTotal / 2);
+                      setSplitCashInput(String(halfCash));
+                      setSplitTransferInput(String(computedTotal - halfCash));
+                    }
+                  }
                   if (nextType === 'debt' && debtStatus === 'none') {
                     setDebtStatus('unpaid');
                   }
@@ -441,9 +511,137 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               >
                 <option value="cash">Tiền mặt (Đã thanh toán)</option>
                 <option value="transfer">Chuyển khoản (Đã thanh toán)</option>
+                <option value="split">Tiền mặt + Chuyển khoản (Kết hợp)</option>
                 <option value="debt">Công nợ (Chưa thanh toán)</option>
               </select>
             </div>
+
+            {paymentType === 'split' && (
+              <div className="p-3.5 rounded-xl border border-purple-200 dark:border-purple-900/60 bg-purple-50/50 dark:bg-purple-950/20 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
+                  <span className="font-bold text-purple-900 dark:text-purple-200 flex items-center gap-1.5">
+                    <span className="inline-block w-2 h-2 rounded-full bg-purple-600"></span>
+                    Chia tiền thanh toán (Tổng hóa đơn: {formatVND(computedTotal)})
+                  </span>
+                  <span className="text-[11px] text-purple-700 dark:text-purple-300">
+                    VD: Bill 5 triệu → TM 1 triệu, CK 4 triệu
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                        1. Tiền mặt (VNĐ):
+                      </label>
+                      {computedTotal > 0 && (
+                        <div className="flex items-center gap-1">
+                          {[1000000, 2000000, Math.round(computedTotal / 2)].map((preset) => (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => {
+                                const c = Math.min(computedTotal, preset);
+                                setSplitCashInput(String(c));
+                                setSplitTransferInput(String(Math.max(0, computedTotal - c)));
+                              }}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 font-mono font-medium hover:bg-emerald-50 cursor-pointer"
+                            >
+                              {formatVND(preset)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1000}
+                      value={splitCashInput}
+                      onChange={(e) => {
+                        const valStr = e.target.value;
+                        setSplitCashInput(valStr);
+                        if (valStr !== '' && !isNaN(Number(valStr))) {
+                          const cashNum = Math.max(0, Number(valStr));
+                          const remain = Math.max(0, computedTotal - cashNum);
+                          setSplitTransferInput(String(remain));
+                        }
+                      }}
+                      placeholder="Số tiền mặt..."
+                      className="w-full h-10 px-3 text-xs font-mono font-bold rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-semibold text-sky-700 dark:text-sky-400">
+                        2. Chuyển khoản (VNĐ):
+                      </label>
+                      {computedTotal > 0 && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSplitTransferInput(String(computedTotal));
+                              setSplitCashInput('0');
+                            }}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-sky-300 dark:border-sky-700 text-sky-700 dark:text-sky-300 font-mono font-medium hover:bg-sky-50 cursor-pointer"
+                          >
+                            CK hết
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1000}
+                      value={splitTransferInput}
+                      onChange={(e) => {
+                        const valStr = e.target.value;
+                        setSplitTransferInput(valStr);
+                        if (valStr !== '' && !isNaN(Number(valStr))) {
+                          const trNum = Math.max(0, Number(valStr));
+                          const remain = Math.max(0, computedTotal - trNum);
+                          setSplitCashInput(String(remain));
+                        }
+                      }}
+                      placeholder="Số tiền chuyển khoản..."
+                      className="w-full h-10 px-3 text-xs font-mono font-bold rounded-xl border border-sky-300 dark:border-sky-700 bg-white dark:bg-slate-900 text-sky-700 dark:text-sky-300 focus:ring-2 focus:ring-sky-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Đối soát tổng TM + CK so với tổng bill */}
+                {(() => {
+                  const c = Number(splitCashInput) || 0;
+                  const t = Number(splitTransferInput) || 0;
+                  const sum = c + t;
+                  const diff = computedTotal - sum;
+                  return (
+                    <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] pt-1.5 border-t border-purple-200/60 dark:border-purple-900/40">
+                      <span className="text-slate-600 dark:text-slate-300">
+                        Tổng đã chia: <strong className="font-mono text-purple-700 dark:text-purple-300">{formatVND(sum)}</strong> / {formatVND(computedTotal)}
+                      </span>
+                      {diff === 0 ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Khớp 100%
+                        </span>
+                      ) : diff > 0 ? (
+                        <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                          Thiếu {formatVND(diff)}
+                        </span>
+                      ) : (
+                        <span className="text-rose-600 dark:text-rose-400 font-semibold">
+                          Dư {formatVND(Math.abs(diff))}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
             <div>
               <div className="flex items-center justify-between mb-1">

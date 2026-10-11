@@ -1507,6 +1507,8 @@ export async function saveNewBillToCloud(params: {
   discountAmount?: number;
   paymentType: PaymentType;
   debtorName: string;
+  paidCashAmount?: number;
+  paidTransferAmount?: number;
   note: string;
   subtotalAmount?: number;
   customBillCodePrefix?: string;
@@ -1527,6 +1529,8 @@ export async function saveNewBillToCloud(params: {
     discountAmount = 0,
     paymentType,
     debtorName,
+    paidCashAmount,
+    paidTransferAmount,
     note,
     customBillCodePrefix,
     items,
@@ -1615,6 +1619,8 @@ export async function saveNewBillToCloud(params: {
     paymentType,
     debtorName: cleanDebtor,
     debtStatus,
+    paidCashAmount: paidCashAmount !== undefined ? Math.max(0, Math.round(Number(paidCashAmount) || 0)) : undefined,
+    paidTransferAmount: paidTransferAmount !== undefined ? Math.max(0, Math.round(Number(paidTransferAmount) || 0)) : undefined,
     subtotalAmount,
     discountAmount: cleanDiscount,
     totalAmount,
@@ -1705,6 +1711,8 @@ export async function saveNewBillToCloud(params: {
           paymentType: billRecord.paymentType,
           debtorName: billRecord.debtorName,
           debtStatus: billRecord.debtStatus,
+          paidCashAmount: billRecord.paidCashAmount || 0,
+          paidTransferAmount: billRecord.paidTransferAmount || 0,
           subtotalAmount: billRecord.subtotalAmount || billRecord.totalAmount,
           discountAmount: billRecord.discountAmount || 0,
           totalAmount: billRecord.totalAmount,
@@ -1797,6 +1805,8 @@ export async function updateBillAndItemsInCloud(params: {
         paymentType: bill.paymentType,
         debtorName: truncateStr(bill.debtorName, 120, ''),
         debtStatus: bill.debtStatus,
+        paidCashAmount: bill.paidCashAmount || 0,
+        paidTransferAmount: bill.paidTransferAmount || 0,
         subtotalAmount: Math.max(0, Math.round(bill.subtotalAmount ?? bill.totalAmount)),
         discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
         totalAmount: Math.max(0, Math.round(bill.totalAmount)),
@@ -1814,6 +1824,8 @@ export async function updateBillAndItemsInCloud(params: {
         paymentType: bill.paymentType,
         debtorName: truncateStr(bill.debtorName, 120, ''),
         debtStatus: bill.debtStatus,
+        paidCashAmount: bill.paidCashAmount || 0,
+        paidTransferAmount: bill.paidTransferAmount || 0,
         subtotalAmount: Math.max(0, Math.round(bill.subtotalAmount ?? bill.totalAmount)),
         discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
         totalAmount: Math.max(0, Math.round(bill.totalAmount)),

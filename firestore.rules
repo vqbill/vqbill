@@ -122,7 +122,8 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'ownerId', 'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime',
-          'paymentType', 'debtorName', 'debtStatus', 'subtotalAmount', 'discountAmount',
+          'paymentType', 'debtorName', 'debtStatus', 'settleDate', 'settledMethod',
+          'paidCashAmount', 'paidTransferAmount', 'subtotalAmount', 'discountAmount',
           'totalAmount', 'deductedAmount', 'itemsSummary',
           'note', 'status', 'createdAt', 'updatedAt'
         ]) &&
@@ -133,9 +134,13 @@ service cloud.firestore {
         (!('rawDate' in data) || (data.rawDate is string && data.rawDate.size() <= 20)) &&
         (!('checkInTime' in data) || (data.checkInTime is string && data.checkInTime.size() <= 20)) &&
         (!('checkOutTime' in data) || (data.checkOutTime is string && data.checkOutTime.size() <= 20)) &&
-        data.paymentType is string && data.paymentType in ['cash', 'transfer', 'debt'] &&
+        data.paymentType is string && data.paymentType in ['cash', 'transfer', 'debt', 'split'] &&
         data.debtorName is string && data.debtorName.size() <= 120 &&
         data.debtStatus is string && data.debtStatus in ['none', 'unpaid', 'paid'] &&
+        (!('settleDate' in data) || (data.settleDate is string && data.settleDate.size() <= 20)) &&
+        (!('settledMethod' in data) || (data.settledMethod is string && data.settledMethod in ['cash', 'transfer'])) &&
+        (!('paidCashAmount' in data) || (data.paidCashAmount is number && data.paidCashAmount >= 0)) &&
+        (!('paidTransferAmount' in data) || (data.paidTransferAmount is number && data.paidTransferAmount >= 0)) &&
         (!('subtotalAmount' in data) || (data.subtotalAmount is number && data.subtotalAmount >= 0)) &&
         (!('discountAmount' in data) || (data.discountAmount is number && data.discountAmount >= 0)) &&
         data.totalAmount is number && data.totalAmount >= 0 &&
@@ -349,7 +354,8 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['deductedAmount', 'itemsSummary', 'note', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly([
             'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime',
-            'paymentType', 'debtorName', 'debtStatus', 'subtotalAmount', 'discountAmount',
+            'paymentType', 'debtorName', 'debtStatus', 'settleDate', 'settledMethod',
+            'paidCashAmount', 'paidTransferAmount', 'subtotalAmount', 'discountAmount',
             'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'updatedAt'
           ])
         );

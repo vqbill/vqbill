@@ -227,8 +227,25 @@
         },
         "paymentType": {
           "type": "string",
-          "description": "Payment method: cash, transfer, or debt.",
-          "enum": ["cash", "transfer", "debt"]
+          "description": "Payment method: cash, transfer, debt, or split (mixed cash + transfer).",
+          "enum": ["cash", "transfer", "debt", "split"]
+        },
+        "paidCashAmount": {
+          "type": "number",
+          "description": "Cash amount paid when paymentType is split or cash."
+        },
+        "paidTransferAmount": {
+          "type": "number",
+          "description": "Transfer amount paid when paymentType is split or transfer."
+        },
+        "settleDate": {
+          "type": "string",
+          "description": "Date debt was settled (YYYY-MM-DD)."
+        },
+        "settledMethod": {
+          "type": "string",
+          "description": "Method used to settle debt (cash or transfer).",
+          "enum": ["cash", "transfer"]
         },
         "debtorName": {
           "type": "string",

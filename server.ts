@@ -1079,7 +1079,9 @@ app.post('/api/sync-kiotviet-bill', (req, res) => {
     const todayStr = getCurrentBusinessDate();
 
     let extractedTableName = '';
-    let extractedPaymentType: 'cash' | 'transfer' | 'debt' = 'cash';
+    let extractedPaymentType: 'cash' | 'transfer' | 'debt' | 'split' = 'cash';
+    let extractedPaidCashAmount = 0;
+    let extractedPaidTransferAmount = 0;
     let extractedDebtorName = '';
     let extractedDiscount = 0;
     let extractedTotal = 0;
@@ -1105,6 +1107,8 @@ app.post('/api/sync-kiotviet-bill', (req, res) => {
       );
       extractedTableName = parsed.billInfo.tableName || 'Bàn KiotViet';
       extractedPaymentType = parsed.billInfo.paymentType || 'cash';
+      extractedPaidCashAmount = parsed.billInfo.paidCashAmount || 0;
+      extractedPaidTransferAmount = parsed.billInfo.paidTransferAmount || 0;
       extractedDebtorName = parsed.billInfo.debtorName || '';
       extractedDiscount = parsed.billInfo.discountAmount || 0;
       extractedTotal = parsed.billInfo.totalAmount || 0;
@@ -1137,6 +1141,14 @@ app.post('/api/sync-kiotviet-bill', (req, res) => {
         payload.paymentType || payload.paymentMethod || payload.PaymentMethod || ''
       ).toLowerCase();
       if (
+        payMethodStr.includes('kết hợp') ||
+        payMethodStr.includes('split') ||
+        (payMethodStr.includes('mặt') && payMethodStr.includes('chuyển'))
+      ) {
+        extractedPaymentType = 'split';
+        extractedPaidCashAmount = normalizeMoneyNumber(payload.paidCashAmount || payload.cashAmount || 0);
+        extractedPaidTransferAmount = normalizeMoneyNumber(payload.paidTransferAmount || payload.transferAmount || 0);
+      } else if (
         payMethodStr.includes('ck') ||
         payMethodStr.includes('chuyển') ||
         payMethodStr.includes('bank') ||
@@ -1269,6 +1281,8 @@ app.post('/api/sync-kiotviet-bill', (req, res) => {
       checkInTime: extractedCheckIn || undefined,
       checkOutTime: extractedCheckOut || undefined,
       paymentType: extractedPaymentType,
+      paidCashAmount: extractedPaymentType === 'split' ? extractedPaidCashAmount : undefined,
+      paidTransferAmount: extractedPaymentType === 'split' ? extractedPaidTransferAmount : undefined,
       debtorName: extractedDebtorName,
       debtStatus: extractedPaymentType === 'debt' ? 'unpaid' : 'none',
       subtotalAmount: billItemsPayload.reduce((sum, it) => sum + it.subtotal, 0),
