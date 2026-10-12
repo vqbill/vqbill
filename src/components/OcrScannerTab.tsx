@@ -1253,7 +1253,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* Left Column: Image Inspector or Text Input Area */}
         <div
-          className={`lg:col-span-4 xl:col-span-4 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 ${
+          className={`lg:col-span-4 xl:col-span-3.5 2xl:col-span-3 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 ${
             imagePreview && mobileViewTab === 'editor' ? 'hidden lg:block' : ''
           } ${isReceiptSticky && imagePreview ? 'lg:sticky lg:top-4' : ''}`}
         >
@@ -1618,7 +1618,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
         {/* Right Area: Interactive Bill Review, Items Table & Fast Entry */}
         <div
-          className={`lg:col-span-8 xl:col-span-8 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 ${
+          className={`lg:col-span-8 xl:col-span-8.5 2xl:col-span-9 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 ${
             imagePreview && mobileViewTab === 'image' ? 'hidden lg:block' : ''
           }`}
         >
@@ -2289,15 +2289,23 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
                 {/* Desktop Table (>= md) with Stepper */}
                 <div className="hidden md:block border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto shadow-2xs">
-                  <table className="w-full text-left border-collapse min-w-[660px]">
+                  <table className="w-full text-left border-collapse min-w-[700px] table-fixed">
+                    <colgroup>
+                      <col className="w-auto" style={{ minWidth: '260px' }} />
+                      <col className="w-24 lg:w-28" />
+                      <col className="w-16 lg:w-18" />
+                      <col className="w-24 lg:w-28" />
+                      <col className="w-24 lg:w-28" />
+                      <col className="w-14" />
+                    </colgroup>
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                        <th className="py-2.5 px-3 min-w-[220px]">Tên món & Ghi chú (Yêu cầu làm món)</th>
-                        <th className="py-2.5 px-2 w-28">Danh mục</th>
-                        <th className="py-2.5 px-1 w-20 text-center">Số lượng</th>
-                        <th className="py-2.5 px-2 w-28 text-right">Đơn giá (₫)</th>
-                        <th className="py-2.5 px-2.5 w-28 text-right">Thành tiền</th>
-                        <th className="py-2.5 px-1 w-14 text-center">Tác vụ</th>
+                        <th className="py-2.5 px-3">Tên món & Ghi chú (Yêu cầu làm món)</th>
+                        <th className="py-2.5 px-2">Danh mục</th>
+                        <th className="py-2.5 px-1 text-center" title="Số lượng món">SL</th>
+                        <th className="py-2.5 px-2 text-right">Đơn giá (₫)</th>
+                        <th className="py-2.5 px-2.5 text-right">Thành tiền</th>
+                        <th className="py-2.5 px-1 text-center">Tác vụ</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
@@ -2321,7 +2329,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                             key={idx}
                             className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors"
                           >
-                            <td className="p-2.5 align-top space-y-1.5 min-w-[220px]">
+                            <td className="p-2.5 align-top space-y-1.5">
                               <input
                                 type="text"
                                 list="vqbill-menu-products-list"
@@ -2331,23 +2339,27 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                                 }
                                 onBlur={() => handleProductNameBlur(idx)}
                                 placeholder="Tên món ăn / đồ uống..."
-                                className="w-full min-w-[180px] h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold"
+                                className="w-full h-8 px-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-emerald-500"
                               />
                               <div className="relative">
-                                <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2 top-1/2 -translate-y-1/2" />
+                                <MessageSquareText className="w-3.5 h-3.5 text-amber-500 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
                                 <input
                                   type="text"
                                   value={item.note || ''}
                                   onChange={(e) =>
                                     handleItemChange(idx, 'note', e.target.value)
                                   }
-                                  placeholder="Ghi chú món (làm cay, chi tiết combo)..."
-                                  className="w-full min-w-[180px] h-6.5 pl-7 pr-2 rounded-md border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 text-slate-700 dark:text-amber-200 text-[11px]"
+                                  placeholder="Ghi chú món (làm cay, không đá, combo)..."
+                                  className={`w-full h-6.5 pl-7 pr-2 rounded-md border text-[11px] transition-colors ${
+                                    item.note
+                                      ? 'border-amber-300 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 font-medium'
+                                      : 'border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-900 text-slate-700 dark:text-slate-300 placeholder:text-slate-400'
+                                  }`}
                                 />
                               </div>
                             </td>
 
-                            <td className="p-2.5 align-top w-28">
+                            <td className="p-2.5 align-top">
                               <select
                                 value={item.category}
                                 onChange={(e) =>
@@ -2363,16 +2375,16 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               </select>
                             </td>
 
-                            {/* Stepper Quantity Control - Compact w-20 */}
-                            <td className="p-2.5 align-top w-20 text-center">
-                              <div className="inline-flex items-center border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 overflow-hidden h-8 w-20 mx-auto">
+                            {/* Stepper Quantity Control - Compact w-16 / w-18 */}
+                            <td className="p-2.5 align-top text-center">
+                              <div className="inline-flex items-center border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 overflow-hidden h-7.5 w-16 mx-auto shadow-2xs">
                                 <button
                                   type="button"
                                   onClick={() => handleAdjustQuantity(idx, -1)}
-                                  className="w-6 h-full text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center cursor-pointer border-r border-slate-200 dark:border-slate-800 transition-colors"
+                                  className="w-5 h-full text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center cursor-pointer border-r border-slate-200 dark:border-slate-800 transition-colors"
                                   title="Giảm 1"
                                 >
-                                  <Minus className="w-3 h-3" />
+                                  <Minus className="w-2.5 h-2.5" />
                                 </button>
                                 <input
                                   type="number"
@@ -2381,20 +2393,20 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                                   onChange={(e) =>
                                     handleItemChange(idx, 'quantity', e.target.value)
                                   }
-                                  className="w-8 text-center font-mono font-bold text-xs bg-transparent focus:outline-none"
+                                  className="w-6 text-center font-mono font-bold text-xs bg-transparent focus:outline-none"
                                 />
                                 <button
                                   type="button"
                                   onClick={() => handleAdjustQuantity(idx, 1)}
-                                  className="w-6 h-full text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center cursor-pointer border-l border-slate-200 dark:border-slate-800 transition-colors"
+                                  className="w-5 h-full text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center cursor-pointer border-l border-slate-200 dark:border-slate-800 transition-colors"
                                   title="Tăng 1"
                                 >
-                                  <Plus className="w-3 h-3" />
+                                  <Plus className="w-2.5 h-2.5" />
                                 </button>
                               </div>
                             </td>
 
-                            <td className="p-2.5 align-top w-28">
+                            <td className="p-2.5 align-top">
                               <input
                                 type="number"
                                 min={0}
@@ -2712,25 +2724,27 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         </div>
       )}
 
-      {/* Nút Khoản Trừ ở giữa bên cạnh phải theo đúng như ảnh chụp của người dùng */}
-      {onAddExpenseDeduction && (
-        <button
-          type="button"
-          onClick={() => {
-            setQuickDeductionDate(billDate || todayBusinessStr);
-            setShowQuickDeductionModal(true);
-          }}
-          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 bg-[#d97706] hover:bg-[#b45309] text-white shadow-2xl rounded-l-2xl py-4 px-2.5 flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l border-amber-300/40 hover:-translate-x-1 transition-all select-none group"
-          title="Nhập khoản chi/khoản trừ trong ngày"
+      {/* Nút Khoản Trừ ở giữa bên cạnh phải theo đúng yêu cầu & ảnh mẫu của người dùng */}
+      <button
+        type="button"
+        onClick={() => {
+          setQuickDeductionDate(billDate || todayBusinessStr);
+          setShowQuickDeductionModal(true);
+        }}
+        className="fixed right-0 top-1/2 -translate-y-1/2 z-50 bg-gradient-to-b from-amber-500 via-amber-600 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white shadow-[0_4px_24px_rgba(217,119,6,0.45)] rounded-l-2xl py-4 px-2.5 flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l-2 border-amber-200/80 hover:-translate-x-1.5 transition-all select-none group"
+        title="Nhập khoản chi / khoản trừ trong ngày"
+      >
+        <div className="w-7 h-7 rounded-full bg-white text-amber-600 flex items-center justify-center shrink-0 shadow-sm group-hover:scale-110 transition-transform">
+          <MinusCircle className="w-4.5 h-4.5 text-amber-600" />
+        </div>
+        <span
+          className="text-[11px] font-extrabold tracking-widest text-white select-none uppercase drop-shadow-xs py-1"
+          style={{ writingMode: 'vertical-rl' }}
         >
-          <div className="w-6 h-6 rounded-full border border-white/60 flex items-center justify-center shrink-0 shadow-xs group-hover:scale-110 transition-transform">
-            <MinusCircle className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-[11px] font-bold tracking-widest text-white [writing-mode:vertical-rl] select-none uppercase">
-            + KHOẢN TRỪ TRONG NGÀY
-          </span>
-        </button>
-      )}
+          + KHOẢN TRỪ TRONG NGÀY
+        </span>
+        <div className="w-2 h-2 rounded-full bg-amber-200 animate-pulse mt-0.5" />
+      </button>
 
       {/* POPUP MODAL: NHẬP KHOẢN TRỪ TRONG NGÀY (REQ 4) */}
       {showQuickDeductionModal && (

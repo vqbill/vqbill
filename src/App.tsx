@@ -1898,13 +1898,21 @@ export default function App() {
     return periodBills
       .filter((b) => {
         if (paymentFilter === 'cash') {
-          return (b.paymentType === 'cash' || (b.paymentType === 'split' && (b.paidCashAmount || 0) > 0)) && !isOwnerUseBill(b);
+          return (
+            (b.paymentType === 'cash' ||
+              (b.paymentType === 'split' && getBillPaymentBreakdown(b).cash > 0)) &&
+            !isOwnerUseBill(b)
+          );
         }
         if (paymentFilter === 'transfer') {
-          return (b.paymentType === 'transfer' || (b.paymentType === 'split' && (b.paidTransferAmount || 0) > 0)) && !isOwnerUseBill(b);
+          return (
+            (b.paymentType === 'transfer' ||
+              (b.paymentType === 'split' && getBillPaymentBreakdown(b).transfer > 0)) &&
+            !isOwnerUseBill(b)
+          );
         }
-        if (paymentFilter === 'split') return b.paymentType === 'split';
-        if (paymentFilter === 'debt') return b.paymentType === 'debt';
+        if (paymentFilter === 'split') return b.paymentType === 'split' && !isOwnerUseBill(b);
+        if (paymentFilter === 'debt') return b.paymentType === 'debt' && !isOwnerUseBill(b);
         if (paymentFilter === 'has_return') return (b.deductedAmount || 0) > 0;
         if ((paymentFilter as string) === 'owner_use') return isOwnerUseBill(b);
         return true;
@@ -1932,6 +1940,64 @@ export default function App() {
           (b.createdAtMs || 0) - (a.createdAtMs || 0)
       );
   }, [periodBills, paymentFilter, categoryFilter, searchKeyword, effectiveBillItems]);
+
+  // Payment Breakdown Counts for Quick Tabs
+  const paymentCounts = useMemo(() => {
+    let all = 0;
+    let cash = 0;
+    let transfer = 0;
+    let split = 0;
+    let debt = 0;
+    let has_return = 0;
+    let owner_use = 0;
+
+    for (const b of periodBills) {
+      all += 1;
+      if (isOwnerUseBill(b)) {
+        owner_use += 1;
+        continue;
+      }
+      const bd = getBillPaymentBreakdown(b);
+      if (b.paymentType === 'cash' || (b.paymentType === 'split' && bd.cash > 0)) {
+        cash += 1;
+      }
+      if (b.paymentType === 'transfer' || (b.paymentType === 'split' && bd.transfer > 0)) {
+        transfer += 1;
+      }
+      if (b.paymentType === 'split') {
+        split += 1;
+      }
+      if (b.paymentType === 'debt') {
+        debt += 1;
+      }
+      if ((b.deductedAmount || 0) > 0) {
+        has_return += 1;
+      }
+    }
+
+    return { all, cash, transfer, split, debt, has_return, owner_use };
+  }, [periodBills]);
+
+  // Total net revenue currently displayed in table based on paymentFilter
+  const filteredTotalNet = useMemo(() => {
+    return displayedBills.reduce((sum, b) => {
+      if (isOwnerUseBill(b)) return sum;
+      if (b.paymentType === 'split') {
+        const bd = getBillPaymentBreakdown(b);
+        if (paymentFilter === 'cash') {
+          const ratio = b.totalAmount > 0 ? bd.cash / b.totalAmount : 0.5;
+          const splitDed = Math.round((b.deductedAmount || 0) * ratio);
+          return sum + Math.max(0, bd.cash - splitDed);
+        }
+        if (paymentFilter === 'transfer') {
+          const ratio = b.totalAmount > 0 ? bd.transfer / b.totalAmount : 0.5;
+          const splitDed = Math.round((b.deductedAmount || 0) * ratio);
+          return sum + Math.max(0, bd.transfer - splitDed);
+        }
+      }
+      return sum + Math.max(0, b.totalAmount - (b.deductedAmount || 0));
+    }, 0);
+  }, [displayedBills, paymentFilter]);
 
   // Financial Metrics
   // Note: Beer/item returns are included in periodDeductions (1 dòng tiền duy nhất),
@@ -6275,6 +6341,7 @@ export default function App() {
               currentStaffAccount={currentStaffAccount}
               allowedTabs={allowedTabs}
               bills={bills}
+              billItems={effectiveBillItems}
               deductions={effectiveDeductions}
               returns={returns}
               products={products}
@@ -6617,11 +6684,22 @@ export default function App() {
               <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                      Danh Sách Hóa Đơn Bán Hàng ({displayedBills.length} bill)
+                    <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
+                      <span>Danh Sách Hóa Đơn Bán Hàng ({displayedBills.length} bill)</span>
+                      <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                        {paymentFilter === 'cash'
+                          ? `Tổng Tiền Mặt: ${formatVND(filteredTotalNet)}`
+                          : paymentFilter === 'transfer'
+                          ? `Tổng Chuyển Khoản: ${formatVND(filteredTotalNet)}`
+                          : paymentFilter === 'split'
+                          ? `Tổng Tiền Mặt + CK: ${formatVND(filteredTotalNet)}`
+                          : paymentFilter === 'debt'
+                          ? `Tổng Công Nợ: ${formatVND(filteredTotalNet)}`
+                          : `Tổng Thực Thu: ${formatVND(filteredTotalNet)}`}
+                      </span>
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Bấm trực tiếp vào từng hóa đơn để mở xem chi tiết các món trên bill và đối soát
+                      Bấm vào từng hóa đơn để xem chi tiết các món, phân rã phương thức thanh toán và đối soát
                     </p>
                   </div>
 
@@ -6644,13 +6722,13 @@ export default function App() {
                         onChange={(e) => setPaymentFilter(e.target.value as any)}
                         className="px-2.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
                       >
-                        <option value="all">Mọi hình thức</option>
-                        <option value="cash">Tiền mặt</option>
-                        <option value="transfer">Chuyển khoản</option>
-                        <option value="split">Tiền mặt + Chuyển khoản</option>
-                        <option value="debt">Công nợ</option>
-                        <option value="has_return">Có hoàn trả</option>
-                        <option value="owner_use">Chủ / QL dùng (0đ)</option>
+                        <option value="all">Mọi hình thức ({paymentCounts.all})</option>
+                        <option value="cash">Tiền mặt ({paymentCounts.cash})</option>
+                        <option value="transfer">Chuyển khoản ({paymentCounts.transfer})</option>
+                        <option value="split">Tiền mặt + Chuyển khoản ({paymentCounts.split})</option>
+                        <option value="debt">Công nợ ({paymentCounts.debt})</option>
+                        <option value="has_return">Có hoàn trả ({paymentCounts.has_return})</option>
+                        <option value="owner_use">Chủ / QL dùng (0đ) ({paymentCounts.owner_use})</option>
                       </select>
 
                       <select
@@ -6705,6 +6783,87 @@ export default function App() {
                       </button>
                     )}
                   </div>
+                </div>
+
+                {/* Quick Payment Filter Tabs (Dải Tab chọn nhanh hình thức thanh toán) */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs border-b border-slate-100 dark:border-slate-800 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentFilter('all')}
+                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
+                      paymentFilter === 'all'
+                        ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-transparent shadow-2xs ring-2 ring-slate-400/30'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    Mọi hình thức ({paymentCounts.all})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentFilter('cash')}
+                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
+                      paymentFilter === 'cash'
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs ring-2 ring-emerald-500/20'
+                        : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
+                    }`}
+                  >
+                    💵 Tiền mặt ({paymentCounts.cash})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentFilter('transfer')}
+                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
+                      paymentFilter === 'transfer'
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-2xs ring-2 ring-blue-500/20'
+                        : 'bg-blue-50 dark:bg-blue-950/40 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-800 hover:bg-blue-100'
+                    }`}
+                  >
+                    💳 Chuyển khoản ({paymentCounts.transfer})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentFilter('split')}
+                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
+                      paymentFilter === 'split'
+                        ? 'bg-purple-600 text-white border-purple-600 shadow-2xs ring-2 ring-purple-500/20'
+                        : 'bg-purple-50 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800 hover:bg-purple-100'
+                    }`}
+                  >
+                    ⚡ Tiền mặt + CK ({paymentCounts.split})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentFilter('debt')}
+                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
+                      paymentFilter === 'debt'
+                        ? 'bg-amber-600 text-white border-amber-600 shadow-2xs ring-2 ring-amber-500/20'
+                        : 'bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border-amber-300 dark:border-amber-800 hover:bg-amber-100'
+                    }`}
+                  >
+                    ⚠️ Công nợ ({paymentCounts.debt})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentFilter('has_return')}
+                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
+                      paymentFilter === 'has_return'
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-2xs ring-2 ring-rose-500/20'
+                        : 'bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-800 hover:bg-rose-100'
+                    }`}
+                  >
+                    ↩️ Có hoàn trả ({paymentCounts.has_return})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentFilter('owner_use' as any)}
+                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
+                      paymentFilter === ('owner_use' as any)
+                        ? 'bg-slate-700 text-white border-slate-700 shadow-2xs'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    👑 Chủ/QL dùng ({paymentCounts.owner_use})
+                  </button>
                 </div>
 
                 {/* Bulk Action Banner when 1 or more bills are selected */}
@@ -6770,23 +6929,80 @@ export default function App() {
                     {/* Mobile Bill Cards (< md) */}
                     <div className="md:hidden space-y-2.5">
                       {displayedBills.map((bill) => {
-                        const netBill = Math.max(
-                          0,
-                          bill.totalAmount - (bill.deductedAmount || 0)
-                        );
+                        const bd = getBillPaymentBreakdown(bill);
+                        const isSplit = bill.paymentType === 'split';
+                        const isDebt = bill.paymentType === 'debt';
+                        const isOwner = isOwnerUseBill(bill);
+
+                        // Calculate amounts based on current paymentFilter
+                        let displayGross = bill.totalAmount;
+                        let displayDeduction = bill.deductedAmount || 0;
+                        let displayNet = Math.max(0, bill.totalAmount - (bill.deductedAmount || 0));
+                        let displayAmountBadge: React.ReactNode = null;
+
+                        if (isOwner) {
+                          displayGross = 0;
+                          displayDeduction = 0;
+                          displayNet = 0;
+                        } else if (isSplit) {
+                          if (paymentFilter === 'cash') {
+                            displayGross = bd.cash;
+                            const ratio = bill.totalAmount > 0 ? bd.cash / bill.totalAmount : 0.5;
+                            const splitDed = Math.round((bill.deductedAmount || 0) * ratio);
+                            displayDeduction = splitDed;
+                            displayNet = Math.max(0, bd.cash - splitDed);
+                            displayAmountBadge = (
+                              <div className="text-[10px] font-sans font-semibold text-emerald-700 dark:text-emerald-300 mt-0.5">
+                                Phần TM (Bill {formatVND(bill.totalAmount)})
+                              </div>
+                            );
+                          } else if (paymentFilter === 'transfer') {
+                            displayGross = bd.transfer;
+                            const ratio = bill.totalAmount > 0 ? bd.transfer / bill.totalAmount : 0.5;
+                            const splitDed = Math.round((bill.deductedAmount || 0) * ratio);
+                            displayDeduction = splitDed;
+                            displayNet = Math.max(0, bd.transfer - splitDed);
+                            displayAmountBadge = (
+                              <div className="text-[10px] font-sans font-semibold text-blue-700 dark:text-blue-300 mt-0.5">
+                                Phần CK (Bill {formatVND(bill.totalAmount)})
+                              </div>
+                            );
+                          } else {
+                            displayAmountBadge = (
+                              <div className="text-[10px] font-mono font-medium mt-0.5 space-y-0.5">
+                                <div className="text-emerald-600 dark:text-emerald-400">
+                                  TM: {formatVND(bd.cash)}
+                                </div>
+                                <div className="text-blue-600 dark:text-blue-400">
+                                  CK: {formatVND(bd.transfer)}
+                                </div>
+                              </div>
+                            );
+                          }
+                        }
+
                         const billItemCount = effectiveBillItems.filter(
                           (it) => it.billId === bill.id
                         ).length;
                         const isSelected = selectedBillIds.has(bill.id);
+
+                        const mobileCardClass = isSelected
+                          ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/40 ring-1 ring-emerald-500'
+                          : isSplit
+                          ? 'border-purple-300 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/25 border-l-4 border-l-purple-500'
+                          : isDebt
+                          ? 'border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30 border-l-4 border-l-amber-500'
+                          : isOwner
+                          ? 'border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/30 border-l-4 border-l-slate-400'
+                          : bill.paymentType === 'transfer'
+                          ? 'border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 border-l-4 border-l-blue-500'
+                          : 'border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 border-l-4 border-l-emerald-500';
+
                         return (
                           <div
                             key={bill.id}
                             onClick={() => setInspectingBill(bill)}
-                            className={`p-3.5 rounded-xl border transition-colors space-y-2 text-xs cursor-pointer ${
-                              isSelected
-                                ? 'border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/30'
-                                : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:border-emerald-500/60'
-                            }`}
+                            className={`p-3.5 rounded-xl border transition-colors space-y-2 text-xs cursor-pointer ${mobileCardClass}`}
                           >
                             <div className="flex items-start justify-between gap-2">
                               <div className="flex items-start gap-2.5">
@@ -6814,39 +7030,104 @@ export default function App() {
                                       ({billItemCount} món)
                                     </span>
                                   </div>
-                                {(bill.checkInTime || bill.checkOutTime) && (
-                                  <div className="text-[11px] font-mono text-slate-500">
-                                    Giờ: {bill.checkInTime || '--:--'} → {bill.checkOutTime || '--:--'}
-                                    {bill.rawDate && bill.rawDate !== bill.billDate
-                                      ? ` (In ${bill.rawDate})`
-                                      : ''}
+                                  {(bill.checkInTime || bill.checkOutTime) && (
+                                    <div className="text-[11px] font-mono text-slate-500">
+                                      Giờ: {bill.checkInTime || '--:--'} → {bill.checkOutTime || '--:--'}
+                                      {bill.rawDate && bill.rawDate !== bill.billDate
+                                        ? ` (In ${bill.rawDate})`
+                                        : ''}
+                                    </div>
+                                  )}
+
+                                  {/* Payment method badge & table */}
+                                  <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                    {isSplit ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-900 dark:bg-purple-900/60 dark:text-purple-200 border border-purple-300">
+                                        <CreditCard className="w-3 h-3 text-purple-600" />
+                                        <span>Tiền mặt + CK</span>
+                                      </span>
+                                    ) : isDebt ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-300">
+                                        <span>⚠️ Công nợ</span>
+                                      </span>
+                                    ) : isOwner ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-300">
+                                        <span>Chủ / QL dùng (0đ)</span>
+                                      </span>
+                                    ) : bill.paymentType === 'transfer' ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 border border-blue-300">
+                                        <span>Chuyển khoản</span>
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-300">
+                                        <span>Tiền mặt</span>
+                                      </span>
+                                    )}
+                                    <span className="font-bold text-slate-800 dark:text-slate-200 text-xs">
+                                      {extractBillTableName(bill, 'Bàn lẻ')}
+                                    </span>
                                   </div>
-                                )}
-                                <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mt-0.5">
-                                  {isOwnerUseBill(bill)
-                                    ? `Chủ / QL dùng (0đ)${
-                                        bill.debtorName ? ` — ${bill.debtorName}` : ''
-                                      }`
-                                    : bill.paymentType === 'split'
-                                    ? `TM: ${formatVND(getBillPaymentBreakdown(bill).cash)} + CK: ${formatVND(getBillPaymentBreakdown(bill).transfer)}`
-                                    : `${PAYMENT_LABELS[bill.paymentType]}${
-                                        bill.debtorName ? ` — Nợ: ${bill.debtorName}` : ''
-                                      }`}
-                                  {(bill.discountAmount || 0) > 0
-                                    ? ` · CK: -${formatVND(bill.discountAmount || 0)}`
-                                    : ''}
+
+                                  {/* Split breakdown info */}
+                                  {isSplit && (
+                                    <div className="text-[11px] font-mono font-medium mt-0.5">
+                                      <span className="text-emerald-700 dark:text-emerald-300 font-semibold">
+                                        TM: {formatVND(bd.cash)}
+                                      </span>
+                                      <span className="text-slate-400 mx-1">·</span>
+                                      <span className="text-blue-700 dark:text-blue-300 font-semibold">
+                                        CK: {formatVND(bd.transfer)}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {/* Debt info */}
+                                  {isDebt && (
+                                    <div className="text-[11px] font-medium text-amber-800 dark:text-amber-300 mt-0.5">
+                                      <span>Nợ: <strong>{bill.debtorName || 'Khách nợ'}</strong></span>
+                                      <span className="text-slate-400 mx-1">·</span>
+                                      <span className="text-[10px] font-mono">
+                                        {bill.debtStatus === 'paid' ? 'Đã trả' : 'Chưa trả'}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {isOwner && bill.debtorName && (
+                                    <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                                      Người dùng: {bill.debtorName}
+                                    </div>
+                                  )}
+
+                                  {bill.note && (
+                                    <div className="text-[11px] text-slate-500 italic truncate max-w-[200px] mt-0.5">
+                                      {bill.note}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
-                            </div>
-                            <div className="text-right font-mono">
-                                <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
-                                  {formatVND(netBill)}
+
+                              <div className="text-right font-mono">
+                                <div
+                                  className={`text-sm font-bold tabular-nums ${
+                                    isDebt
+                                      ? 'text-amber-600 dark:text-amber-400 font-extrabold'
+                                      : isSplit
+                                      ? 'text-purple-700 dark:text-purple-300 font-extrabold'
+                                      : bill.paymentType === 'transfer'
+                                      ? 'text-blue-600 dark:text-blue-400'
+                                      : isOwner
+                                      ? 'text-slate-400'
+                                      : 'text-emerald-600 dark:text-emerald-400'
+                                  }`}
+                                >
+                                  {isOwner ? '0 ₫' : formatVND(displayNet)}
                                 </div>
-                                {bill.deductedAmount > 0 && (
-                                  <div className="text-[10px] text-rose-500">
-                                    Trừ: -{formatVND(bill.deductedAmount)}
+                                {displayDeduction > 0 && (
+                                  <div className="text-[10px] text-rose-500 font-mono">
+                                    Trừ: -{formatVND(displayDeduction)}
                                   </div>
                                 )}
+                                {displayAmountBadge}
                               </div>
                             </div>
 
@@ -6944,23 +7225,80 @@ export default function App() {
                         </thead>
                         <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                           {displayedBills.map((bill) => {
-                            const netBill = Math.max(
-                              0,
-                              bill.totalAmount - (bill.deductedAmount || 0)
-                            );
+                            const bd = getBillPaymentBreakdown(bill);
+                            const isSplit = bill.paymentType === 'split';
+                            const isDebt = bill.paymentType === 'debt';
+                            const isOwner = isOwnerUseBill(bill);
+
+                            // Calculate amounts based on current paymentFilter
+                            let displayGross = bill.totalAmount;
+                            let displayDeduction = bill.deductedAmount || 0;
+                            let displayNet = Math.max(0, bill.totalAmount - (bill.deductedAmount || 0));
+                            let displayAmountBadge: React.ReactNode = null;
+
+                            if (isOwner) {
+                              displayGross = 0;
+                              displayDeduction = 0;
+                              displayNet = 0;
+                            } else if (isSplit) {
+                              if (paymentFilter === 'cash') {
+                                displayGross = bd.cash;
+                                const ratio = bill.totalAmount > 0 ? bd.cash / bill.totalAmount : 0.5;
+                                const splitDed = Math.round((bill.deductedAmount || 0) * ratio);
+                                displayDeduction = splitDed;
+                                displayNet = Math.max(0, bd.cash - splitDed);
+                                displayAmountBadge = (
+                                  <span className="text-[10px] font-sans font-semibold text-emerald-700 dark:text-emerald-300">
+                                    Phần TM (Bill {formatVND(bill.totalAmount)})
+                                  </span>
+                                );
+                              } else if (paymentFilter === 'transfer') {
+                                displayGross = bd.transfer;
+                                const ratio = bill.totalAmount > 0 ? bd.transfer / bill.totalAmount : 0.5;
+                                const splitDed = Math.round((bill.deductedAmount || 0) * ratio);
+                                displayDeduction = splitDed;
+                                displayNet = Math.max(0, bd.transfer - splitDed);
+                                displayAmountBadge = (
+                                  <span className="text-[10px] font-sans font-semibold text-blue-700 dark:text-blue-300">
+                                    Phần CK (Bill {formatVND(bill.totalAmount)})
+                                  </span>
+                                );
+                              } else {
+                                displayAmountBadge = (
+                                  <div className="text-[11px] font-mono font-semibold space-y-0.5 mt-0.5">
+                                    <div className="text-emerald-600 dark:text-emerald-400">
+                                      TM: {formatVND(bd.cash)}
+                                    </div>
+                                    <div className="text-blue-600 dark:text-blue-400">
+                                      CK: {formatVND(bd.transfer)}
+                                    </div>
+                                  </div>
+                                );
+                              }
+                            }
+
                             const billItemCount = effectiveBillItems.filter(
                               (it) => it.billId === bill.id
                             ).length;
                             const isSelected = selectedBillIds.has(bill.id);
+
+                            const rowBgClass = isSelected
+                              ? 'bg-emerald-50/80 dark:bg-emerald-950/50'
+                              : isSplit
+                              ? 'bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-100/50 dark:hover:bg-purple-950/40 border-l-4 border-l-purple-500'
+                              : isDebt
+                              ? 'bg-amber-50/60 dark:bg-amber-950/25 hover:bg-amber-100/60 dark:hover:bg-amber-950/45 border-l-4 border-l-amber-500'
+                              : isOwner
+                              ? 'bg-slate-50/60 dark:bg-slate-800/30 hover:bg-slate-100/60 dark:hover:bg-slate-800/50 border-l-4 border-l-slate-400'
+                              : bill.paymentType === 'transfer'
+                              ? 'hover:bg-blue-50/40 dark:hover:bg-blue-950/20 border-l-4 border-l-blue-500'
+                              : 'hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 border-l-4 border-l-emerald-500';
+
                             return (
                               <tr
                                 key={bill.id}
                                 onClick={() => setInspectingBill(bill)}
-                                className={`transition-colors cursor-pointer group ${
-                                  isSelected
-                                    ? 'bg-emerald-50/60 dark:bg-emerald-950/40'
-                                    : 'hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
-                                }`}
+                                className={`transition-colors cursor-pointer group ${rowBgClass}`}
                               >
                                 <td
                                   className="py-3 px-3 text-center"
@@ -6994,57 +7332,104 @@ export default function App() {
                                 </td>
 
                                 <td className="py-3 px-3">
-                                  <div className="font-semibold text-slate-900 dark:text-white">
-                                    {isOwnerUseBill(bill)
-                                      ? 'Chủ / QL dùng (0đ)'
-                                      : bill.paymentType === 'split'
-                                      ? 'Tiền mặt + CK'
-                                      : PAYMENT_LABELS[bill.paymentType]}
+                                  {/* Payment method badge & table name */}
+                                  <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                                    {isSplit ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-purple-100 text-purple-900 dark:bg-purple-900/60 dark:text-purple-200 border border-purple-300 shadow-2xs">
+                                        <CreditCard className="w-3 h-3 text-purple-600" />
+                                        <span>Tiền mặt + CK</span>
+                                      </span>
+                                    ) : isDebt ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-300 shadow-2xs">
+                                        <span>⚠️ Công nợ</span>
+                                      </span>
+                                    ) : isOwner ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-300">
+                                        <span>Chủ / QL dùng (0đ)</span>
+                                      </span>
+                                    ) : bill.paymentType === 'transfer' ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 border border-blue-300">
+                                        <span>Chuyển khoản</span>
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-300">
+                                        <span>Tiền mặt</span>
+                                      </span>
+                                    )}
+                                    <span className="font-bold text-slate-800 dark:text-slate-200 text-xs">
+                                      {extractBillTableName(bill, 'Bàn lẻ')}
+                                    </span>
                                   </div>
-                                  {bill.paymentType === 'split' && (
-                                    <div className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
-                                      TM: {formatVND(getBillPaymentBreakdown(bill).cash)} · CK: {formatVND(getBillPaymentBreakdown(bill).transfer)}
+
+                                  {/* Split breakdown info */}
+                                  {isSplit && (
+                                    <div className="text-[11px] font-mono font-medium">
+                                      <span className="text-emerald-700 dark:text-emerald-300 font-semibold">
+                                        TM: {formatVND(bd.cash)}
+                                      </span>
+                                      <span className="text-slate-400 mx-1">·</span>
+                                      <span className="text-blue-700 dark:text-blue-300 font-semibold">
+                                        CK: {formatVND(bd.transfer)}
+                                      </span>
                                     </div>
                                   )}
-                                  {bill.debtorName && (
-                                    <div
-                                      className={`text-[11px] font-medium ${
-                                        isOwnerUseBill(bill)
-                                          ? 'text-indigo-600 dark:text-indigo-400'
-                                          : 'text-amber-600 dark:text-amber-400'
-                                      }`}
-                                    >
-                                      {isOwnerUseBill(bill)
-                                        ? `Người dùng: ${bill.debtorName}`
-                                        : `Nợ: ${bill.debtorName}`}
+
+                                  {/* Debt client info */}
+                                  {isDebt && (
+                                    <div className="text-[11px] font-medium text-amber-800 dark:text-amber-300">
+                                      <span>Nợ: <strong>{bill.debtorName || 'Khách nợ'}</strong></span>
+                                      <span className="text-slate-400 mx-1">·</span>
+                                      <span className="text-[10px] font-mono">
+                                        {bill.debtStatus === 'paid' ? 'Đã trả' : 'Chưa trả'}
+                                      </span>
                                     </div>
                                   )}
+
+                                  {isOwner && bill.debtorName && (
+                                    <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                                      Người dùng: {bill.debtorName}
+                                    </div>
+                                  )}
+
                                   {bill.note && (
-                                    <div className="text-[11px] text-slate-500 truncate max-w-[180px]">
+                                    <div className="text-[11px] text-slate-500 truncate max-w-[180px] mt-0.5">
                                       {bill.note}
                                     </div>
                                   )}
                                 </td>
 
-                                <td className="py-3 px-3 text-slate-600 dark:text-slate-300 max-w-xs">
-                                  <div className="line-clamp-2">{bill.itemsSummary}</div>
-                                  <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
-                                    {billItemCount} mặt hàng · Bấm để xem chi tiết bill
-                                  </div>
-                                </td>
-
                                 <td className="py-3 px-3 text-right font-mono font-semibold text-slate-900 dark:text-white">
-                                  {formatVND(bill.totalAmount)}
+                                  <div>{formatVND(displayGross)}</div>
+                                  {isSplit && (paymentFilter === 'cash' || paymentFilter === 'transfer') && (
+                                    <div className="text-[10px] text-slate-400 font-sans font-normal">
+                                      (Tổng bill: {formatVND(bill.totalAmount)})
+                                    </div>
+                                  )}
                                 </td>
 
                                 <td className="py-3 px-3 text-right font-mono text-rose-600 dark:text-rose-400">
-                                  {bill.deductedAmount > 0
-                                    ? `-${formatVND(bill.deductedAmount)}`
+                                  {displayDeduction > 0
+                                    ? `-${formatVND(displayDeduction)}`
                                     : '0 ₫'}
                                 </td>
 
-                                <td className="py-3 px-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                                  {formatVND(netBill)}
+                                <td className="py-3 px-3 text-right font-mono">
+                                  <div
+                                    className={`font-bold tabular-nums text-sm ${
+                                      isDebt
+                                        ? 'text-amber-600 dark:text-amber-400 font-extrabold'
+                                        : isSplit
+                                        ? 'text-purple-700 dark:text-purple-300 font-extrabold'
+                                        : bill.paymentType === 'transfer'
+                                        ? 'text-blue-600 dark:text-blue-400'
+                                        : isOwner
+                                        ? 'text-slate-400'
+                                        : 'text-emerald-600 dark:text-emerald-400'
+                                    }`}
+                                  >
+                                    {isOwner ? '0 ₫' : formatVND(displayNet)}
+                                  </div>
+                                  {displayAmountBadge}
                                 </td>
 
                                 <td
