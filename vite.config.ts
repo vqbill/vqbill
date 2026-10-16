@@ -5,8 +5,14 @@ import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
+  // Tự động nhận diện khi build trên GitHub Actions để gán base path theo tên repository
+  // Đối với Vercel, Netlify hoặc chạy cục bộ/Cloud Run thì dùng '/' hoặc './'
+  const isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
+  const repoName = process.env.GITHUB_REPOSITORY?.split('/')[1];
+  const dynamicBase = process.env.BASE_PATH || (isGitHubActions && repoName ? `/${repoName}/` : './');
+
   return {
-    base: './',
+    base: dynamicBase,
     plugins: [
       react(),
       tailwindcss(),
@@ -14,30 +20,30 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
-          id: '/',
+          id: dynamicBase,
           name: 'VQBill — Quản Lý Hóa Đơn & Doanh Thu AI',
           short_name: 'VQBill',
           description: 'Hệ thống quản lý hóa đơn bán hàng, trích xuất bill bằng AI OCR, theo dõi doanh thu thời gian thực, công nợ, hoàn trả và tồn kho.',
           theme_color: '#059669',
           background_color: '#0f172a',
           display: 'standalone',
-          start_url: '/',
-          scope: '/',
+          start_url: dynamicBase,
+          scope: dynamicBase,
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: 'pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: 'pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: 'pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
@@ -86,7 +92,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': import.meta.dirname || path.resolve('.'),
       },
     },
     server: {

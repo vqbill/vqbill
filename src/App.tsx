@@ -47,6 +47,10 @@ import {
   Wallet,
   ExternalLink,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   SlidersHorizontal,
   FolderKanban,
   Zap,
@@ -484,6 +488,7 @@ export default function App() {
   const [editingBill, setEditingBill] = useState<BillRecord | null>(null);
   const [splitMergeBill, setSplitMergeBill] = useState<BillRecord | null>(null);
   const [showKiotVietSyncModal, setShowKiotVietSyncModal] = useState<boolean>(false);
+  const [showQuickBillModal, setShowQuickBillModal] = useState<boolean>(false);
   const [showSettledDebtsModal, setShowSettledDebtsModal] = useState<boolean>(false);
   const [preselectedReturnBillId, setPreselectedReturnBillId] = useState<string | null>(
     null
@@ -1970,6 +1975,30 @@ export default function App() {
       );
   }, [periodBills, paymentFilter, categoryFilter, searchKeyword, effectiveBillItems]);
 
+  // Pagination for Dashboard & Revenue Bills Table (Requirement 2: 10 bills per page)
+  const BILLS_PER_PAGE = 10;
+  const [billCurrentPage, setBillCurrentPage] = useState<number>(1);
+
+  // Reset to page 1 whenever filters change
+  useEffect(() => {
+    setBillCurrentPage(1);
+  }, [
+    paymentFilter,
+    categoryFilter,
+    searchKeyword,
+    periodPreset,
+    customStartDate,
+    customEndDate,
+  ]);
+
+  const totalBillPages = Math.max(1, Math.ceil(displayedBills.length / BILLS_PER_PAGE));
+  const safeBillCurrentPage = Math.min(Math.max(1, billCurrentPage), totalBillPages);
+
+  const paginatedBills = useMemo(() => {
+    const startIndex = (safeBillCurrentPage - 1) * BILLS_PER_PAGE;
+    return displayedBills.slice(startIndex, startIndex + BILLS_PER_PAGE);
+  }, [displayedBills, safeBillCurrentPage]);
+
   // Payment Breakdown Counts for Quick Tabs
   const paymentCounts = useMemo(() => {
     let all = 0;
@@ -2150,6 +2179,22 @@ export default function App() {
     } else {
       setSelectedBillIds(new Set(allDisplayedIds));
     }
+  };
+
+  const isAllPageSelected =
+    paginatedBills.length > 0 &&
+    paginatedBills.every((b) => selectedBillIds.has(b.id));
+
+  const handleToggleSelectPageBills = () => {
+    setSelectedBillIds((prev) => {
+      const next = new Set(prev);
+      if (isAllPageSelected) {
+        paginatedBills.forEach((b) => next.delete(b.id));
+      } else {
+        paginatedBills.forEach((b) => next.add(b.id));
+      }
+      return next;
+    });
   };
 
   const handleClearSelectedBills = () => {
@@ -6818,6 +6863,32 @@ export default function App() {
                       </select>
                     </div>
 
+                    {totalBillPages > 1 && (
+                      <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 px-2 py-1.5 rounded-xl text-xs font-semibold shrink-0 border border-slate-200/80 dark:border-slate-700 shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={() => setBillCurrentPage((p) => Math.max(1, p - 1))}
+                          disabled={safeBillCurrentPage <= 1}
+                          className="p-1 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                          title="Trang trước"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="px-1.5 text-[11px] font-mono whitespace-nowrap text-slate-700 dark:text-slate-300">
+                          Trang <strong className="text-emerald-600 dark:text-emerald-400">{safeBillCurrentPage}</strong>/{totalBillPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setBillCurrentPage((p) => Math.min(totalBillPages, p + 1))}
+                          disabled={safeBillCurrentPage >= totalBillPages}
+                          className="p-1 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                          title="Trang tiếp theo"
+                        >
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
                     {displayedBills.length > 0 && (
                       <button
                         type="button"
@@ -7001,7 +7072,7 @@ export default function App() {
                   <>
                     {/* Mobile Bill Cards (< md) */}
                     <div className="md:hidden space-y-2.5">
-                      {displayedBills.map((bill) => {
+                      {paginatedBills.map((bill) => {
                         const bd = getBillPaymentBreakdown(bill);
                         const isSplit = bill.paymentType === 'split';
                         const isDebt = bill.paymentType === 'debt';
@@ -7278,13 +7349,10 @@ export default function App() {
                             <th className="py-2.5 px-3 w-10 text-center">
                               <input
                                 type="checkbox"
-                                checked={
-                                  displayedBills.length > 0 &&
-                                  displayedBills.every((b) => selectedBillIds.has(b.id))
-                                }
-                                onChange={handleToggleSelectAllBills}
+                                checked={isAllPageSelected}
+                                onChange={handleToggleSelectPageBills}
                                 className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                                title="Chọn / Bỏ chọn toàn bộ"
+                                title="Chọn / Bỏ chọn toàn bộ trên trang này"
                               />
                             </th>
                             <th className="py-2.5 px-3">Mã Bill / Ngày</th>
@@ -7297,7 +7365,7 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                          {displayedBills.map((bill) => {
+                          {paginatedBills.map((bill) => {
                             const bd = getBillPaymentBreakdown(bill);
                             const isSplit = bill.paymentType === 'split';
                             const isDebt = bill.paymentType === 'debt';
@@ -7567,6 +7635,126 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
+
+                    {/* Pagination Bar (Phân trang 10 bill / trang theo yêu cầu) */}
+                    {totalBillPages > 1 && (
+                      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-slate-200 dark:border-slate-800 text-xs">
+                        <div className="text-slate-500 dark:text-slate-400 font-medium text-center sm:text-left">
+                          Trang <strong className="text-slate-900 dark:text-white font-bold">{safeBillCurrentPage}</strong> / <strong>{totalBillPages}</strong>
+                          <span className="mx-1.5 text-slate-300 dark:text-slate-700">·</span>
+                          Hiển thị <strong className="text-emerald-600 dark:text-emerald-400 font-mono">{(safeBillCurrentPage - 1) * BILLS_PER_PAGE + 1} - {Math.min(safeBillCurrentPage * BILLS_PER_PAGE, displayedBills.length)}</strong> trong <strong className="font-mono">{displayedBills.length}</strong> hóa đơn (10 bill/trang)
+                        </div>
+
+                        <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                          {/* First Page */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBillCurrentPage(1);
+                              window.scrollTo({ top: 300, behavior: 'smooth' });
+                            }}
+                            disabled={safeBillCurrentPage <= 1}
+                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-700 dark:text-slate-300 cursor-pointer transition-colors"
+                            title="Về trang đầu"
+                          >
+                            <ChevronsLeft className="w-4 h-4" />
+                          </button>
+
+                          {/* Prev Page */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBillCurrentPage((p) => Math.max(1, p - 1));
+                              window.scrollTo({ top: 300, behavior: 'smooth' });
+                            }}
+                            disabled={safeBillCurrentPage <= 1}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Trang trước"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                            <span>Trước</span>
+                          </button>
+
+                          {/* Page Number Chips */}
+                          <div className="flex items-center gap-1">
+                            {(() => {
+                              const pages: (number | string)[] = [];
+                              if (totalBillPages <= 7) {
+                                for (let i = 1; i <= totalBillPages; i++) pages.push(i);
+                              } else {
+                                pages.push(1);
+                                if (safeBillCurrentPage > 3) pages.push('...');
+                                const start = Math.max(2, safeBillCurrentPage - 1);
+                                const end = Math.min(totalBillPages - 1, safeBillCurrentPage + 1);
+                                for (let i = start; i <= end; i++) {
+                                  pages.push(i);
+                                }
+                                if (safeBillCurrentPage < totalBillPages - 2) pages.push('...');
+                                pages.push(totalBillPages);
+                              }
+
+                              return pages.map((p, idx) => {
+                                if (p === '...') {
+                                  return (
+                                    <span key={`dots-${idx}`} className="px-1 text-slate-400">
+                                      …
+                                    </span>
+                                  );
+                                }
+                                const pageNum = p as number;
+                                const isActive = pageNum === safeBillCurrentPage;
+                                return (
+                                  <button
+                                    key={pageNum}
+                                    type="button"
+                                    onClick={() => {
+                                      setBillCurrentPage(pageNum);
+                                      window.scrollTo({ top: 300, behavior: 'smooth' });
+                                    }}
+                                    className={`min-w-8 h-8 px-2 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
+                                      isActive
+                                        ? 'bg-emerald-600 text-white shadow-xs'
+                                        : 'border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+                                    }`}
+                                  >
+                                    {pageNum}
+                                  </button>
+                                );
+                              });
+                            })()}
+                          </div>
+
+                          {/* Next Page */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBillCurrentPage((p) => Math.min(totalBillPages, p + 1));
+                              window.scrollTo({ top: 300, behavior: 'smooth' });
+                            }}
+                            disabled={safeBillCurrentPage >= totalBillPages}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Trang tiếp theo"
+                          >
+                            <span>Tiếp</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+
+                          {/* Last Page */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBillCurrentPage(totalBillPages);
+                              window.scrollTo({ top: 300, behavior: 'smooth' });
+                            }}
+                            disabled={safeBillCurrentPage >= totalBillPages}
+                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-700 dark:text-slate-300 cursor-pointer transition-colors"
+                            title="Về trang cuối"
+                          >
+                            <ChevronsRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -8455,6 +8643,93 @@ export default function App() {
         onSaveCalendarEvents={handleSaveCalendarEvents}
         currentUsername={currentStaffAccount.username}
       />
+
+      {/* Nút Nhập Bill Ghim Chắc Chắn Ở Giữa Cạnh Phải Màn Hình (Req 1: nằm ở tất cả các trang ngoại trừ trang nhap-bill) */}
+      {activeTab !== 'ocr' && (
+        <button
+          type="button"
+          onClick={() => setShowQuickBillModal(true)}
+          className="fixed right-0 top-1/2 -translate-y-1/2 z-[60] bg-gradient-to-b from-emerald-500 via-teal-600 to-emerald-700 hover:from-emerald-600 hover:to-teal-800 text-white shadow-[0_4px_24px_rgba(16,185,129,0.5)] rounded-l-2xl py-4 px-2.5 flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l-2 border-emerald-200/90 hover:-translate-x-1.5 transition-all select-none group"
+          title="Nhập Hóa Đơn / Tạo Bill Mới"
+        >
+          <div className="w-7 h-7 rounded-full bg-white text-emerald-600 flex items-center justify-center shrink-0 shadow-sm group-hover:scale-110 transition-transform">
+            <Receipt className="w-4.5 h-4.5 text-emerald-600" />
+          </div>
+          <span
+            className="text-[11px] font-extrabold tracking-widest text-white select-none uppercase drop-shadow-xs py-1"
+            style={{ writingMode: 'vertical-rl' }}
+          >
+            + NHẬP BILL
+          </span>
+          <div className="w-2 h-2 rounded-full bg-emerald-200 animate-pulse mt-0.5" />
+        </button>
+      )}
+
+      {/* POPUP MODAL: NHẬP BILL THANH TOÁN (Req 1) */}
+      {showQuickBillModal && (
+        <div
+          className="fixed inset-0 z-[70] bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+          onClick={() => setShowQuickBillModal(false)}
+        >
+          <div
+            className="w-full max-w-6xl max-h-[94vh] flex flex-col rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/30 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shadow-xs">
+                  <Receipt className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    Nhập Hóa Đơn Thanh Toán
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Nhập món ăn, số bàn, chiết khấu và hình thức thanh toán trực tiếp
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuickBillModal(false)}
+                className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                title="Đóng cửa sổ (Esc)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-3 sm:p-5 overflow-y-auto flex-1">
+              <OcrScannerTab
+                isModal={true}
+                onCloseModal={() => setShowQuickBillModal(false)}
+                canWrite={canWrite}
+                categories={effectiveCategories}
+                products={products}
+                existingBills={bills}
+                existingDebtors={effectiveDebtors}
+                onDeleteDebtor={handleDeleteDebtor}
+                deductionCategories={effectiveDeductionCategories}
+                onAddExpenseDeduction={handleAddExpenseDeduction}
+                autoAddProducts={autoAddProducts}
+                onToggleAutoAddProducts={setAutoAddProducts}
+                onSaveExtractedBill={handleSaveExtractedBill}
+                onDeleteAllMenuProducts={handleRequestDeleteAllMenuProducts}
+                menuProductsCount={products.length}
+                geminiApiKey={geminiApiKey}
+                geminiStatus={geminiKeyStatus}
+                onSaveGeminiKey={handleSaveGeminiKey}
+                onCheckGeminiKey={handleCheckGeminiKey}
+                onClearGeminiKey={handleClearGeminiKey}
+                onOpenKiotVietSync={() => setShowKiotVietSyncModal(true)}
+                requestConfirm={requestConfirm}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
