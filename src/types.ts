@@ -316,6 +316,7 @@ export interface ExtractedBillItem {
   originalUnitPrice?: number;
   discountAmount?: number;
   discountPercent?: number;
+  isDiscountEligible?: boolean; // Áp dụng chiết khấu % cho món này (VD: món ăn được CK, bia/nước không CK)
 }
 
 export interface ExtractedBillJSON {
@@ -377,6 +378,7 @@ export interface BillItemRecord {
   originalUnitPrice?: number;
   discountAmount?: number;
   discountPercent?: number;
+  isDiscountEligible?: boolean; // Áp dụng chiết khấu % cho món này
   createdAtMs: number;
   updatedAtMs: number;
 }

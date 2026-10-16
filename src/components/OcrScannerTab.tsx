@@ -38,10 +38,13 @@ import {
   Pin,
   PinOff,
   Utensils,
+  UtensilsCrossed,
   Eye,
   Sun,
   SlidersHorizontal,
   Search,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import {
   ExtractedBillItem,
@@ -65,6 +68,8 @@ import {
   SAMPLE_BILL_TEMPLATES,
   splitProductNameAndInlineNote,
   extractBillTableName,
+  isFoodDiscountEligible,
+  calculateItemsDiscountSummary,
 } from '../utils/parser';
 import { extractBillWithGemini } from '../services/geminiService';
 import { GeminiKeyBar } from './GeminiKeyBar';
@@ -226,6 +231,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [checkOutTime, setCheckOutTime] = useState<string>('');
   const [tableName, setTableName] = useState<string>('');
   const [discountAmount, setDiscountAmount] = useState<number>(0);
+  const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>('percent');
+  const [discountPercent, setDiscountPercent] = useState<number>(0);
   const [paymentType, setPaymentType] = useState<PaymentType>('cash');
   const [splitCashInput, setSplitCashInput] = useState<string>('');
   const [splitTransferInput, setSplitTransferInput] = useState<string>('');
@@ -293,6 +300,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setCheckOutTime('');
     setTableName('');
     setDiscountAmount(0);
+    setDiscountPercent(0);
+    setDiscountMode('percent');
     setPaymentType('cash');
     setSplitCashInput('');
     setSplitTransferInput('');
@@ -311,15 +320,56 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setShowJsonPreview(false);
   };
 
+  const discountItemsSummary = useMemo(() => {
+    return calculateItemsDiscountSummary(items, discountPercent);
+  }, [items, discountPercent]);
+
   const subtotalAmount = items.reduce(
-    (sum, it) => sum + Math.round((it.quantity || 0) * (it.unitPrice || 0)),
+    (sum, it) => sum + Math.round((Number(it.quantity) || 0) * (Number(it.unitPrice) || 0)),
     0
   );
-  const safeDiscount = Math.min(
-    subtotalAmount,
-    Math.max(0, Math.round(Number(discountAmount) || 0))
-  );
+
+  const safeDiscount =
+    discountMode === 'percent'
+      ? discountItemsSummary.discountAmount
+      : Math.min(subtotalAmount, Math.max(0, Math.round(Number(discountAmount) || 0)));
+
   const totalAmount = Math.max(0, subtotalAmount - safeDiscount);
+
+  const handleSelectFoodOnlyForDiscount = () => {
+    setItems((prev) =>
+      prev.map((it) => ({
+        ...it,
+        isDiscountEligible: isFoodDiscountEligible(it),
+      }))
+    );
+  };
+
+  const handleSelectAllForDiscount = () => {
+    setItems((prev) =>
+      prev.map((it) => ({
+        ...it,
+        isDiscountEligible: true,
+      }))
+    );
+  };
+
+  const handleDeselectAllForDiscount = () => {
+    setItems((prev) =>
+      prev.map((it) => ({
+        ...it,
+        isDiscountEligible: false,
+      }))
+    );
+  };
+
+  const handleToggleItemDiscount = (idx: number) => {
+    setItems((prev) =>
+      prev.map((it, i) =>
+        i === idx ? { ...it, isDiscountEligible: !(it.isDiscountEligible !== false) } : it
+      )
+    );
+  };
 
   // Real-Time Duplicate Bill Detector (Phát hiện Bill trùng lặp)
   const duplicateBillWarning = useMemo(() => {
@@ -421,7 +471,9 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setCheckInTime(result.billInfo.checkInTime || '');
     setCheckOutTime(result.billInfo.checkOutTime || '');
     setTableName(normalizeTableName(result.billInfo.tableName || ''));
-    setDiscountAmount(Math.max(0, Math.round(result.billInfo.discountAmount || 0)));
+    
+    const parsedDisc = Math.max(0, Math.round(result.billInfo.discountAmount || 0));
+    setDiscountAmount(parsedDisc);
     setPaymentType(result.billInfo.paymentType || 'cash');
     if (result.billInfo.paymentType === 'split') {
       if (result.billInfo.paidCashAmount !== undefined) {
@@ -437,41 +489,67 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setDebtorName(
       result.billInfo.paymentType === 'debt' ? result.billInfo.debtorName || '' : ''
     );
-    setItems(
-      result.items.map((it) => {
-        const split = splitProductNameAndInlineNote(
-          it.productName,
-          products,
-          categories
-        );
-        const mergedNote = [split.note, it.note]
-          .filter(Boolean)
-          .filter(
-            (v, i, arr) =>
-              arr.findIndex((x) => x!.toLowerCase() === v!.toLowerCase()) === i
-          )
-          .join(', ');
-        const qty = Math.max(1, Math.round(it.quantity || 1));
-        const uPrice = Math.max(
-          0,
-          Math.round(it.unitPrice || split.catalogUnitPrice || 0)
-        );
-        return {
-          productName: split.productName || it.productName,
-          note: mergedNote || '',
-          category:
-            it.category ||
-            split.category ||
-            inferCategory(split.productName || it.productName, categories),
-          quantity: qty,
-          unitPrice: uPrice,
-          subtotal: qty * uPrice,
-          originalUnitPrice: it.originalUnitPrice,
-          discountAmount: it.discountAmount,
-          discountPercent: it.discountPercent,
-        };
-      })
-    );
+
+    const mappedItems: ExtractedBillItem[] = result.items.map((it) => {
+      const split = splitProductNameAndInlineNote(
+        it.productName,
+        products,
+        categories
+      );
+      const mergedNote = [split.note, it.note]
+        .filter(Boolean)
+        .filter(
+          (v, i, arr) =>
+            arr.findIndex((x) => x!.toLowerCase() === v!.toLowerCase()) === i
+        )
+        .join(', ');
+      const qty = Math.max(1, Math.round(it.quantity || 1));
+      const uPrice = Math.max(
+        0,
+        Math.round(it.unitPrice || split.catalogUnitPrice || 0)
+      );
+      const cleanName = split.productName || it.productName;
+      const cleanCat =
+        it.category ||
+        split.category ||
+        inferCategory(cleanName, categories);
+      const eligible =
+        it.isDiscountEligible !== undefined
+          ? it.isDiscountEligible
+          : isFoodDiscountEligible({ productName: cleanName, category: cleanCat });
+
+      return {
+        productName: cleanName,
+        note: mergedNote || '',
+        category: cleanCat,
+        quantity: qty,
+        unitPrice: uPrice,
+        subtotal: qty * uPrice,
+        originalUnitPrice: it.originalUnitPrice,
+        discountAmount: it.discountAmount,
+        discountPercent: it.discountPercent,
+        isDiscountEligible: eligible,
+      };
+    });
+
+    setItems(mappedItems);
+
+    if (parsedDisc > 0) {
+      const foodTotal = mappedItems
+        .filter((it) => it.isDiscountEligible !== false)
+        .reduce((s, it) => s + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
+      if (foodTotal > 0) {
+        const pct = Math.round((parsedDisc / foodTotal) * 100);
+        if (pct > 0 && Math.abs(Math.round((foodTotal * pct) / 100) - parsedDisc) <= 1000) {
+          setDiscountPercent(pct);
+          setDiscountMode('percent');
+        } else {
+          setDiscountMode('amount');
+        }
+      } else {
+        setDiscountMode('amount');
+      }
+    }
   };
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -783,6 +861,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         quantity: 1,
         unitPrice: defaultPrice,
         subtotal: 0,
+        isDiscountEligible: true,
       },
     ]);
   };
@@ -828,6 +907,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
           quantity: 1,
           unitPrice: prod.unitPrice,
           subtotal: prod.unitPrice,
+          isDiscountEligible: isFoodDiscountEligible({
+            productName: prod.productName,
+            category: prod.category,
+          }),
         },
       ];
     });
@@ -884,7 +967,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const executeSaveBillNow = async () => {
     const validItems = items.filter((it) => it.productName.trim() !== '');
     const normalizedTable = normalizeTableName(tableName);
-    const finalNote = [normalizedTable, note.trim()].filter(Boolean).join(' - ');
+    let finalNote = [normalizedTable, note.trim()].filter(Boolean).join(' - ');
     const isSplit = paymentType === 'split';
     let finalPaidCash: number | undefined = undefined;
     let finalPaidTransfer: number | undefined = undefined;
@@ -905,6 +988,20 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       } else {
         finalPaidCash = Math.round(totalAmount / 2);
         finalPaidTransfer = totalAmount - finalPaidCash;
+      }
+
+      const splitTag = `[TM: ${formatVND(finalPaidCash)} · CK: ${formatVND(finalPaidTransfer)}]`;
+      if (!finalNote.includes('[TM:') && !finalNote.includes('TM:')) {
+        finalNote = finalNote ? `${finalNote} · ${splitTag}` : splitTag;
+      }
+    }
+
+    if (discountMode === 'percent' && discountPercent > 0 && safeDiscount > 0) {
+      const ckTag = `[CK ${discountPercent}% món ăn: -${formatVND(safeDiscount)}]`;
+      if (/\[CK\s*\d+%.*?\]/i.test(finalNote)) {
+        finalNote = finalNote.replace(/\[CK\s*\d+%.*?\]/i, ckTag);
+      } else if (!finalNote.includes(`CK ${discountPercent}%`)) {
+        finalNote = finalNote ? `${finalNote} · ${ckTag}` : ckTag;
       }
     }
 
@@ -940,7 +1037,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         paidCashAmount: finalPaidCash,
         paidTransferAmount: finalPaidTransfer,
         note: finalNote,
-        items: validItems,
+        items: validItems.map((it) => ({
+          ...it,
+          isDiscountEligible: it.isDiscountEligible !== false,
+        })),
       });
 
       // Clear all information of the bill entry section
@@ -1766,24 +1866,166 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 </datalist>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Chiết khấu / Giảm giá (₫)
-                </label>
-                <div className="relative">
-                  <Percent className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="number"
-                    min={0}
-                    step={1000}
-                    value={discountAmount || ''}
-                    placeholder="0"
-                    onChange={(e) =>
-                      setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
-                    }
-                    className="w-full h-9 pl-8 pr-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
+              {/* Chiết khấu cho người đặt bàn / Giảm giá theo món */}
+              <div className="sm:col-span-2 p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <Percent className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      Chiết khấu / Giảm giá (Cho người đặt bàn)
+                    </span>
+                  </div>
+
+                  {/* Switch mode */}
+                  <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5 text-[11px] font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setDiscountMode('percent')}
+                      className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                        discountMode === 'percent'
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      % Theo món đã chọn
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDiscountMode('amount');
+                        setDiscountAmount(safeDiscount);
+                      }}
+                      className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                        discountMode === 'amount'
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      Nhập số tiền VNĐ (₫)
+                    </button>
+                  </div>
                 </div>
+
+                {discountMode === 'percent' ? (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                          Chọn món:
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleSelectFoodOnlyForDiscount}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                          title="Tự động chọn các món ăn, loại trừ Nước ngọt/Bia/Nước suối/Bún/Bánh mì/Khăn"
+                        >
+                          <Sparkles className="w-3 h-3 text-emerald-600" />
+                          <span>Món ăn (Trừ Nước/Bia/Bún/Bánh mì)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSelectAllForDiscount}
+                          className="px-2 py-1 rounded-lg text-[11px] font-medium border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-50 cursor-pointer"
+                        >
+                          Tất cả ({items.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDeselectAllForDiscount}
+                          className="px-2 py-1 rounded-lg text-[11px] font-medium border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-500 hover:text-slate-800 cursor-pointer"
+                        >
+                          Bỏ chọn
+                        </button>
+                      </div>
+
+                      {/* Quick % buttons */}
+                      <div className="flex items-center gap-1">
+                        <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 mr-1">
+                          Mức %:
+                        </span>
+                        {[5, 10, 15, 20].map((pct) => (
+                          <button
+                            key={pct}
+                            type="button"
+                            onClick={() => setDiscountPercent(pct)}
+                            className={`h-7 px-2 rounded-lg text-xs font-bold font-mono border transition-colors cursor-pointer ${
+                              discountPercent === pct
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500'
+                            }`}
+                          >
+                            {pct}%
+                          </button>
+                        ))}
+                        <div className="relative w-16">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={discountPercent || ''}
+                            onChange={(e) =>
+                              setDiscountPercent(Math.min(100, Math.max(0, Number(e.target.value) || 0)))
+                            }
+                            placeholder="%"
+                            className="w-full h-7 pl-2 pr-4 text-xs font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                          />
+                          <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">
+                            %
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Realtime Breakdown Status Card */}
+                    <div className="p-2 rounded-lg bg-white/80 dark:bg-slate-900/80 border border-emerald-200/70 dark:border-emerald-900/50 text-xs flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-600 dark:text-slate-300">
+                        <span>
+                          Đã chọn:{' '}
+                          <strong className="text-emerald-700 dark:text-emerald-300">
+                            {discountItemsSummary.eligibleCount}/{items.length} món
+                          </strong>{' '}
+                          ({formatVND(discountItemsSummary.eligibleTotal)})
+                        </span>
+                        {discountItemsSummary.nonEligibleTotal > 0 && (
+                          <span className="text-slate-400">
+                            Không CK (Bia/nước/bún): {formatVND(discountItemsSummary.nonEligibleTotal)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-rose-600 dark:text-rose-400 font-mono">
+                          Giảm {discountPercent}%: -{formatVND(discountItemsSummary.discountAmount)}
+                        </span>
+                        <span className="text-slate-300 dark:text-slate-700">|</span>
+                        <span className="font-bold text-slate-900 dark:text-white font-mono">
+                          Tổng Bill: {formatVND(totalAmount)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        value={discountAmount || ''}
+                        onChange={(e) =>
+                          setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
+                        }
+                        placeholder="Nhập số tiền giảm giá trực tiếp..."
+                        className="w-full h-9 pl-3 pr-8 text-xs font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
+                        ₫
+                      </span>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">
+                      -{formatVND(safeDiscount)}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="sm:col-span-2">
@@ -2275,9 +2517,17 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                         </div>
 
                         <div className="flex items-center justify-between pt-1 border-t border-slate-200/70 dark:border-slate-800 text-xs font-mono">
-                          <span className="text-[11px] text-slate-500">
-                            {catalogMatch ? `Menu: ${formatVND(catalogMatch.unitPrice)}` : 'Món mới'}
-                          </span>
+                          <label className="inline-flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold">
+                            <input
+                              type="checkbox"
+                              checked={item.isDiscountEligible !== false}
+                              onChange={() => handleToggleItemDiscount(idx)}
+                              className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                            />
+                            <span className={item.isDiscountEligible !== false ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400'}>
+                              {item.isDiscountEligible !== false ? 'Áp dụng CK' : 'Không CK'}
+                            </span>
+                          </label>
                           <span className="font-bold text-emerald-600 dark:text-emerald-400">
                             = {formatVND((Number(item.quantity) || 1) * (Number(item.unitPrice) || 0))}
                           </span>
@@ -2291,8 +2541,9 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 <div className="hidden md:block border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto shadow-2xs">
                   <table className="w-full text-left border-collapse min-w-[700px] table-fixed">
                     <colgroup>
-                      <col className="w-auto" style={{ minWidth: '260px' }} />
+                      <col className="w-auto" style={{ minWidth: '240px' }} />
                       <col className="w-24 lg:w-28" />
+                      <col className="w-24" />
                       <col className="w-16 lg:w-18" />
                       <col className="w-24 lg:w-28" />
                       <col className="w-24 lg:w-28" />
@@ -2302,6 +2553,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                       <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                         <th className="py-2.5 px-3">Tên món & Ghi chú (Yêu cầu làm món)</th>
                         <th className="py-2.5 px-2">Danh mục</th>
+                        <th className="py-2.5 px-2 text-center" title="Áp dụng chiết khấu % cho món này">Áp dụng CK</th>
                         <th className="py-2.5 px-1 text-center" title="Số lượng món">SL</th>
                         <th className="py-2.5 px-2 text-right">Đơn giá (₫)</th>
                         <th className="py-2.5 px-2.5 text-right">Thành tiền</th>
@@ -2327,7 +2579,11 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                         return (
                           <tr
                             key={idx}
-                            className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors"
+                            className={`transition-colors ${
+                              item.isDiscountEligible !== false
+                                ? 'bg-emerald-50/20 dark:bg-emerald-950/10 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
+                                : 'hover:bg-slate-50/70 dark:hover:bg-slate-800/30'
+                            }`}
                           >
                             <td className="p-2.5 align-top space-y-1.5">
                               <input
@@ -2373,6 +2629,32 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                                   </option>
                                 ))}
                               </select>
+                            </td>
+
+                            {/* Discount Eligible Checkbox Button */}
+                            <td className="p-2.5 align-top text-center pt-3">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleItemDiscount(idx)}
+                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                                  item.isDiscountEligible !== false
+                                    ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 shadow-2xs'
+                                    : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-400 hover:text-slate-600'
+                                }`}
+                                title={item.isDiscountEligible !== false ? 'Món này được tính chiết khấu' : 'Món này không tính chiết khấu'}
+                              >
+                                {item.isDiscountEligible !== false ? (
+                                  <>
+                                    <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span>Áp dụng</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Square className="w-3.5 h-3.5 text-slate-400" />
+                                    <span>Không</span>
+                                  </>
+                                )}
+                              </button>
                             </td>
 
                             {/* Stepper Quantity Control - Compact w-16 / w-18 */}

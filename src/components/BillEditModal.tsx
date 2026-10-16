@@ -1,5 +1,18 @@
 import React, { useState } from 'react';
-import { X, Plus, Trash2, Save, MessageSquareText, Calendar, CheckCircle2 } from 'lucide-react';
+import {
+  X,
+  Plus,
+  Trash2,
+  Save,
+  MessageSquareText,
+  Calendar,
+  CheckCircle2,
+  Percent,
+  Sparkles,
+  CheckSquare,
+  Square,
+  UtensilsCrossed,
+} from 'lucide-react';
 import {
   BillRecord,
   BillItemRecord,
@@ -16,6 +29,9 @@ import {
   sanitizeId,
   splitProductNameAndInlineNote,
   truncateStr,
+  isFoodDiscountEligible,
+  calculateItemsDiscountSummary,
+  getBillPaymentBreakdown,
 } from '../utils/parser';
 
 interface BillEditModalProps {
@@ -44,17 +60,64 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   const [billDate, setBillDate] = useState(bill.billDate);
   const [checkInTime, setCheckInTime] = useState(bill.checkInTime || '');
   const [checkOutTime, setCheckOutTime] = useState(bill.checkOutTime || '');
+  const [initialItems] = useState<BillItemRecord[]>(() => {
+    const source =
+      items && items.length > 0
+        ? items
+        : reconstructBillItemsFromSummary(bill, products);
+    return source.map((it) => ({
+      ...it,
+      note: it.note || '',
+      isDiscountEligible:
+        it.isDiscountEligible !== undefined
+          ? it.isDiscountEligible
+          : isFoodDiscountEligible(it),
+    }));
+  });
+  const [editItems, setEditItems] = useState<BillItemRecord[]>(() =>
+    initialItems.map((it) => ({ ...it }))
+  );
   const [discountAmount, setDiscountAmount] = useState<number>(bill.discountAmount || 0);
+  const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>('percent');
+  const [discountPercent, setDiscountPercent] = useState<number>(() => {
+    if (bill.discountAmount && bill.discountAmount > 0) {
+      const foodTotal = initialItems
+        .filter((it) => it.isDiscountEligible !== false)
+        .reduce((s, it) => s + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
+      if (foodTotal > 0) {
+        const pct = Math.round((bill.discountAmount / foodTotal) * 100);
+        if (pct > 0 && Math.abs(Math.round((foodTotal * pct) / 100) - bill.discountAmount) <= 1000) {
+          return pct;
+        }
+      }
+      const allTotal = initialItems.reduce((s, it) => s + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
+      if (allTotal > 0) {
+        const pct = Math.round((bill.discountAmount / allTotal) * 100);
+        if (pct > 0 && Math.abs(Math.round((allTotal * pct) / 100) - bill.discountAmount) <= 1000) {
+          return pct;
+        }
+      }
+    }
+    return 0;
+  });
   const [paymentType, setPaymentType] = useState<PaymentType>(bill.paymentType);
   const [splitCashInput, setSplitCashInput] = useState<string>(() => {
     if (bill.paymentType === 'split') {
-      return bill.paidCashAmount !== undefined ? String(bill.paidCashAmount) : '';
+      if (bill.paidCashAmount !== undefined && bill.paidCashAmount !== null) {
+        return String(bill.paidCashAmount);
+      }
+      const bd = getBillPaymentBreakdown(bill);
+      return bd.cash > 0 ? String(bd.cash) : '';
     }
     return '';
   });
   const [splitTransferInput, setSplitTransferInput] = useState<string>(() => {
     if (bill.paymentType === 'split') {
-      return bill.paidTransferAmount !== undefined ? String(bill.paidTransferAmount) : '';
+      if (bill.paidTransferAmount !== undefined && bill.paidTransferAmount !== null) {
+        return String(bill.paidTransferAmount);
+      }
+      const bd = getBillPaymentBreakdown(bill);
+      return bd.transfer > 0 ? String(bd.transfer) : '';
     }
     return '';
   });
@@ -64,34 +127,73 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     return bill.settleDate || (bill.debtStatus === 'paid' ? bill.billDate : '');
   });
   const [note, setNote] = useState(bill.note);
-  const [initialItems] = useState<BillItemRecord[]>(() => {
-    const source =
-      items && items.length > 0
-        ? items
-        : reconstructBillItemsFromSummary(bill, products);
-    return source.map((it) => ({ ...it, note: it.note || '' }));
-  });
-  const [editItems, setEditItems] = useState<BillItemRecord[]>(() =>
-    initialItems.map((it) => ({ ...it }))
-  );
   const [isSaving, setIsSaving] = useState(false);
+
+  const discountItemsSummary = React.useMemo(() => {
+    return calculateItemsDiscountSummary(editItems, discountPercent);
+  }, [editItems, discountPercent]);
+
+  const subtotalAmount = editItems.reduce(
+    (sum, it) => sum + Math.round((Number(it.quantity) || 0) * (Number(it.unitPrice) || 0)),
+    0
+  );
+
+  const safeDiscount =
+    discountMode === 'percent'
+      ? discountItemsSummary.discountAmount
+      : Math.min(subtotalAmount, Math.max(0, Math.round(Number(discountAmount) || 0)));
+
+  const computedTotal = Math.max(0, subtotalAmount - safeDiscount);
+
+  const handleSelectFoodOnlyForDiscount = () => {
+    setEditItems((prev) =>
+      prev.map((it) => ({
+        ...it,
+        isDiscountEligible: isFoodDiscountEligible(it),
+      }))
+    );
+  };
+
+  const handleSelectAllForDiscount = () => {
+    setEditItems((prev) =>
+      prev.map((it) => ({
+        ...it,
+        isDiscountEligible: true,
+      }))
+    );
+  };
+
+  const handleDeselectAllForDiscount = () => {
+    setEditItems((prev) =>
+      prev.map((it) => ({
+        ...it,
+        isDiscountEligible: false,
+      }))
+    );
+  };
+
+  const handleToggleItemDiscount = (idx: number) => {
+    setEditItems((prev) =>
+      prev.map((it, i) =>
+        i === idx ? { ...it, isDiscountEligible: !(it.isDiscountEligible !== false) } : it
+      )
+    );
+  };
 
   const hasChanges = React.useMemo(() => {
     if (billDate !== bill.billDate) return true;
     if ((checkInTime || '').trim() !== (bill.checkInTime || '').trim()) return true;
     if ((checkOutTime || '').trim() !== (bill.checkOutTime || '').trim()) return true;
-    if (
-      Math.max(0, Math.round(Number(discountAmount) || 0)) !==
-      Math.max(0, Math.round(Number(bill.discountAmount) || 0))
-    ) {
+    if (safeDiscount !== Math.max(0, Math.round(Number(bill.discountAmount) || 0))) {
       return true;
     }
     if (paymentType !== bill.paymentType) return true;
     if (paymentType === 'split') {
       const currentCash = Math.max(0, Number(splitCashInput) || 0);
       const currentTransfer = Math.max(0, Number(splitTransferInput) || 0);
-      const oldCash = Math.max(0, Number(bill.paidCashAmount) || 0);
-      const oldTransfer = Math.max(0, Number(bill.paidTransferAmount) || 0);
+      const bd = getBillPaymentBreakdown(bill);
+      const oldCash = bill.paidCashAmount !== undefined ? Number(bill.paidCashAmount) : bd.cash;
+      const oldTransfer = bill.paidTransferAmount !== undefined ? Number(bill.paidTransferAmount) : bd.transfer;
       if (currentCash !== oldCash || currentTransfer !== oldTransfer) return true;
     }
     if ((debtorName || '').trim() !== (bill.debtorName || '').trim()) return true;
@@ -110,6 +212,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
       if (curr.category !== init.category) return true;
       if (Number(curr.quantity) !== Number(init.quantity)) return true;
       if (Number(curr.unitPrice) !== Number(init.unitPrice)) return true;
+      if ((curr.isDiscountEligible !== false) !== (init.isDiscountEligible !== false)) return true;
     }
 
     return false;
@@ -118,7 +221,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     billDate,
     checkInTime,
     checkOutTime,
-    discountAmount,
+    safeDiscount,
     paymentType,
     splitCashInput,
     splitTransferInput,
@@ -129,16 +232,6 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     editItems,
     initialItems,
   ]);
-
-  const subtotalAmount = editItems.reduce(
-    (sum, it) => sum + Math.round(it.quantity * it.unitPrice),
-    0
-  );
-  const safeDiscount = Math.min(
-    subtotalAmount,
-    Math.max(0, Math.round(Number(discountAmount) || 0))
-  );
-  const computedTotal = Math.max(0, subtotalAmount - safeDiscount);
 
   const handleItemChange = (
     idx: number,
@@ -347,6 +440,25 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             finalPaidTransfer = t;
           }
 
+          let finalNote = note.trim();
+          if (discountMode === 'percent' && discountPercent > 0 && safeDiscount > 0) {
+            const ckTag = `[CK ${discountPercent}% món ăn: -${formatVND(safeDiscount)}]`;
+            if (/\[CK\s*\d+%.*?\]/i.test(finalNote)) {
+              finalNote = finalNote.replace(/\[CK\s*\d+%.*?\]/i, ckTag);
+            } else if (!finalNote.includes(`CK ${discountPercent}%`)) {
+              finalNote = finalNote ? `${finalNote} · ${ckTag}` : ckTag;
+            }
+          }
+
+          if (finalPaymentType === 'split' && finalPaidCash !== undefined && finalPaidTransfer !== undefined) {
+            const splitTag = `[TM: ${formatVND(finalPaidCash)} · CK: ${formatVND(finalPaidTransfer)}]`;
+            if (/\[TM:.*?\]/i.test(finalNote)) {
+              finalNote = finalNote.replace(/\[TM:.*?\]/i, splitTag);
+            } else if (!finalNote.includes('TM:')) {
+              finalNote = finalNote ? `${finalNote} · ${splitTag}` : splitTag;
+            }
+          }
+
           const updatedBill: BillRecord = {
             ...bill,
             billDate,
@@ -363,7 +475,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             discountAmount: safeDiscount,
             totalAmount: computedTotal,
             itemsSummary: summaryStr,
-            note: note.trim(),
+            note: finalNote,
             updatedAtMs: now,
           };
 
@@ -372,6 +484,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             note: (it.note || '').trim(),
             billDate,
             subtotal: it.quantity * it.unitPrice,
+            isDiscountEligible: it.isDiscountEligible !== false,
             updatedAtMs: now,
           }));
 
@@ -471,20 +584,168 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Chiết khấu (₫)
-              </label>
-              <input
-                type="number"
-                min={0}
-                step={1000}
-                value={discountAmount}
-                onChange={(e) =>
-                  setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
-                }
-                className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-              />
+            {/* Chiết khấu cho người đặt bàn / Giảm giá */}
+            <div className="sm:col-span-2 lg:col-span-3 p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Percent className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                    Chiết khấu / Giảm giá (Cho người đặt bàn)
+                  </span>
+                </div>
+
+                {/* Mode Switch: % theo món chọn vs Số tiền ₫ */}
+                <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5 text-[11px] font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDiscountMode('percent');
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                      discountMode === 'percent'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                  >
+                    % Theo món đã chọn
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDiscountMode('amount');
+                      setDiscountAmount(safeDiscount);
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                      discountMode === 'amount'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                  >
+                    Nhập số tiền VNĐ (₫)
+                  </button>
+                </div>
+              </div>
+
+              {discountMode === 'percent' ? (
+                <div className="space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                        Chọn nhanh món:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleSelectFoodOnlyForDiscount}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                        title="Tự động chọn các món ăn, loại trừ Nước ngọt/Bia/Nước suối/Bún/Bánh mì/Khăn"
+                      >
+                        <Sparkles className="w-3 h-3 text-emerald-600" />
+                        <span>Món ăn (Trừ Nước/Bia/Bún/Bánh mì)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSelectAllForDiscount}
+                        className="px-2 py-1 rounded-lg text-[11px] font-medium border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-50 cursor-pointer"
+                      >
+                        Tất cả ({editItems.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeselectAllForDiscount}
+                        className="px-2 py-1 rounded-lg text-[11px] font-medium border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-500 hover:text-slate-800 cursor-pointer"
+                      >
+                        Bỏ chọn
+                      </button>
+                    </div>
+
+                    {/* Quick % buttons */}
+                    <div className="flex items-center gap-1">
+                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 mr-1">
+                        Mức %:
+                      </span>
+                      {[5, 10, 15, 20].map((pct) => (
+                        <button
+                          key={pct}
+                          type="button"
+                          onClick={() => setDiscountPercent(pct)}
+                          className={`h-7 px-2 rounded-lg text-xs font-bold font-mono border transition-colors cursor-pointer ${
+                            discountPercent === pct
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                              : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500'
+                          }`}
+                        >
+                          {pct}%
+                        </button>
+                      ))}
+                      <div className="relative w-16">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={discountPercent || ''}
+                          onChange={(e) =>
+                            setDiscountPercent(Math.min(100, Math.max(0, Number(e.target.value) || 0)))
+                          }
+                          placeholder="%"
+                          className="w-full h-7 pl-2 pr-4 text-xs font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                        />
+                        <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">
+                          %
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Realtime Breakdown Status Card */}
+                  <div className="p-2.5 rounded-lg bg-white/80 dark:bg-slate-900/80 border border-emerald-200/70 dark:border-emerald-900/50 text-xs flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-600 dark:text-slate-300">
+                      <span>
+                        Đã chọn:{' '}
+                        <strong className="text-emerald-700 dark:text-emerald-300">
+                          {discountItemsSummary.eligibleCount}/{editItems.length} món
+                        </strong>{' '}
+                        ({formatVND(discountItemsSummary.eligibleTotal)})
+                      </span>
+                      {discountItemsSummary.nonEligibleTotal > 0 && (
+                        <span className="text-slate-400">
+                          Không CK (Bia/nước/bún): {formatVND(discountItemsSummary.nonEligibleTotal)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-rose-600 dark:text-rose-400 font-mono">
+                        Giảm {discountPercent}%: -{formatVND(discountItemsSummary.discountAmount)}
+                      </span>
+                      <span className="text-slate-300 dark:text-slate-700">|</span>
+                      <span className="font-bold text-slate-900 dark:text-white font-mono">
+                        Còn: {formatVND(computedTotal)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      min={0}
+                      step={1000}
+                      value={discountAmount || ''}
+                      onChange={(e) =>
+                        setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
+                      }
+                      placeholder="Nhập số tiền giảm giá trực tiếp..."
+                      className="w-full h-9 pl-3 pr-8 text-xs font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
+                      ₫
+                    </span>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">
+                    -{formatVND(safeDiscount)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div>
@@ -876,11 +1137,17 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                     </div>
 
                     <div className="flex items-center justify-between pt-1 border-t border-slate-200/70 dark:border-slate-800 text-xs font-mono">
-                      <span className="text-[11px] text-slate-500">
-                        {catalogMatch
-                          ? `Giá Menu: ${formatVND(catalogMatch.unitPrice)}`
-                          : 'Món tùy chỉnh'}
-                      </span>
+                      <label className="inline-flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold">
+                        <input
+                          type="checkbox"
+                          checked={it.isDiscountEligible !== false}
+                          onChange={() => handleToggleItemDiscount(idx)}
+                          className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                        />
+                        <span className={it.isDiscountEligible !== false ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400'}>
+                          {it.isDiscountEligible !== false ? 'Áp dụng CK' : 'Không CK'}
+                        </span>
+                      </label>
                       <span className="font-bold text-emerald-600 dark:text-emerald-400">
                         = {formatVND(it.quantity * it.unitPrice)}
                       </span>
@@ -896,9 +1163,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500">
                     <th className="py-2.5 px-3">Tên món & Ghi chú món</th>
-                    <th className="py-2.5 px-2 w-36">Danh mục</th>
-                    <th className="py-2.5 px-2 w-20 text-right">SL</th>
-                    <th className="py-2.5 px-2 w-36 text-right">
+                    <th className="py-2.5 px-2 w-32">Danh mục</th>
+                    <th className="py-2.5 px-2 w-24 text-center">Áp dụng CK</th>
+                    <th className="py-2.5 px-2 w-16 text-right">SL</th>
+                    <th className="py-2.5 px-2 w-32 text-right">
                       Đơn giá trong Bill (₫)
                     </th>
                     <th className="py-2.5 px-3 w-28 text-right">Thành tiền</th>
@@ -921,7 +1189,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                     );
 
                     return (
-                      <tr key={it.id}>
+                      <tr
+                        key={it.id}
+                        className={it.isDiscountEligible !== false ? 'bg-emerald-50/20 dark:bg-emerald-950/10' : ''}
+                      >
                         <td className="p-2 align-top space-y-1.5">
                           <input
                             type="text"
@@ -960,6 +1231,30 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                               </option>
                             ))}
                           </select>
+                        </td>
+                        <td className="p-2 align-top text-center pt-3">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleItemDiscount(idx)}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                              it.isDiscountEligible !== false
+                                ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 shadow-2xs'
+                                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-400 hover:text-slate-600'
+                            }`}
+                            title={it.isDiscountEligible !== false ? 'Món này được tính chiết khấu' : 'Món này không tính chiết khấu'}
+                          >
+                            {it.isDiscountEligible !== false ? (
+                              <>
+                                <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Áp dụng CK</span>
+                              </>
+                            ) : (
+                              <>
+                                <Square className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Không CK</span>
+                              </>
+                            )}
+                          </button>
                         </td>
                         <td className="p-2 align-top">
                           <input

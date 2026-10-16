@@ -749,6 +749,38 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
         paymentType: data.paymentType,
         debtorName: data.debtorName || '',
         debtStatus: data.debtStatus || 'none',
+        settleDate: data.settleDate || '',
+        settledMethod: data.settledMethod || undefined,
+        paidCashAmount:
+          data.paidCashAmount !== undefined && data.paidCashAmount !== null && Number(data.paidCashAmount) > 0
+            ? Number(data.paidCashAmount)
+            : (data.paymentType === 'split'
+                ? (() => {
+                    const match = String(data.note || '').match(/TM[:\s]*([\d.,]+)/i);
+                    if (match) {
+                      const val = Number(match[1].replace(/[.,\s]/g, ''));
+                      if (!isNaN(val) && val > 0) return val;
+                    }
+                    return data.paidCashAmount !== undefined && data.paidCashAmount !== null
+                      ? Number(data.paidCashAmount)
+                      : undefined;
+                  })()
+                : (data.paidCashAmount !== undefined && data.paidCashAmount !== null ? Number(data.paidCashAmount) : undefined)),
+        paidTransferAmount:
+          data.paidTransferAmount !== undefined && data.paidTransferAmount !== null && Number(data.paidTransferAmount) > 0
+            ? Number(data.paidTransferAmount)
+            : (data.paymentType === 'split'
+                ? (() => {
+                    const match = String(data.note || '').match(/CK[:\s]*([\d.,]+)/i);
+                    if (match) {
+                      const val = Number(match[1].replace(/[.,\s]/g, ''));
+                      if (!isNaN(val) && val > 0) return val;
+                    }
+                    return data.paidTransferAmount !== undefined && data.paidTransferAmount !== null
+                      ? Number(data.paidTransferAmount)
+                      : undefined;
+                  })()
+                : (data.paidTransferAmount !== undefined && data.paidTransferAmount !== null ? Number(data.paidTransferAmount) : undefined)),
         subtotalAmount: Number(data.subtotalAmount) || Number(data.totalAmount) || 0,
         discountAmount: Number(data.discountAmount) || 0,
         totalAmount: Number(data.totalAmount) || 0,
@@ -948,6 +980,16 @@ export async function syncFullSnapshotToFirestore(
         paymentType: b.paymentType || 'cash',
         debtorName: truncateStr(b.debtorName || '', 120, ''),
         debtStatus: b.debtStatus || 'none',
+        settleDate: truncateStr(b.settleDate || '', 20, ''),
+        settledMethod: b.settledMethod || '',
+        paidCashAmount:
+          b.paidCashAmount !== undefined && b.paidCashAmount !== null
+            ? Math.max(0, Math.round(Number(b.paidCashAmount) || 0))
+            : (b.paymentType === 'split' ? Math.round(Number(b.totalAmount || 0) / 2) : 0),
+        paidTransferAmount:
+          b.paidTransferAmount !== undefined && b.paidTransferAmount !== null
+            ? Math.max(0, Math.round(Number(b.paidTransferAmount) || 0))
+            : (b.paymentType === 'split' ? Math.max(0, Math.round(Number(b.totalAmount || 0)) - Math.round(Number(b.totalAmount || 0) / 2)) : 0),
         subtotalAmount: Math.max(0, Math.round(b.subtotalAmount ?? b.totalAmount ?? 0)),
         discountAmount: Math.max(0, Math.round(b.discountAmount || 0)),
         totalAmount: Math.max(0, Math.round(b.totalAmount || 0)),
@@ -1619,8 +1661,24 @@ export async function saveNewBillToCloud(params: {
     paymentType,
     debtorName: cleanDebtor,
     debtStatus,
-    paidCashAmount: paidCashAmount !== undefined ? Math.max(0, Math.round(Number(paidCashAmount) || 0)) : undefined,
-    paidTransferAmount: paidTransferAmount !== undefined ? Math.max(0, Math.round(Number(paidTransferAmount) || 0)) : undefined,
+    paidCashAmount:
+      paymentType === 'split'
+        ? (paidCashAmount !== undefined && paidCashAmount !== null
+            ? Math.max(0, Math.round(Number(paidCashAmount) || 0))
+            : Math.round(totalAmount / 2))
+        : (paidCashAmount !== undefined ? Math.max(0, Math.round(Number(paidCashAmount) || 0)) : undefined),
+    paidTransferAmount:
+      paymentType === 'split'
+        ? (paidTransferAmount !== undefined && paidTransferAmount !== null
+            ? Math.max(0, Math.round(Number(paidTransferAmount) || 0))
+            : Math.max(
+                0,
+                totalAmount -
+                  (paidCashAmount !== undefined && paidCashAmount !== null
+                    ? Math.max(0, Math.round(Number(paidCashAmount) || 0))
+                    : Math.round(totalAmount / 2))
+              ))
+        : (paidTransferAmount !== undefined ? Math.max(0, Math.round(Number(paidTransferAmount) || 0)) : undefined),
     subtotalAmount,
     discountAmount: cleanDiscount,
     totalAmount,
@@ -1805,8 +1863,26 @@ export async function updateBillAndItemsInCloud(params: {
         paymentType: bill.paymentType,
         debtorName: truncateStr(bill.debtorName, 120, ''),
         debtStatus: bill.debtStatus,
-        paidCashAmount: bill.paidCashAmount || 0,
-        paidTransferAmount: bill.paidTransferAmount || 0,
+        settleDate: truncateStr(bill.settleDate || '', 20, ''),
+        settledMethod: bill.settledMethod || '',
+        paidCashAmount:
+          bill.paymentType === 'split'
+            ? (bill.paidCashAmount !== undefined && bill.paidCashAmount !== null
+                ? Math.max(0, Math.round(Number(bill.paidCashAmount) || 0))
+                : Math.round(bill.totalAmount / 2))
+            : (bill.paidCashAmount !== undefined ? Number(bill.paidCashAmount) : 0),
+        paidTransferAmount:
+          bill.paymentType === 'split'
+            ? (bill.paidTransferAmount !== undefined && bill.paidTransferAmount !== null
+                ? Math.max(0, Math.round(Number(bill.paidTransferAmount) || 0))
+                : Math.max(
+                    0,
+                    bill.totalAmount -
+                      (bill.paidCashAmount !== undefined && bill.paidCashAmount !== null
+                        ? Math.max(0, Math.round(Number(bill.paidCashAmount) || 0))
+                        : Math.round(bill.totalAmount / 2))
+                  ))
+            : (bill.paidTransferAmount !== undefined ? Number(bill.paidTransferAmount) : 0),
         subtotalAmount: Math.max(0, Math.round(bill.subtotalAmount ?? bill.totalAmount)),
         discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
         totalAmount: Math.max(0, Math.round(bill.totalAmount)),
@@ -1824,8 +1900,26 @@ export async function updateBillAndItemsInCloud(params: {
         paymentType: bill.paymentType,
         debtorName: truncateStr(bill.debtorName, 120, ''),
         debtStatus: bill.debtStatus,
-        paidCashAmount: bill.paidCashAmount || 0,
-        paidTransferAmount: bill.paidTransferAmount || 0,
+        settleDate: truncateStr(bill.settleDate || '', 20, ''),
+        settledMethod: bill.settledMethod || '',
+        paidCashAmount:
+          bill.paymentType === 'split'
+            ? (bill.paidCashAmount !== undefined && bill.paidCashAmount !== null
+                ? Math.max(0, Math.round(Number(bill.paidCashAmount) || 0))
+                : Math.round(bill.totalAmount / 2))
+            : (bill.paidCashAmount !== undefined ? Number(bill.paidCashAmount) : 0),
+        paidTransferAmount:
+          bill.paymentType === 'split'
+            ? (bill.paidTransferAmount !== undefined && bill.paidTransferAmount !== null
+                ? Math.max(0, Math.round(Number(bill.paidTransferAmount) || 0))
+                : Math.max(
+                    0,
+                    bill.totalAmount -
+                      (bill.paidCashAmount !== undefined && bill.paidCashAmount !== null
+                        ? Math.max(0, Math.round(Number(bill.paidCashAmount) || 0))
+                        : Math.round(bill.totalAmount / 2))
+                  ))
+            : (bill.paidTransferAmount !== undefined ? Number(bill.paidTransferAmount) : 0),
         subtotalAmount: Math.max(0, Math.round(bill.subtotalAmount ?? bill.totalAmount)),
         discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
         totalAmount: Math.max(0, Math.round(bill.totalAmount)),
