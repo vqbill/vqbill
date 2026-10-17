@@ -628,17 +628,17 @@ export const ChatAssistantWidget: React.FC<ChatAssistantWidgetProps> = ({
 
   return (
     <>
-      {/* 1. NÚT NỔI MỞ CHAT ASSISTANT (FLOATING TRIGGER) */}
+      {/* 1. NÚT NỔI MỞ CHAT ASSISTANT (FLOATING TRIGGER - COMPACT SIZE) */}
       {!isOpen && (
         <button
           type="button"
           onClick={onToggle}
-          className="fixed bottom-20 right-5 z-40 p-3 sm:px-4 sm:py-3 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs shadow-2xl flex items-center gap-2.5 transition-all transform hover:scale-105 cursor-pointer border border-emerald-400/40"
+          className="fixed bottom-26 lg:bottom-14 right-3 sm:right-6 z-40 px-2.5 py-1.5 sm:px-3 sm:py-1.5 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-[11px] sm:text-xs shadow-md flex items-center gap-1.5 sm:gap-2 transition-all transform hover:scale-105 active:scale-95 cursor-pointer border border-emerald-400/30"
           title="Mở Trợ Lý Ảo Kho & Báo Cáo (Hỗ trợ chat Web & Telegram)"
         >
           <div className="relative">
-            <Bot className="w-5 h-5 animate-pulse" />
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full border border-white" />
+            <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-pulse" />
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-400 rounded-full border border-white" />
           </div>
           <span className="hidden sm:inline">Trợ Lý Kho & Báo Cáo</span>
         </button>

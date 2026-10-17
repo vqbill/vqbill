@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   TrendingUp,
   TrendingDown,
@@ -9,8 +9,28 @@ import {
   DollarSign,
   Activity,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  SlidersHorizontal,
+  Clock,
+  RotateCcw,
+  AlertTriangle,
+  Filter,
 } from 'lucide-react';
-import { formatVND, formatNumber, getPrivacyMaskMode } from '../utils/parser';
+import {
+  formatVND,
+  formatNumber,
+  getPrivacyMaskMode,
+  isOwnerUseBill,
+  getBillPaymentBreakdown,
+  formatDateDMY,
+} from '../utils/parser';
+import {
+  BillRecord,
+  DeductionRecord,
+  DebtPaymentRecord,
+  PeriodPreset,
+} from '../types';
 
 export interface DailyRevenuePoint {
   date: string;
@@ -279,7 +299,7 @@ export const RevenueColumnChart: React.FC<RevenueColumnChartProps> = ({ data }) 
 };
 
 // ============================================================================
-// WEEKLY REVENUE TREND LINE CHART (7 NGÀY QUA)
+// REVENUE TREND LINE CHART (XU HƯỚNG DOANH THU: THEO TUẦN, THEO THÁNG, THEO KHOẢNG NGÀY)
 // ============================================================================
 
 export interface WeeklyTrendDayPoint {
@@ -296,10 +316,19 @@ export interface WeeklyTrendDayPoint {
   growthRatePct?: number; // % Tăng trưởng so với ngày liền trước
 }
 
-interface WeeklyRevenueTrendChartProps {
-  data: WeeklyTrendDayPoint[];
+export interface RevenueTrendChartProps {
+  data?: WeeklyTrendDayPoint[];
   todayStr: string;
+  bills?: BillRecord[];
+  deductions?: DeductionRecord[];
+  debtPayments?: DebtPaymentRecord[];
+  dashboardPeriodPreset?: PeriodPreset;
+  dashboardStartDate?: string;
+  dashboardEndDate?: string;
+  initialRangeMode?: 'week' | 'month' | 'custom' | 'last30';
 }
+
+export type WeeklyRevenueTrendChartProps = RevenueTrendChartProps;
 
 /**
  * Generate smooth cubic Bezier curve SVG path string from points
@@ -329,33 +358,287 @@ function getBezierCurvePath(points: { x: number; y: number }[]): string {
   return path;
 }
 
-export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = ({
+export const RevenueTrendChart: React.FC<RevenueTrendChartProps> = ({
   data,
   todayStr,
+  bills,
+  deductions,
+  debtPayments,
+  dashboardPeriodPreset,
+  dashboardStartDate,
+  dashboardEndDate,
+  initialRangeMode,
 }) => {
   const [metricMode, setMetricMode] = useState<'net' | 'gross' | 'split'>('net');
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
-  if (data.length === 0) {
+  // Range viewing state: 'week' (7 days) | 'month' (theo tháng) | 'custom' (khoảng ngày đã chọn) | 'last30' (30 ngày)
+  const [rangeMode, setRangeMode] = useState<'week' | 'month' | 'custom' | 'last30'>(() => {
+    if (initialRangeMode) return initialRangeMode;
+    if (dashboardPeriodPreset === 'month') return 'month';
+    if (dashboardPeriodPreset === 'custom') return 'custom';
+    return 'week';
+  });
+
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => todayStr.slice(0, 7));
+  const [customRangeStart, setCustomRangeStart] = useState<string>(
+    () => dashboardStartDate || `${todayStr.slice(0, 7)}-01`
+  );
+  const [customRangeEnd, setCustomRangeEnd] = useState<string>(
+    () => dashboardEndDate || todayStr
+  );
+
+  // Detect unique months from bills
+  const availableMonths = useMemo(() => {
+    const set = new Set<string>();
+    set.add(todayStr.slice(0, 7));
+    if (bills) {
+      for (const b of bills) {
+        if (b && b.billDate && b.billDate.length >= 7) {
+          set.add(b.billDate.slice(0, 7));
+        }
+      }
+    }
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [bills, todayStr]);
+
+  // Handle month shifting
+  const handlePrevMonth = () => {
+    const parts = selectedMonth.split('-');
+    let y = parseInt(parts[0], 10);
+    let m = parseInt(parts[1], 10) - 1;
+    if (m < 1) {
+      m = 12;
+      y -= 1;
+    }
+    setSelectedMonth(`${y}-${String(m).padStart(2, '0')}`);
+  };
+
+  const handleNextMonth = () => {
+    const parts = selectedMonth.split('-');
+    let y = parseInt(parts[0], 10);
+    let m = parseInt(parts[1], 10) + 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    setSelectedMonth(`${y}-${String(m).padStart(2, '0')}`);
+  };
+
+  // Sync with dashboard filter
+  const handleSyncDashboardFilter = () => {
+    if (dashboardStartDate && dashboardEndDate) {
+      setCustomRangeStart(dashboardStartDate);
+      setCustomRangeEnd(dashboardEndDate);
+    }
+  };
+
+  // Dynamic Trend Data Generation
+  const { chartData, rangeTitle, rangeSubtitle } = useMemo(() => {
+    // If no raw bills provided, fall back to props.data
+    if (!bills || bills.length === 0) {
+      const fallback = data || [];
+      return {
+        chartData: fallback,
+        rangeTitle: 'Xu Hướng Doanh Thu (7 Ngày Gần Nhất)',
+        rangeSubtitle: 'Theo dõi đà tăng trưởng doanh thu thực tế trong 7 ngày qua',
+      };
+    }
+
+    const dayLabelsMap = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+    const dates: string[] = [];
+    let title = 'Xu Hướng Doanh Thu 7 Ngày Gần Nhất';
+    let subtitle = 'Theo dõi đà tăng trưởng doanh thu thực tế 7 ngày gần nhất';
+
+    if (rangeMode === 'week') {
+      const baseEnd = new Date(`${todayStr}T12:00:00`);
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(baseEnd);
+        d.setDate(d.getDate() - i);
+        dates.push(d.toISOString().slice(0, 10));
+      }
+      title = 'Xu Hướng Doanh Thu 7 Ngày Gần Nhất';
+      subtitle = 'Theo dõi chi tiết từng ngày trong 7 ngày gần nhất';
+    } else if (rangeMode === 'last30') {
+      const baseEnd = new Date(`${todayStr}T12:00:00`);
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(baseEnd);
+        d.setDate(d.getDate() - i);
+        dates.push(d.toISOString().slice(0, 10));
+      }
+      title = 'Xu Hướng Doanh Thu 30 Ngày Gần Nhất';
+      subtitle = 'Toàn cảnh doanh thu bán hàng & thực thu 30 ngày qua';
+    } else if (rangeMode === 'month') {
+      const parts = selectedMonth.split('-');
+      const y = parseInt(parts[0], 10) || 2026;
+      const m = parseInt(parts[1], 10) || 10;
+      const daysInMonth = new Date(y, m, 0).getDate();
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        dates.push(`${parts[0]}-${parts[1]}-${dayStr}`);
+      }
+      title = `Xu Hướng Doanh Thu Tháng ${parts[1]}/${parts[0]}`;
+      subtitle = `Theo dõi toàn bộ ${daysInMonth} ngày trong tháng ${parts[1]}/${parts[0]}`;
+    } else if (rangeMode === 'custom') {
+      const start = new Date(`${customRangeStart}T12:00:00`);
+      const end = new Date(`${customRangeEnd}T12:00:00`);
+      if (start <= end) {
+        const cur = new Date(start);
+        let count = 0;
+        while (cur <= end && count < 90) {
+          dates.push(cur.toISOString().slice(0, 10));
+          cur.setDate(cur.getDate() + 1);
+          count++;
+        }
+      } else {
+        dates.push(customRangeStart);
+      }
+      title = `Xu Hướng Doanh Thu (${formatDateDMY(customRangeStart)} → ${formatDateDMY(customRangeEnd)})`;
+      subtitle = `Khoảng ${dates.length} ngày đã chọn từ ${formatDateDMY(customRangeStart)} đến ${formatDateDMY(customRangeEnd)}`;
+    }
+
+    // Map metrics for each date
+    const dateMetrics = new Map<
+      string,
+      {
+        cashBills: number;
+        transferBills: number;
+        debtBills: number;
+        deductions: number;
+        debtPaidCash: number;
+        debtPaidTransfer: number;
+        billsCount: number;
+      }
+    >();
+
+    for (const d of dates) {
+      dateMetrics.set(d, {
+        cashBills: 0,
+        transferBills: 0,
+        debtBills: 0,
+        deductions: 0,
+        debtPaidCash: 0,
+        debtPaidTransfer: 0,
+        billsCount: 0,
+      });
+    }
+
+    // Aggregate bills
+    for (const b of bills) {
+      if (!b || !b.billDate || !dateMetrics.has(b.billDate)) continue;
+      const m = dateMetrics.get(b.billDate)!;
+      m.billsCount += 1;
+      if (!isOwnerUseBill(b)) {
+        const bd = getBillPaymentBreakdown(b);
+        m.cashBills += bd.cash;
+        m.transferBills += bd.transfer;
+        m.debtBills += bd.debt;
+      }
+    }
+
+    // Aggregate deductions
+    if (deductions) {
+      for (const d of deductions) {
+        const dateKey = d.deductionDate || d.billDate;
+        if (!dateKey || !dateMetrics.has(dateKey)) continue;
+        const m = dateMetrics.get(dateKey)!;
+        m.deductions += Number(d.amount) || 0;
+      }
+    }
+
+    // Aggregate debt payments
+    if (debtPayments) {
+      for (const p of debtPayments) {
+        if (!p || !p.paidDate || !dateMetrics.has(p.paidDate)) continue;
+        const m = dateMetrics.get(p.paidDate)!;
+        const pAmt = Number(p.amount) || 0;
+        if (p.paymentMethod === 'cash') {
+          m.debtPaidCash += pAmt;
+        } else if (p.paymentMethod === 'transfer') {
+          m.debtPaidTransfer += pAmt;
+        }
+      }
+    }
+
+    // Build trend day points with growth rate
+    let prevNet: number | null = null;
+    const points: WeeklyTrendDayPoint[] = dates.map((dStr) => {
+      const m = dateMetrics.get(dStr)!;
+      const dt = new Date(`${dStr}T00:00:00`);
+      const dayLabel = dayLabelsMap[dt.getDay()] || 'T?';
+      const parts = dStr.split('-');
+      const shortDate = parts.length === 3 ? `${parts[2]}/${parts[1]}` : dStr;
+
+      const cashRevenue = m.cashBills + m.debtPaidCash - m.deductions;
+      const transferRevenue = m.transferBills + m.debtPaidTransfer;
+      const debtCollected = m.debtPaidCash + m.debtPaidTransfer;
+      const netRevenue = m.cashBills + m.transferBills + debtCollected - m.deductions;
+      const grossRevenue = m.cashBills + m.transferBills + m.debtBills;
+
+      let growthRatePct: number | undefined;
+      if (prevNet !== null) {
+        if (prevNet > 0) {
+          growthRatePct = Math.round(((netRevenue - prevNet) / prevNet) * 100);
+        } else if (netRevenue > 0) {
+          growthRatePct = 100;
+        } else {
+          growthRatePct = 0;
+        }
+      }
+      prevNet = netRevenue;
+
+      return {
+        date: dStr,
+        dayLabel,
+        shortDate,
+        netRevenue,
+        grossRevenue,
+        cashRevenue,
+        transferRevenue,
+        debtCollected,
+        deductions: m.deductions,
+        billsCount: m.billsCount,
+        growthRatePct,
+      };
+    });
+
+    return {
+      chartData: points,
+      rangeTitle: title,
+      rangeSubtitle: subtitle,
+    };
+  }, [
+    bills,
+    deductions,
+    debtPayments,
+    data,
+    rangeMode,
+    selectedMonth,
+    customRangeStart,
+    customRangeEnd,
+    todayStr,
+  ]);
+
+  if (chartData.length === 0) {
     return (
       <div className="p-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-        Chưa có dữ liệu 7 ngày qua để hiển thị biểu đồ xu hướng hàng tuần.
+        Chưa có dữ liệu để hiển thị biểu đồ xu hướng trong khoảng thời gian này.
       </div>
     );
   }
 
-  // 7-day summary metrics
-  const total7DaysNet = data.reduce((s, d) => s + Math.max(0, d.netRevenue), 0);
-  const total7DaysGross = data.reduce((s, d) => s + Math.max(0, d.grossRevenue), 0);
-  const avgPerDayNet = Math.round(total7DaysNet / (data.length || 1));
-  const avgPerDayGross = Math.round(total7DaysGross / (data.length || 1));
+  // Summary metrics for the active range
+  const totalPeriodNet = chartData.reduce((s, d) => s + Math.max(0, d.netRevenue), 0);
+  const totalPeriodGross = chartData.reduce((s, d) => s + Math.max(0, d.grossRevenue), 0);
+  const avgPerDayNet = Math.round(totalPeriodNet / (chartData.length || 1));
+  const avgPerDayGross = Math.round(totalPeriodGross / (chartData.length || 1));
 
-  // Find peak day
-  const peakDay = [...data].sort((a, b) => b.netRevenue - a.netRevenue)[0] || data[0];
+  // Peak day
+  const peakDay = [...chartData].sort((a, b) => b.netRevenue - a.netRevenue)[0] || chartData[0];
 
-  // Overall 7-day growth: compare first day of week with last day
-  const firstDay = data[0];
-  const lastDay = data[data.length - 1];
+  // Overall growth: compare first day with last day
+  const firstDay = chartData[0];
+  const lastDay = chartData[chartData.length - 1];
   let overallGrowthPct = 0;
   if (firstDay && lastDay && firstDay.netRevenue > 0) {
     overallGrowthPct = Math.round(
@@ -364,15 +647,15 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
   }
 
   // Determine scale maximum
-  const allValues = data.flatMap((d) => {
+  const allValues = chartData.flatMap((d) => {
     if (metricMode === 'net') return [d.netRevenue];
     if (metricMode === 'gross') return [d.grossRevenue];
     return [d.cashRevenue, d.transferRevenue];
   });
   const maxVal = Math.max(100000, ...allValues.map((v) => Math.max(0, v))) * 1.15;
 
-  // SVG dimensions
-  const svgWidth = 720;
+  // Dynamic SVG dimensions based on count of points
+  const svgWidth = Math.max(720, chartData.length * 36);
   const svgHeight = 250;
   const padLeft = 65;
   const padRight = 35;
@@ -384,8 +667,8 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
 
   // Calculate coordinates for points
   const getCoordinates = (getValue: (d: WeeklyTrendDayPoint) => number) => {
-    return data.map((d, i) => {
-      const x = padLeft + (i / Math.max(1, data.length - 1)) * plotWidth;
+    return chartData.map((d, i) => {
+      const x = padLeft + (i / Math.max(1, chartData.length - 1)) * plotWidth;
       const val = Math.max(0, getValue(d));
       const y = padTop + (1 - val / maxVal) * plotHeight;
       return { x, y, data: d, val };
@@ -398,78 +681,276 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
   const transferPoints = getCoordinates((d) => d.transferRevenue);
 
   const activePoints = metricMode === 'gross' ? grossPoints : netPoints;
-  const activeHover = hoveredIdx !== null ? data[hoveredIdx] : data[data.length - 1];
+  const activeHover =
+    hoveredIdx !== null && chartData[hoveredIdx]
+      ? chartData[hoveredIdx]
+      : chartData[chartData.length - 1];
 
   // SVG grid lines (4 horizontal steps)
   const gridLevels = [0, 0.33, 0.66, 1];
 
+  // Smart X-axis label filtering when many points exist
+  const shouldShowLabel = (idx: number) => {
+    if (chartData.length <= 14) return true;
+    if (idx === 0 || idx === chartData.length - 1) return true;
+    if (hoveredIdx === idx) return true;
+    if (chartData[idx]?.date === todayStr) return true;
+    if (chartData.length <= 31) return idx % 3 === 0;
+    return idx % 5 === 0;
+  };
+
   return (
     <div className="space-y-4">
       {/* Header with Title and Mode Switcher */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               <TrendingUp className="w-4 h-4" />
             </span>
             <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-              Xu Hướng Doanh Thu Hàng Tuần (7 Ngày Gần Nhất)
+              {rangeTitle}
             </h3>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
-              Biểu đồ đường
+              Biểu đồ xu hướng ({chartData.length} ngày)
             </span>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Theo dõi đà tăng trưởng doanh thu thực tế, ngày đỉnh điểm và so sánh từng ca ngày trong 7 ngày qua
+            {rangeSubtitle}
           </p>
         </div>
 
-        {/* Metric Selector Pills */}
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl self-start">
-          <button
-            type="button"
-            onClick={() => setMetricMode('net')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-              metricMode === 'net'
-                ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Thực thu (Net)
-          </button>
-          <button
-            type="button"
-            onClick={() => setMetricMode('gross')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-              metricMode === 'gross'
-                ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Tổng bán (Gross)
-          </button>
-          <button
-            type="button"
-            onClick={() => setMetricMode('split')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-              metricMode === 'split'
-                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Tiền mặt & Chuyển khoản
-          </button>
+        {/* Controls: Time Range Selector & Metric Selector */}
+        <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+          {/* Time Range Selector */}
+          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+            <button
+              type="button"
+              onClick={() => {
+                setRangeMode('week');
+                setHoveredIdx(null);
+              }}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1 ${
+                rangeMode === 'week'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Clock className="w-3 h-3" />
+              <span>7 Ngày</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRangeMode('month');
+                setHoveredIdx(null);
+              }}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1 ${
+                rangeMode === 'month'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Calendar className="w-3 h-3" />
+              <span>Theo Tháng</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRangeMode('custom');
+                setHoveredIdx(null);
+              }}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1 ${
+                rangeMode === 'custom'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <SlidersHorizontal className="w-3 h-3" />
+              <span>Khoảng Ngày</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRangeMode('last30');
+                setHoveredIdx(null);
+              }}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                rangeMode === 'last30'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              30 Ngày
+            </button>
+          </div>
+
+          {/* Metric Selector Pills */}
+          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setMetricMode('net')}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                metricMode === 'net'
+                  ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              Thực thu (Net)
+            </button>
+            <button
+              type="button"
+              onClick={() => setMetricMode('gross')}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                metricMode === 'gross'
+                  ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-2xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              Tổng bán (Gross)
+            </button>
+            <button
+              type="button"
+              onClick={() => setMetricMode('split')}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                metricMode === 'split'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              Tiền mặt & CK
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Sub-controls for Month Mode */}
+      {rangeMode === 'month' && (
+        <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span>Chọn Tháng Xem Xu Hướng:</span>
+            </span>
+            <div className="inline-flex items-center rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900">
+              <button
+                type="button"
+                onClick={handlePrevMonth}
+                className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-l-lg text-slate-600 dark:text-slate-400 cursor-pointer"
+                title="Tháng trước"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <select
+                value={selectedMonth}
+                onChange={(e) => {
+                  setSelectedMonth(e.target.value);
+                  setHoveredIdx(null);
+                }}
+                className="px-2 py-1 font-mono font-bold text-slate-900 dark:text-white bg-transparent focus:outline-none cursor-pointer"
+              >
+                {availableMonths.map((m) => {
+                  const parts = m.split('-');
+                  return (
+                    <option key={m} value={m} className="dark:bg-slate-900">
+                      Tháng {parts[1]}/{parts[0]}
+                    </option>
+                  );
+                })}
+              </select>
+              <button
+                type="button"
+                onClick={handleNextMonth}
+                className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-r-lg text-slate-600 dark:text-slate-400 cursor-pointer"
+                title="Tháng sau"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+            {selectedMonth !== todayStr.slice(0, 7) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedMonth(todayStr.slice(0, 7));
+                  setHoveredIdx(null);
+                }}
+                className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+              >
+                Về Tháng Này
+              </button>
+            )}
+          </div>
+
+          <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+            Tổng cộng: <strong className="text-slate-800 dark:text-slate-200">{chartData.length} ngày</strong> trong tháng
+          </div>
+        </div>
+      )}
+
+      {/* Sub-controls for Custom Range Mode */}
+      {rangeMode === 'custom' && (
+        <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+              <span>Khoảng Ngày:</span>
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500">Từ</span>
+              <input
+                type="date"
+                value={customRangeStart}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setCustomRangeStart(e.target.value);
+                    setHoveredIdx(null);
+                  }
+                }}
+                className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-slate-900 dark:text-white cursor-pointer"
+              />
+              <span className="text-slate-500">Đến</span>
+              <input
+                type="date"
+                value={customRangeEnd}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setCustomRangeEnd(e.target.value);
+                    setHoveredIdx(null);
+                  }
+                }}
+                className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-slate-900 dark:text-white cursor-pointer"
+              />
+            </div>
+            {dashboardStartDate && dashboardEndDate && (
+              <button
+                type="button"
+                onClick={() => {
+                  handleSyncDashboardFilter();
+                  setHoveredIdx(null);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-blue-100 hover:bg-blue-200 dark:bg-blue-950/60 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 font-semibold cursor-pointer transition-colors flex items-center gap-1"
+                title="Đồng bộ khoảng ngày theo bộ lọc của trang Báo Cáo"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Đồng bộ bộ lọc Báo Cáo</span>
+              </button>
+            )}
+          </div>
+
+          <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+            Hiển thị <strong className="text-slate-800 dark:text-slate-200">{chartData.length} ngày</strong> liên tiếp
+          </div>
+        </div>
+      )}
 
       {/* 4 Quick Stat Badges */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3 text-xs font-mono">
         <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/60 dark:bg-emerald-950/20">
           <span className="text-[11px] font-sans text-emerald-800 dark:text-emerald-300 block font-medium">
-            Tổng thực thu 7 ngày:
+            Tổng {metricMode === 'gross' ? 'tổng bán' : 'thực thu'} kỳ này:
           </span>
           <strong className="text-base sm:text-lg font-bold text-emerald-700 dark:text-emerald-300">
-            {formatVND(metricMode === 'gross' ? total7DaysGross : total7DaysNet)}
+            {formatVND(metricMode === 'gross' ? totalPeriodGross : totalPeriodNet)}
           </strong>
         </div>
 
@@ -484,7 +965,7 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
 
         <div className="p-3 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-950/20">
           <span className="text-[11px] font-sans text-amber-800 dark:text-amber-300 block font-medium">
-            Ngày cao nhất tuần:
+            Ngày cao nhất kỳ:
           </span>
           <div className="flex items-center gap-1.5 mt-0.5">
             <strong className="text-sm sm:text-base font-bold text-amber-700 dark:text-amber-300">
@@ -498,7 +979,7 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
 
         <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex flex-col justify-between">
           <span className="text-[11px] font-sans text-slate-500 dark:text-slate-400 block font-medium">
-            Tăng trưởng đầu vs cuối tuần:
+            Tăng trưởng đầu vs cuối kỳ:
           </span>
           <div className="flex items-center gap-1.5 mt-0.5">
             {overallGrowthPct >= 0 ? (
@@ -519,12 +1000,13 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
         </div>
       </div>
 
-      {/* SVG Line Chart Viewport */}
+      {/* SVG Line Chart Viewport with Smooth Horizontal Scroll */}
       <div className="border border-slate-200 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-950 p-2 sm:p-4 shadow-2xs overflow-hidden">
-        <div className="w-full overflow-x-auto">
+        <div className="w-full overflow-x-auto custom-scrollbar">
           <svg
             viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-            className="w-full min-w-[560px] h-60 sm:h-72 select-none"
+            className="min-w-[640px] h-60 sm:h-72 select-none"
+            style={{ width: `${Math.max(100, (svgWidth / 720) * 100)}%` }}
           >
             <defs>
               {/* Emerald Gradient for Net Revenue */}
@@ -660,6 +1142,7 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
               const isHovered = hoveredIdx === idx;
               const isToday = pt.data.date === todayStr;
               const circleColor = metricMode === 'gross' ? '#3b82f6' : '#10b981';
+              const showLabel = shouldShowLabel(idx);
 
               return (
                 <g
@@ -670,9 +1153,9 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
                 >
                   {/* Invisible broad hitbox for easy touch/mouse hover */}
                   <rect
-                    x={pt.x - 25}
+                    x={pt.x - 18}
                     y={padTop}
-                    width={50}
+                    width={36}
                     height={plotHeight + 25}
                     fill="transparent"
                   />
@@ -692,54 +1175,60 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
                   <circle
                     cx={pt.x}
                     cy={pt.y}
-                    r={isHovered ? 6 : 4.5}
+                    r={isHovered ? 6 : chartData.length > 20 ? 3.5 : 4.5}
                     fill={circleColor}
                     stroke="#ffffff"
                     strokeWidth="2"
                     className="transition-transform duration-150"
                   />
 
-                  {/* Value Above Circle */}
-                  <text
-                    x={pt.x}
-                    y={pt.y - 10}
-                    textAnchor="middle"
-                    className={`text-[10px] font-mono font-bold select-none ${
-                      isHovered
-                        ? 'fill-emerald-600 dark:fill-emerald-400 font-extrabold text-[11px]'
-                        : 'fill-slate-600 dark:fill-slate-400'
-                    }`}
-                  >
-                    {getPrivacyMaskMode()
-                      ? '***k'
-                      : `${formatNumber(Math.round(pt.val / 1000))}k`}
-                  </text>
+                  {/* Value Above Circle (show for hovered, today, or when few points) */}
+                  {(isHovered || showLabel || isToday) && (
+                    <text
+                      x={pt.x}
+                      y={pt.y - 10}
+                      textAnchor="middle"
+                      className={`text-[10px] font-mono font-bold select-none ${
+                        isHovered
+                          ? 'fill-emerald-600 dark:fill-emerald-400 font-extrabold text-[11px]'
+                          : 'fill-slate-600 dark:fill-slate-400'
+                      }`}
+                    >
+                      {getPrivacyMaskMode()
+                        ? '***k'
+                        : `${formatNumber(Math.round(pt.val / 1000))}k`}
+                    </text>
+                  )}
 
                   {/* X-Axis Labels (Day name + Short date) */}
-                  <text
-                    x={pt.x}
-                    y={bottomY + 18}
-                    textAnchor="middle"
-                    className={`text-xs select-none ${
-                      isHovered || isToday
-                        ? 'font-bold fill-emerald-600 dark:fill-emerald-400'
-                        : 'font-semibold fill-slate-700 dark:fill-slate-300'
-                    }`}
-                  >
-                    {pt.data.dayLabel}
-                  </text>
-                  <text
-                    x={pt.x}
-                    y={bottomY + 32}
-                    textAnchor="middle"
-                    className={`text-[10px] font-mono select-none ${
-                      isHovered || isToday
-                        ? 'font-bold fill-emerald-600 dark:fill-emerald-400'
-                        : 'fill-slate-400 dark:fill-slate-500'
-                    }`}
-                  >
-                    {pt.data.shortDate}
-                  </text>
+                  {showLabel && (
+                    <>
+                      <text
+                        x={pt.x}
+                        y={bottomY + 18}
+                        textAnchor="middle"
+                        className={`text-xs select-none ${
+                          isHovered || isToday
+                            ? 'font-bold fill-emerald-600 dark:fill-emerald-400'
+                            : 'font-semibold fill-slate-700 dark:fill-slate-300'
+                        }`}
+                      >
+                        {pt.data.dayLabel}
+                      </text>
+                      <text
+                        x={pt.x}
+                        y={bottomY + 32}
+                        textAnchor="middle"
+                        className={`text-[10px] font-mono select-none ${
+                          isHovered || isToday
+                            ? 'font-bold fill-emerald-600 dark:fill-emerald-400'
+                            : 'fill-slate-400 dark:fill-slate-500'
+                        }`}
+                      >
+                        {pt.data.shortDate}
+                      </text>
+                    </>
+                  )}
                 </g>
               );
             })}
@@ -754,7 +1243,7 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
             <div className="flex items-center gap-2">
               <Calendar className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                Chi Tiết Doanh Thu: {activeHover.dayLabel} ({activeHover.date})
+                Chi Tiết Doanh Thu: {activeHover.dayLabel} ({formatDateDMY(activeHover.date)})
               </span>
               {activeHover.date === todayStr && (
                 <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-emerald-500 text-white">
@@ -778,23 +1267,44 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
                   </span>
                 )
               ) : (
-                <span className="text-slate-400">—</span>
+                <span className="text-slate-400">Ngày đầu kỳ</span>
               )}
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-3 text-xs font-mono">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 pt-3 text-xs font-mono">
             <div>
               <span className="text-[11px] text-slate-500 block font-sans">Thực thu (Net)</span>
-              <strong className="text-emerald-600 dark:text-emerald-400 text-sm">
+              <strong className="text-emerald-600 dark:text-emerald-400 text-sm sm:text-base font-bold">
                 {formatVND(activeHover.netRevenue)}
               </strong>
             </div>
 
             <div>
-              <span className="text-[11px] text-slate-500 block font-sans">Tiền mặt ca bán</span>
-              <strong className="text-slate-800 dark:text-slate-200">
-                {formatVND(activeHover.cashRevenue)}
+              <span className="text-[11px] text-slate-500 block font-sans">Tổng bán (Gross)</span>
+              <strong className="text-blue-600 dark:text-blue-400 text-sm sm:text-base font-bold">
+                {formatVND(activeHover.grossRevenue)}
+              </strong>
+            </div>
+
+            <div>
+              <span className="text-[11px] text-slate-500 block font-sans">Tiền mặt</span>
+              <strong
+                className={`font-mono flex items-center gap-1 ${
+                  activeHover.cashRevenue < 0
+                    ? 'text-rose-600 dark:text-rose-400 font-bold'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              >
+                {activeHover.cashRevenue < 0 && (
+                  <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
+                )}
+                <span>{formatVND(activeHover.cashRevenue)}</span>
+                {activeHover.cashRevenue < 0 && (
+                  <span className="text-[9px] px-1 py-0.2 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-300 font-bold">
+                    Âm
+                  </span>
+                )}
               </strong>
             </div>
 
@@ -806,7 +1316,7 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
             </div>
 
             <div>
-              <span className="text-[11px] text-slate-500 block font-sans">Thu nợ cũ</span>
+              <span className="text-[11px] text-slate-500 block font-sans">Thu công nợ</span>
               <strong className="text-amber-600 dark:text-amber-400">
                 {activeHover.debtCollected > 0 ? `+${formatVND(activeHover.debtCollected)}` : '0đ'}
               </strong>
@@ -829,51 +1339,97 @@ export const WeeklyRevenueTrendChart: React.FC<WeeklyRevenueTrendChartProps> = (
         </div>
       )}
 
-      {/* 7-Day Mini Cards Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-        {data.map((day, idx) => {
-          const isSelected = activeHover?.date === day.date;
-          return (
-            <button
-              key={day.date}
-              type="button"
-              onClick={() => setHoveredIdx(idx)}
-              className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                isSelected
-                  ? 'border-emerald-500 bg-emerald-500/10 shadow-xs ring-1 ring-emerald-500/30'
-                  : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-              }`}
-            >
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-bold text-slate-700 dark:text-slate-300">
-                  {day.dayLabel}
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono">
-                  {day.shortDate}
-                </span>
-              </div>
-              <div className="mt-1 font-mono font-bold text-xs text-emerald-600 dark:text-emerald-400 truncate">
-                {formatVND(day.netRevenue)}
-              </div>
-              <div className="mt-0.5 text-[10px] text-slate-500 font-mono flex items-center justify-between">
-                <span>{day.billsCount} bill</span>
-                {day.growthRatePct !== undefined && (
-                  <span
-                    className={
-                      day.growthRatePct >= 0
-                        ? 'text-emerald-600 font-semibold'
-                        : 'text-rose-600 font-semibold'
-                    }
-                  >
-                    {day.growthRatePct >= 0 ? `+${day.growthRatePct}%` : `${day.growthRatePct}%`}
+      {/* Day Cards: Grid if <= 14 days, Horizontal Scrollable Strip if > 14 days */}
+      {chartData.length <= 14 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          {chartData.map((day, idx) => {
+            const isSelected = activeHover?.date === day.date;
+            return (
+              <button
+                key={day.date}
+                type="button"
+                onClick={() => setHoveredIdx(idx)}
+                className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                  isSelected
+                    ? 'border-emerald-500 bg-emerald-500/10 shadow-xs ring-1 ring-emerald-500/30'
+                    : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-700 dark:text-slate-300">
+                    {day.dayLabel}
                   </span>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {day.shortDate}
+                  </span>
+                </div>
+                <div className="mt-1 font-mono font-bold text-xs text-emerald-600 dark:text-emerald-400 truncate">
+                  {formatVND(day.netRevenue)}
+                </div>
+                <div className="mt-0.5 text-[10px] text-slate-500 font-mono flex items-center justify-between">
+                  <span>{day.billsCount} bill</span>
+                  {day.growthRatePct !== undefined && (
+                    <span
+                      className={
+                        day.growthRatePct >= 0
+                          ? 'text-emerald-600 font-semibold'
+                          : 'text-rose-600 font-semibold'
+                      }
+                    >
+                      {day.growthRatePct >= 0 ? `+${day.growthRatePct}%` : `${day.growthRatePct}%`}
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
+            <span>Bấm vào từng ngày để xem nhanh (kéo ngang xem toàn bộ tháng/kỳ):</span>
+            <span className="font-mono">{chartData.length} ngày</span>
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 pt-1 px-1 custom-scrollbar">
+            {chartData.map((day, idx) => {
+              const isSelected = activeHover?.date === day.date;
+              const isPeak = day.date === peakDay.date;
+              return (
+                <button
+                  key={day.date}
+                  type="button"
+                  onClick={() => setHoveredIdx(idx)}
+                  className={`min-w-[76px] p-2 rounded-xl border text-center transition-all cursor-pointer shrink-0 ${
+                    isSelected
+                      ? 'border-emerald-500 bg-emerald-500/10 shadow-xs ring-1 ring-emerald-500/30'
+                      : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-center gap-1 text-[11px]">
+                    <span className="font-bold text-slate-700 dark:text-slate-300">
+                      {day.dayLabel}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {day.shortDate}
+                    </span>
+                    {isPeak && <span className="text-amber-500 text-[10px]">★</span>}
+                  </div>
+                  <div className="mt-1 font-mono font-bold text-[11px] text-emerald-600 dark:text-emerald-400 truncate">
+                    {formatNumber(Math.round(day.netRevenue / 1000))}k
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-mono">
+                    {day.billsCount}b
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+// Backward-compatible alias for any existing imports
+export const WeeklyRevenueTrendChart = RevenueTrendChart;
 

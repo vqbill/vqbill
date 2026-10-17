@@ -28,6 +28,10 @@ import {
   Ban,
   RefreshCw,
   ExternalLink,
+  Share2,
+  Smartphone,
+  Wifi,
+  Bluetooth,
 } from 'lucide-react';
 import {
   ProductRecord,
@@ -568,6 +572,37 @@ export const TableOrdersTab: React.FC<TableOrdersTabProps> = ({
     setTimeout(() => setCopiedTelegram(false), 2000);
     setPrintToast('📋 Đã sao chép nội dung phiếu in! Bạn có thể dán vào Zalo hoặc App máy in Bluetooth.');
     setTimeout(() => setPrintToast(null), 4000);
+  };
+
+  // Mobile Web Share (Zalo, Telegram, Print App)
+  const handleShareOrder = async (order: TableOrderRecord) => {
+    const isCancelled = order.status === 'cancelled';
+    const totalQty = order.items.reduce((s, it) => s + it.quantity, 0);
+    const title = `${isCancelled ? '[HỦY PHIẾU]' : '[BÁO BẾP]'} ${order.tableName.toUpperCase()} - #${order.orderCode}`;
+    const text = [
+      `🔔 ${isCancelled ? 'PHIẾU BÁO HỦY MÓN / VOID TICKET' : 'PHIẾU ORDER BÁO BẾP / BAR'}`,
+      `📍 Bàn: ${order.tableName.toUpperCase()}`,
+      `👤 NV: ${order.staffName} · Giờ: ${order.orderTime}`,
+      `🏷️ Mã: #${order.orderCode}`,
+      `------------------------`,
+      ...order.items.map((it) => `• ${it.quantity}x ${it.productName}${it.note ? ` (${it.note})` : ''}`),
+      `------------------------`,
+      `📊 Tổng: ${totalQty} món gọi · ${formatVND(order.totalAmount)}`,
+      order.note ? `💬 Ghi chú: ${order.note}` : '',
+    ].filter(Boolean).join('\n');
+
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title,
+          text,
+        });
+        return;
+      } catch {
+        // Fallback if dismissed
+      }
+    }
+    handleCopyPlainTextForThermal(order);
   };
 
   // Keyboard shortcut Ctrl + P when print preview modal is open
@@ -1559,6 +1594,46 @@ export const TableOrdersTab: React.FC<TableOrdersTabProps> = ({
                 <span>Tự động mở hộp thoại in phiếu ngay sau khi bấm Báo Bếp</span>
               </label>
             </div>
+
+            {/* Mobile Printing & Ordering Guide Box */}
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+              <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                <Smartphone className="w-4 h-4 text-emerald-600" />
+                <span>Hướng Dẫn In Bill & Order Trên Điện Thoại Di Động:</span>
+              </h4>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="p-3 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/40 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-emerald-800 dark:text-emerald-300">
+                    <Wifi className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>1. In Wifi / LAN</span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Máy in cắm dây LAN hoặc nối chung Wifi với điện thoại. Bấm nút <b>IN PHIẾU NGAY</b>, điện thoại (iOS AirPrint hoặc Android) sẽ tự nhận diện máy in nhiệt và in ra ngay.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/40 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-blue-800 dark:text-blue-300">
+                    <Bluetooth className="w-3.5 h-3.5 text-blue-600" />
+                    <span>2. In Bluetooth</span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Dành cho máy in nhiệt mini bỏ túi: Cài app miễn phí <b>RawBT</b> (Android) hoặc <b>ESC POS Print</b>. Bấm <b>Chép text</b> hoặc <b>Chia sẻ</b> để app in ngay trong 1 giây.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-100 dark:border-amber-900/40 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-amber-800 dark:text-amber-300">
+                    <Share2 className="w-3.5 h-3.5 text-amber-600" />
+                    <span>3. Đồng bộ / Zalo</span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Không cần sắm máy in cho nhân viên: Nhân viên bấm <b>Báo Bếp</b> trên điện thoại, máy tính thu ngân/bếp tự cập nhật để in, hoặc bấm <b>Chia sẻ</b> gửi nhóm Zalo bếp.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1799,23 +1874,35 @@ export const TableOrdersTab: React.FC<TableOrdersTabProps> = ({
                 </span>
               </button>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-1.5">
                 <button
                   type="button"
                   onClick={() => handleOpenPrintTab(previewOrder)}
                   className="py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer"
+                  title="Mở tab in riêng"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Tab in riêng</span>
+                  <span>Tab in</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleShareOrder(previewOrder)}
+                  className="py-2 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/50 text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer"
+                  title="Chia sẻ qua Zalo, Telegram hoặc App in Bluetooth"
+                >
+                  <Share2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Chia sẻ</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleCopyPlainTextForThermal(previewOrder)}
                   className="py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer"
+                  title="Sao chép nội dung phiếu in"
                 >
                   {copiedTelegram ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedTelegram ? 'Đã chép!' : 'Copy tin nhắn'}</span>
+                  <span>{copiedTelegram ? 'Đã chép' : 'Chép text'}</span>
                 </button>
               </div>
 

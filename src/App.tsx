@@ -61,6 +61,7 @@ import {
   Sparkles,
   Volume2,
   VolumeX,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   auth,
@@ -179,6 +180,7 @@ import { LunarCalendarFloatingWidget } from './components/LunarCalendarFloatingW
 import {
   RevenueColumnChart,
   DailyRevenuePoint,
+  RevenueTrendChart,
   WeeklyRevenueTrendChart,
   WeeklyTrendDayPoint,
 } from './components/RevenueCharts';
@@ -201,6 +203,7 @@ import { ConfirmDialogModal } from './components/ConfirmDialogModal';
 import { GeminiKeyBar } from './components/GeminiKeyBar';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { ChatAssistantWidget } from './components/ChatAssistantWidget';
+import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { GamificationTab } from './components/GamificationTab';
 import { TableOrdersTab } from './components/TableOrdersTab';
 import {
@@ -5515,6 +5518,7 @@ export default function App() {
             onSaveCalendarEvents={handleSaveCalendarEvents}
             currentUsername="guest"
           />
+          <ScrollToTopButton />
         </div>
       );
     }
@@ -5535,6 +5539,7 @@ export default function App() {
           onSaveCalendarEvents={handleSaveCalendarEvents}
           currentUsername="admin"
         />
+        <ScrollToTopButton />
       </>
     );
   }
@@ -6384,8 +6389,22 @@ export default function App() {
               </div>
               <div className="flex items-center justify-between font-mono">
                 <span className="text-slate-500">Tiền mặt bán:</span>
-                <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                  {formatVND(financialSummary.netCashRevenue)}
+                <span
+                  className={`font-semibold flex items-center gap-1 ${
+                    financialSummary.netCashRevenue < 0
+                      ? 'text-rose-600 dark:text-rose-400 font-bold'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                  }`}
+                >
+                  {financialSummary.netCashRevenue < 0 && (
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                  )}
+                  <span>{formatVND(financialSummary.netCashRevenue)}</span>
+                  {financialSummary.netCashRevenue < 0 && (
+                    <span className="text-[10px] px-1 py-0.2 rounded bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 font-bold">
+                      Âm
+                    </span>
+                  )}
                 </span>
               </div>
               {financialSummary.periodSettledDebtTotal > 0 && (
@@ -6398,8 +6417,22 @@ export default function App() {
               )}
               <div className="flex items-center justify-between font-mono">
                 <span className="text-slate-700 dark:text-slate-300 font-bold">Két tiền mặt:</span>
-                <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                  {formatVND(financialSummary.totalNetCashAfterDebt)}
+                <span
+                  className={`font-bold flex items-center gap-1 ${
+                    financialSummary.totalNetCashAfterDebt < 0
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                  }`}
+                >
+                  {financialSummary.totalNetCashAfterDebt < 0 && (
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                  )}
+                  <span>{formatVND(financialSummary.totalNetCashAfterDebt)}</span>
+                  {financialSummary.totalNetCashAfterDebt < 0 && (
+                    <span className="text-[10px] px-1 py-0.2 rounded bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 font-bold">
+                      Âm két
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="flex items-center justify-between font-mono">
@@ -6814,17 +6847,52 @@ export default function App() {
                 {netFormulaTab === 'net_summary' ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
                     {/* Ô 1: Tiền mặt ca bán sau khoản trừ */}
-                    <div className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 flex flex-col justify-between">
+                    <div
+                      className={`p-3.5 sm:p-4 rounded-xl border flex flex-col justify-between transition-all ${
+                        financialSummary.netCashRevenue < 0
+                          ? 'border-2 border-rose-500/80 bg-rose-50/90 dark:bg-rose-950/50 shadow-xs ring-1 ring-rose-500/20'
+                          : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40'
+                      }`}
+                    >
                       <div>
-                        <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                          1. Tiền Mặt Bán Ngày (Sau Trừ Chi)
+                        <div className="flex items-center justify-between gap-1">
+                          <div
+                            className={`text-xs ${
+                              financialSummary.netCashRevenue < 0
+                                ? 'font-bold text-rose-900 dark:text-rose-200 flex items-center gap-1.5'
+                                : 'font-semibold text-slate-700 dark:text-slate-300'
+                            }`}
+                          >
+                            {financialSummary.netCashRevenue < 0 && (
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                            )}
+                            <span>1. Tiền Mặt Bán Ngày (Sau Trừ Chi)</span>
+                          </div>
+                          {financialSummary.netCashRevenue < 0 && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white animate-pulse">
+                              ÂM TIỀN
+                            </span>
+                          )}
                         </div>
-                        <div className="mt-1.5 text-lg sm:text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                        <div
+                          className={`mt-1.5 text-lg sm:text-xl font-bold font-mono ${
+                            financialSummary.netCashRevenue < 0
+                              ? 'text-rose-600 dark:text-rose-400 font-black'
+                              : 'text-emerald-600 dark:text-emerald-400'
+                          }`}
+                        >
                           {formatVND(financialSummary.netCashRevenue)}
                         </div>
                       </div>
-                      <div className="mt-2 text-[11px] font-mono text-slate-500">
-                        {formatVND(financialSummary.grossCashFromBills)} bill - {formatVND(financialSummary.totalDeductions)} chi
+                      <div className="mt-2 space-y-1">
+                        <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                          {formatVND(financialSummary.grossCashFromBills)} bill - {formatVND(financialSummary.totalDeductions)} chi
+                        </div>
+                        {financialSummary.netCashRevenue < 0 && (
+                          <div className="p-1.5 rounded-lg bg-rose-100/90 dark:bg-rose-900/60 border border-rose-200 dark:border-rose-800 text-[10px] text-rose-800 dark:text-rose-200 font-medium leading-tight">
+                            ⚠️ Cảnh báo âm tiền: Khoản chi (-{formatVND(financialSummary.totalDeductions)}) vượt tiền bán ({formatVND(financialSummary.grossCashFromBills)}). Két đang thiếu hụt {formatVND(Math.abs(financialSummary.netCashRevenue))}!
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -6856,23 +6924,64 @@ export default function App() {
                     </div>
 
                     {/* Ô 3: TỔNG TIỀN MẶT THỰC NHẬN SAU KHI THU CÔNG NỢ */}
-                    <div className="p-3.5 sm:p-4 rounded-xl border-2 border-emerald-500/80 bg-emerald-50/70 dark:bg-emerald-950/40 shadow-xs ring-1 ring-emerald-500/20 flex flex-col justify-between">
+                    <div
+                      className={`p-3.5 sm:p-4 rounded-xl border-2 shadow-xs flex flex-col justify-between transition-all ${
+                        financialSummary.totalNetCashAfterDebt < 0
+                          ? 'border-rose-500/80 bg-rose-50/80 dark:bg-rose-950/40 ring-1 ring-rose-500/20'
+                          : 'border-emerald-500/80 bg-emerald-50/70 dark:bg-emerald-950/40 ring-1 ring-emerald-500/20'
+                      }`}
+                    >
                       <div>
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center gap-1">
-                            <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span
+                            className={`text-xs font-bold flex items-center gap-1 ${
+                              financialSummary.totalNetCashAfterDebt < 0
+                                ? 'text-rose-900 dark:text-rose-200'
+                                : 'text-emerald-900 dark:text-emerald-200'
+                            }`}
+                          >
+                            {financialSummary.totalNetCashAfterDebt < 0 ? (
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                            ) : (
+                              <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                            )}
                             <span>3. Tiền Mặt Sau Thu Nợ</span>
                           </span>
-                          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-600 text-white">
-                            Két Tiền
+                          <span
+                            className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                              financialSummary.totalNetCashAfterDebt < 0
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-emerald-600 text-white'
+                            }`}
+                          >
+                            {financialSummary.totalNetCashAfterDebt < 0 ? 'Két Đang Âm' : 'Két Tiền'}
                           </span>
                         </div>
-                        <div className="mt-1.5 text-xl sm:text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400">
+                        <div
+                          className={`mt-1.5 text-xl sm:text-2xl font-black font-mono ${
+                            financialSummary.totalNetCashAfterDebt < 0
+                              ? 'text-rose-600 dark:text-rose-400'
+                              : 'text-emerald-600 dark:text-emerald-400'
+                          }`}
+                        >
                           {formatVND(financialSummary.totalNetCashAfterDebt)}
                         </div>
                       </div>
-                      <div className="mt-2 text-[11px] font-mono text-emerald-700 dark:text-emerald-300">
-                        = {formatVND(financialSummary.netCashRevenue)} ca bán + {formatVND(financialSummary.periodDebtCashCollected)} thu nợ TM
+                      <div className="mt-2 space-y-1">
+                        <div
+                          className={`text-[11px] font-mono ${
+                            financialSummary.totalNetCashAfterDebt < 0
+                              ? 'text-rose-700 dark:text-rose-300'
+                              : 'text-emerald-700 dark:text-emerald-300'
+                          }`}
+                        >
+                          = {formatVND(financialSummary.netCashRevenue)} ca bán + {formatVND(financialSummary.periodDebtCashCollected)} thu nợ TM
+                        </div>
+                        {financialSummary.totalNetCashAfterDebt < 0 && (
+                          <div className="p-1 rounded bg-rose-100 dark:bg-rose-900/50 text-[10px] text-rose-800 dark:text-rose-200 font-semibold">
+                            ⚠️ Két tiền mặt hiện tại bị âm {formatVND(Math.abs(financialSummary.totalNetCashAfterDebt))}!
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -6922,9 +7031,26 @@ export default function App() {
                         -{formatVND(financialSummary.totalDeductions)}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between py-1.5 border-b border-slate-200 dark:border-slate-800 font-bold text-slate-800 dark:text-slate-200">
-                      <span>(=) Tiền mặt bán hàng ca ngày (Sau chi phí, trước thu nợ):</span>
-                      <span className="text-emerald-600 dark:text-emerald-400">
+                    <div
+                      className={`flex items-center justify-between py-1.5 border-b border-slate-200 dark:border-slate-800 font-bold ${
+                        financialSummary.netCashRevenue < 0
+                          ? 'text-rose-600 dark:text-rose-400 bg-rose-50/60 dark:bg-rose-950/40 px-2 rounded-lg'
+                          : 'text-slate-800 dark:text-slate-200'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {financialSummary.netCashRevenue < 0 && (
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                        )}
+                        <span>(=) Tiền mặt bán hàng ca ngày (Sau chi phí, trước thu nợ):</span>
+                      </span>
+                      <span
+                        className={
+                          financialSummary.netCashRevenue < 0
+                            ? 'text-rose-600 dark:text-rose-400 font-black'
+                            : 'text-emerald-600 dark:text-emerald-400'
+                        }
+                      >
                         {formatVND(financialSummary.netCashRevenue)}
                       </span>
                     </div>
@@ -7005,9 +7131,18 @@ export default function App() {
                 )}
               </div>
 
-              {/* Row 3A: Weekly Revenue Trend Line Chart (7 Days) */}
+              {/* Row 3A: Revenue Trend Line Chart (Xu Hướng Doanh Thu: Theo Tuần, Theo Tháng, Khoảng Ngày Đã Chọn) */}
               <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs">
-                <WeeklyRevenueTrendChart data={weeklyTrendData} todayStr={todayStr} />
+                <RevenueTrendChart
+                  data={weeklyTrendData}
+                  todayStr={todayStr}
+                  bills={bills}
+                  deductions={effectiveDeductions}
+                  debtPayments={inventoryData.debtPayments || []}
+                  dashboardPeriodPreset={periodPreset}
+                  dashboardStartDate={customStartDate}
+                  dashboardEndDate={customEndDate}
+                />
               </div>
 
               {/* Row 3B: Interactive Column Chart */}
@@ -8897,6 +9032,9 @@ export default function App() {
         onSaveCalendarEvents={handleSaveCalendarEvents}
         currentUsername={currentStaffAccount.username}
       />
+
+      {/* Floating Scroll-to-Top Button */}
+      <ScrollToTopButton />
 
       {/* Nút Nhập Bill Ghim Chắc Chắn Ở Giữa Cạnh Phải Màn Hình (Req 1: nằm ở tất cả các trang ngoại trừ trang nhap-bill) */}
       {activeTab !== 'ocr' && (

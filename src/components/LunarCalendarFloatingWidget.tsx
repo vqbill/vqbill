@@ -629,23 +629,23 @@ export const LunarCalendarFloatingWidget: React.FC<
         id="lunar-calendar-floating-btn"
         type="button"
         onClick={() => setIsOpen((v) => !v)}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2.5 px-3.5 py-2 rounded-full bg-[#1c1c1a]/95 dark:bg-[#fbfbfa]/95 text-white dark:text-[#1c1c1a] shadow-lg border border-[#e4e4db] dark:border-[#2c2c28] cursor-pointer select-none backdrop-blur-md transition-all hover:scale-105 active:scale-95 group"
+        className="fixed bottom-16 lg:bottom-4 right-3 sm:right-6 z-40 flex items-center gap-1.5 sm:gap-2 px-2.5 py-1 sm:px-3 sm:py-1 rounded-full bg-[#1c1c1a]/92 dark:bg-[#fbfbfa]/92 text-white dark:text-[#1c1c1a] shadow-md border border-[#e4e4db]/60 dark:border-[#2c2c28]/60 cursor-pointer select-none backdrop-blur-md transition-all hover:scale-105 active:scale-95 group"
         title="Xem Lịch Âm Dương & Ghi chú sự kiện"
         aria-label="Xem Lịch Âm Dương"
       >
-        <Clock className="w-4 h-4 text-emerald-400 dark:text-emerald-600 shrink-0 group-hover:rotate-6 transition-transform" />
-        <div className="text-[11px] font-mono leading-tight text-left">
-          <div className="font-bold tabular-nums flex items-center gap-1.5">
+        <Clock className="w-3.5 h-3.5 text-emerald-400 dark:text-emerald-600 shrink-0 group-hover:rotate-6 transition-transform" />
+        <div className="text-[10px] sm:text-[10.5px] font-mono leading-tight text-left">
+          <div className="font-bold tabular-nums flex items-center gap-1">
             <span>
               {liveTimeStr} · {liveSolarStr}
             </span>
             {todayEventsCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[9px] font-extrabold">
+              <span className="px-1 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[8.5px] font-extrabold">
                 {todayEventsCount} việc
               </span>
             )}
           </div>
-          <div className="text-[10px] opacity-80">
+          <div className="text-[8.5px] sm:text-[9.5px] opacity-75">
             Âm lịch: {currentLunar.lunarDay}/{currentLunar.lunarMonth} ({currentLunar.yearCanChi})
           </div>
         </div>

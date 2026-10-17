@@ -36,6 +36,7 @@ import {
   PieChart,
   Award,
   Star,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   ManagementTabId,
@@ -776,16 +777,49 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
                 </div>
               </div>
 
-              <div className="p-3.5 rounded-xl bg-slate-50/80 dark:bg-slate-950/50 border border-slate-200/70 dark:border-slate-800/80">
-                <div className="text-xs text-slate-500 dark:text-slate-400">
-                  Tiền Mặt Bán Ngày (Sau Khoản Trừ)
+              <div
+                className={`p-3.5 rounded-xl transition-all ${
+                  todayStats.netCash < 0
+                    ? 'bg-rose-50/90 dark:bg-rose-950/50 border-2 border-rose-500/80 shadow-xs ring-1 ring-rose-500/20'
+                    : 'bg-slate-50/80 dark:bg-slate-950/50 border border-slate-200/70 dark:border-slate-800/80'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1">
+                  <div
+                    className={`text-xs ${
+                      todayStats.netCash < 0
+                        ? 'text-rose-900 dark:text-rose-200 font-bold flex items-center gap-1.5'
+                        : 'text-slate-500 dark:text-slate-400'
+                    }`}
+                  >
+                    {todayStats.netCash < 0 && (
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                    )}
+                    <span>Tiền Mặt Bán Ngày (Sau Khoản Trừ)</span>
+                  </div>
+                  {todayStats.netCash < 0 && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white animate-pulse">
+                      ÂM TIỀN
+                    </span>
+                  )}
                 </div>
-                <div className="mt-1 text-lg sm:text-xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+                <div
+                  className={`mt-1 text-lg sm:text-xl font-bold font-mono tabular-nums ${
+                    todayStats.netCash < 0
+                      ? 'text-rose-600 dark:text-rose-400 font-black'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                  }`}
+                >
                   {formatVND(todayStats.netCash)}
                 </div>
                 <div className="mt-0.5 text-[11px] text-slate-500 font-mono">
                   Đã trừ {todayStats.todayDeductionsCount} khoản chi
                 </div>
+                {todayStats.netCash < 0 && (
+                  <div className="mt-1.5 p-1.5 rounded-lg bg-rose-100 dark:bg-rose-900/60 border border-rose-200 dark:border-rose-800 text-[10px] text-rose-800 dark:text-rose-200 font-medium leading-tight">
+                    ⚠️ Khoản chi vượt tiền bán {formatVND(Math.abs(todayStats.netCash))}! Két tiền âm.
+                  </div>
+                )}
               </div>
 
               {todayStats.todaySettledDebt > 0 && (
@@ -802,18 +836,57 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
                 </div>
               )}
 
-              <div className="p-3.5 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border-2 border-emerald-500/70 shadow-xs">
-                <div className="text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center justify-between">
-                  <span>Tiền Mặt Thực Nhận (Két Cuối Ca)</span>
+              <div
+                className={`p-3.5 rounded-xl border-2 shadow-xs ${
+                  todayStats.totalCashAfterDebt < 0
+                    ? 'bg-rose-50/90 dark:bg-rose-950/50 border-rose-500/80 ring-1 ring-rose-500/20'
+                    : 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-500/70'
+                }`}
+              >
+                <div className="text-xs font-bold flex items-center justify-between">
+                  <span
+                    className={
+                      todayStats.totalCashAfterDebt < 0
+                        ? 'text-rose-900 dark:text-rose-200 flex items-center gap-1.5'
+                        : 'text-emerald-900 dark:text-emerald-200'
+                    }
+                  >
+                    {todayStats.totalCashAfterDebt < 0 && (
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                    )}
+                    <span>Tiền Mặt Thực Nhận (Két Cuối Ca)</span>
+                  </span>
+                  {todayStats.totalCashAfterDebt < 0 && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-rose-600 text-white">
+                      Két Đang Âm
+                    </span>
+                  )}
                 </div>
-                <div className="mt-1 text-lg sm:text-xl font-black font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+                <div
+                  className={`mt-1 text-lg sm:text-xl font-black font-mono tabular-nums ${
+                    todayStats.totalCashAfterDebt < 0
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                  }`}
+                >
                   {formatVND(todayStats.totalCashAfterDebt)}
                 </div>
-                <div className="mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-300 font-mono">
+                <div
+                  className={`mt-0.5 text-[11px] font-mono ${
+                    todayStats.totalCashAfterDebt < 0
+                      ? 'text-rose-700 dark:text-rose-300'
+                      : 'text-emerald-700 dark:text-emerald-300'
+                  }`}
+                >
                   {todayStats.todayDebtCash > 0
                     ? `${formatVND(todayStats.netCash)} bán + ${formatVND(todayStats.todayDebtCash)} thu nợ`
                     : 'Tiền mặt bán ca ngày sau khoản trừ'}
                 </div>
+                {todayStats.totalCashAfterDebt < 0 && (
+                  <div className="mt-1.5 p-1 rounded bg-rose-100 dark:bg-rose-900/50 text-[10px] text-rose-800 dark:text-rose-200 font-semibold">
+                    ⚠️ Két tiền mặt hiện tại bị thiếu hụt {formatVND(Math.abs(todayStats.totalCashAfterDebt))}
+                  </div>
+                )}
               </div>
 
               <div className="p-3.5 rounded-xl bg-slate-50/80 dark:bg-slate-950/50 border border-slate-200/70 dark:border-slate-800/80">
