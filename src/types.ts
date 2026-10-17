@@ -20,7 +20,9 @@ export type ManagementTabId =
   | 'salary_advances'
   | 'products'
   | 'accounts'
-  | 'menu_settings';
+  | 'menu_settings'
+  | 'gamification'
+  | 'table_orders';
 
 export interface ExternalLinkItem {
   id: string;
@@ -53,12 +55,14 @@ export const DEFAULT_EXTERNAL_LINKS: ExternalLinkItem[] = [
 export const DEFAULT_VISIBLE_PRIMARY_TABS: ManagementTabId[] = [
   'home',
   'dashboard',
+  'table_orders',
   'ocr',
   'categories',
   'deductions',
   'returns',
   'salary_advances',
   'menu_settings',
+  'gamification',
 ];
 
 export type PeriodPreset = 'today' | 'yesterday' | 'week' | 'month' | 'all' | 'custom';
@@ -84,6 +88,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     shortLabel: 'Tổng quan',
     description:
       'Bảng đối soát doanh thu tiền mặt, chuyển khoản, khoản trừ, công nợ riêng và danh sách hóa đơn',
+  },
+  {
+    id: 'table_orders',
+    label: 'Order Món Theo Bàn (Báo Bếp & In Bill)',
+    shortLabel: 'Order Bàn',
+    description:
+      'Ghi order món cho từng bàn, tự động in phiếu nhiệt K80/K57 báo bếp & quầy bar, phát chuông thông báo và chuyển thẳng sang bill thanh toán',
   },
   {
     id: 'ocr',
@@ -169,6 +180,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     description:
       'Tích chọn các tính năng được phép hiển thị trực tiếp ra màn hình chính, gộp các tính năng còn lại vào cột Dropdown và quản lý liên kết ngoài',
   },
+  {
+    id: 'gamification',
+    label: 'Khu Vui Chơi & Sơ Đồ Bàn',
+    shortLabel: 'Vui chơi & Bàn',
+    description:
+      'Vòng quay may mắn (Lucky Wheel), Sơ đồ bàn 2D trực quan, Bảng vàng doanh số & món ngôi sao, Mẹo phong thủy & câu chúc ngày mới, Hiệu ứng ăn mừng kỷ lục',
+  },
 ];
 
 export type RoleActionMode = 'read_only' | 'full_crud';
@@ -193,6 +211,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     allowedTabs: [
       'home',
       'dashboard',
+      'table_orders',
       'ocr',
       'categories',
       'inventory',
@@ -205,6 +224,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'products',
       'accounts',
       'menu_settings',
+      'gamification',
     ],
     canWrite: true,
     canDelete: true,
@@ -218,6 +238,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     allowedTabs: [
       'home',
       'dashboard',
+      'table_orders',
       'ocr',
       'categories',
       'inventory',
@@ -229,6 +250,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'salary_advances',
       'products',
       'menu_settings',
+      'gamification',
     ],
     canWrite: true,
     canDelete: true,
@@ -242,6 +264,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     allowedTabs: [
       'home',
       'dashboard',
+      'table_orders',
       'ocr',
       'inventory',
       'owner_use',
@@ -250,6 +273,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'returns',
       'salary_advances',
       'menu_settings',
+      'gamification',
     ],
     canWrite: true,
     canDelete: true,
@@ -263,6 +287,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     allowedTabs: [
       'home',
       'dashboard',
+      'table_orders',
       'categories',
       'inventory',
       'owner_use',
@@ -270,6 +295,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'deductions',
       'returns',
       'salary_advances',
+      'gamification',
     ],
     canWrite: false,
     canDelete: false,
@@ -280,7 +306,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.INVENTORY]: {
     role: UserRole.INVENTORY,
-    allowedTabs: ['home', 'categories', 'inventory', 'kitchen_inventory', 'owner_use'],
+    allowedTabs: ['home', 'categories', 'inventory', 'kitchen_inventory', 'owner_use', 'gamification', 'table_orders'],
     canWrite: true,
     canDelete: true,
     actionMode: 'full_crud',
@@ -345,6 +371,7 @@ export interface BillRecord {
   rawDate?: string;
   checkInTime?: string;
   checkOutTime?: string;
+  tableName?: string; // Tên bàn / phòng (ví dụ: Bàn 01, VIP 2, Sân Vườn 3...)
   paymentType: PaymentType;
   debtorName: string;
   debtStatus: DebtStatus;
@@ -651,6 +678,32 @@ export interface KitchenStockUsageLog {
   createdAtMs: number;
 }
 
+export interface OrderItem {
+  id: string;
+  productId?: string;
+  productName: string;
+  category: string;
+  unitPrice: number;
+  quantity: number;
+  note?: string; // Ghi chú: ít cay, không hành, ướp đá...
+}
+
+export interface TableOrderRecord {
+  id: string;
+  orderCode: string; // VD: ORD-261016-001
+  tableName: string; // VD: Bàn 12, VIP 2...
+  staffName: string; // Tên nhân viên order
+  staffId?: string;
+  items: OrderItem[];
+  totalAmount: number;
+  status: 'pending' | 'cooking' | 'served' | 'billed' | 'cancelled';
+  orderTime: string; // HH:mm:ss
+  orderDate: string; // YYYY-MM-DD
+  note?: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface WorkspaceInventoryData {
   trackedCategories: string[]; // Mặc định ['Bia', 'Nước ngọt']
   deductionCategories?: string[]; // Danh sách nhóm khoản trừ tùy chỉnh & mặc định
@@ -670,6 +723,7 @@ export interface WorkspaceInventoryData {
   kitchenReceipts?: KitchenReceipt[]; // Phiếu nhập hàng kho bếp & tạp vụ
   kitchenSupplierPayments?: KitchenSupplierPayment[]; // Lịch sử trả nợ cho nhà phân phối
   kitchenStockUsages?: KitchenStockUsageLog[]; // Lịch sử xuất kho / sử dụng nguyên vật liệu
+  tableOrders?: TableOrderRecord[]; // Lịch sử & danh sách order món theo bàn
   telegramConfig?: TelegramBotConfig; // Cấu hình kết nối Bot Telegram
   kiotvietSyncLocked?: boolean; // Khóa / Mở khóa chức năng sync KiotViet POS để giảm tải hệ thống
   updatedAtMs: number;
@@ -845,6 +899,14 @@ export function getEffectiveRolePermissions(
     if (account.role !== UserRole.INVENTORY && !tabs.includes('salary_advances')) {
       tabs = [...tabs, 'salary_advances'];
     }
+  }
+
+  if (!tabs.includes('table_orders')) {
+    tabs = [...tabs, 'table_orders'];
+  }
+
+  if (!tabs.includes('gamification')) {
+    tabs = [...tabs, 'gamification'];
   }
 
   if (!tabs.includes('home')) {

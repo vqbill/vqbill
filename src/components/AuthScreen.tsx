@@ -25,6 +25,7 @@ interface AuthScreenProps {
   darkMode: boolean;
   onToggleDarkMode: () => void;
   authError: string | null;
+  onSwitchToGamification?: () => void;
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
@@ -34,6 +35,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   darkMode,
   onToggleDarkMode,
   authError,
+  onSwitchToGamification,
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -144,20 +146,35 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           <span>Quản lý Công nợ & Phân quyền</span>
         </div>
 
-        <button
-          type="button"
-          onClick={onToggleDarkMode}
-          className="h-10 px-3.5 text-xs font-medium border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 inline-flex items-center gap-2 transition-colors whitespace-nowrap cursor-pointer"
-        >
-          {darkMode ? (
-            <Sun className="w-4 h-4 text-amber-400" />
-          ) : (
-            <Moon className="w-4 h-4 text-slate-600" />
+        <div className="flex items-center gap-2">
+          {onSwitchToGamification && (
+            <button
+              type="button"
+              onClick={onSwitchToGamification}
+              className="h-10 px-3.5 sm:px-4 text-xs font-black rounded-xl bg-gradient-to-r from-amber-500 via-rose-500 to-indigo-600 hover:from-amber-600 hover:to-indigo-700 text-white shadow-md inline-flex items-center gap-1.5 transition-transform active:scale-95 cursor-pointer"
+              title="Mở Mini Game, Vòng Quay May Mắn & Mẹo Phong Thủy Vịnh Quán"
+            >
+              <span className="text-sm">🎡</span>
+              <span className="hidden sm:inline">Chơi Mini Game & Phong Thủy</span>
+              <span className="sm:hidden">Mini Game</span>
+            </button>
           )}
-          <span className="hidden sm:inline">
-            {darkMode ? 'Giao diện Sáng' : 'Giao diện Tối'}
-          </span>
-        </button>
+
+          <button
+            type="button"
+            onClick={onToggleDarkMode}
+            className="h-10 px-3.5 text-xs font-medium border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 inline-flex items-center gap-2 transition-colors whitespace-nowrap cursor-pointer"
+          >
+            {darkMode ? (
+              <Sun className="w-4 h-4 text-amber-400" />
+            ) : (
+              <Moon className="w-4 h-4 text-slate-600" />
+            )}
+            <span className="hidden sm:inline">
+              {darkMode ? 'Giao diện Sáng' : 'Giao diện Tối'}
+            </span>
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
@@ -293,6 +310,28 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   : 'Đăng nhập với Google (Firebase Auth)'}
               </span>
             </button>
+
+            {onSwitchToGamification && (
+              <div
+                onClick={onSwitchToGamification}
+                className="mt-5 p-3.5 rounded-2xl border border-amber-200 dark:border-amber-900/60 bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 hover:border-amber-300 transition-all cursor-pointer shadow-xs flex items-center justify-between gap-3 group"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="text-2xl group-hover:scale-110 transition-transform">🎡</span>
+                  <div>
+                    <div className="text-xs font-black text-amber-900 dark:text-amber-200">
+                      Ghé Khu Vui Chơi & Vòng Quay May Mắn
+                    </div>
+                    <div className="text-[11px] text-amber-700 dark:text-amber-400">
+                      Mẹo phong thủy, câu chúc ngày mới & sơ đồ bàn 2D
+                    </div>
+                  </div>
+                </div>
+                <span className="text-xs font-bold text-amber-600 dark:text-amber-400 shrink-0 group-hover:translate-x-1 transition-transform">
+                  Vào chơi →
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Right Panel: Brand Overview */}

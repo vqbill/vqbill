@@ -58,6 +58,9 @@ import {
   CheckSquare,
   Square,
   UtensilsCrossed,
+  Sparkles,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import {
   auth,
@@ -97,6 +100,7 @@ import {
   ExternalLinkItem,
   DEFAULT_EXTERNAL_LINKS,
   DEFAULT_VISIBLE_PRIMARY_TABS,
+  TableOrderRecord,
 } from './types';
 import {
   formatVND,
@@ -197,6 +201,15 @@ import { ConfirmDialogModal } from './components/ConfirmDialogModal';
 import { GeminiKeyBar } from './components/GeminiKeyBar';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { ChatAssistantWidget } from './components/ChatAssistantWidget';
+import { GamificationTab } from './components/GamificationTab';
+import { TableOrdersTab } from './components/TableOrdersTab';
+import {
+  playKachingSound,
+  playChimeSound,
+  triggerConfettiCelebration,
+  isSoundMuted,
+  toggleSoundMute,
+} from './utils/soundEffects';
 
 type ActiveTab = ManagementTabId;
 
@@ -376,6 +389,8 @@ export default function App() {
       products: '/thuc-don',
       accounts: '/tai-khoan',
       menu_settings: '/cai-dat-danh-muc',
+      gamification: '/vui-choi',
+      table_orders: '/order-ban',
     }),
     []
   );
@@ -384,6 +399,7 @@ export default function App() {
     const validTabs: ActiveTab[] = [
       'home',
       'dashboard',
+      'table_orders',
       'ocr',
       'categories',
       'inventory',
@@ -396,6 +412,7 @@ export default function App() {
       'products',
       'accounts',
       'menu_settings',
+      'gamification',
     ];
     try {
       const cleanPath = window.location.pathname.replace(/\/+$/, '') || '/';
@@ -419,6 +436,19 @@ export default function App() {
   }, [TAB_TO_PATH]);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => resolveTabFromLocation());
+  const [previousTab, setPreviousTab] = useState<ActiveTab>('home');
+  const [unauthView, setUnauthView] = useState<'login' | 'gamification'>('login');
+  const [soundMuted, setSoundMutedState] = useState<boolean>(() => isSoundMuted());
+  const [orderInitialTable, setOrderInitialTable] = useState<string>('');
+
+  useEffect(() => {
+    const handleMuteChange = (e: CustomEvent) => {
+      setSoundMutedState(Boolean(e.detail?.muted));
+    };
+    window.addEventListener('vq_sound_mute_changed' as any, handleMuteChange);
+    return () => window.removeEventListener('vq_sound_mute_changed' as any, handleMuteChange);
+  }, []);
+
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [hideMoney, setHideMoney] = useState<boolean>(() => getPrivacyMaskMode());
 
@@ -553,6 +583,9 @@ export default function App() {
       );
       return;
     }
+    if (activeTab !== targetTab) {
+      setPreviousTab(activeTab);
+    }
     setActiveTab(targetTab);
   };
 
@@ -564,7 +597,22 @@ export default function App() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
           const cleaned = sanitizeTabList(parsed);
-          if (cleaned.length > 0) return cleaned;
+          if (cleaned.length > 0) {
+            // Auto-merge newly introduced tabs into user's cached visiblePrimaryTabs
+            const merged = [...cleaned];
+            if (!merged.includes('table_orders')) {
+              const dashIdx = merged.indexOf('dashboard');
+              if (dashIdx >= 0) {
+                merged.splice(dashIdx + 1, 0, 'table_orders');
+              } else {
+                merged.splice(1, 0, 'table_orders');
+              }
+            }
+            if (!merged.includes('gamification')) {
+              merged.push('gamification');
+            }
+            return merged;
+          }
         }
       }
     } catch {
@@ -3012,6 +3060,16 @@ export default function App() {
         res.bill.totalAmount
       )}) vào hệ thống!`
     );
+
+    // Phát âm thanh Kaching 💰 và kích hoạt pháo hoa kỷ lục nếu bill VIP >= 5M
+    playKachingSound();
+    if (res.bill.totalAmount >= 5000000) {
+      triggerConfettiCelebration({
+        title: '🎉 HÓA ĐƠN VIP KHỦNG ĐÃ LƯU! 🎉',
+        message: `${extractBillTableName(res.bill, 'Bàn VIP')} đạt doanh số ${formatVND(res.bill.totalAmount)}!`,
+      });
+    }
+
     return res.bill;
   };
 
@@ -3509,6 +3567,7 @@ export default function App() {
     showToast(
       `Đã tất toán công nợ của ${bill.debtorName} (${formatVND(remainingDebt)}) sang ${PAYMENT_LABELS[settledVia]} vào ngày ${effectiveSettleDate}!`
     );
+    playChimeSound();
   };
 
   const handleRecordPartialDebtPayment = async (params: {
@@ -3583,6 +3642,7 @@ export default function App() {
         }) — Dư nợ còn lại của ${params.bill.debtorName}: ${formatVND(remainingAfter)}!`
       );
     }
+    playChimeSound();
   };
 
   const handleDeletePartialDebtPayment = async (payment: DebtPaymentRecord) => {
@@ -5383,8 +5443,82 @@ export default function App() {
     );
   };
 
-  // If not logged in, render AuthScreen (without any sample quick-fill buttons)
+  const handleSaveTableOrders = async (nextOrders: TableOrderRecord[]) => {
+    const nextInv: WorkspaceInventoryData = {
+      ...inventoryData,
+      tableOrders: nextOrders,
+      updatedAtMs: Date.now(),
+    };
+    await handleSaveInventoryData(nextInv);
+  };
+
+  const handleConvertOrderToBill = async (orderData: {
+    tableName: string;
+    items: { productName: string; quantity: number; price: number; category: string; note?: string }[];
+    totalAmount: number;
+    staffName: string;
+  }) => {
+    try {
+      const now = new Date();
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      await handleSaveExtractedBill({
+        billDate: todayStr,
+        rawDate: todayStr,
+        checkInTime: timeStr,
+        paymentType: 'cash',
+        debtorName: '',
+        paidCashAmount: orderData.totalAmount,
+        paidTransferAmount: 0,
+        note: `Order ${orderData.tableName} (NV: ${orderData.staffName})`,
+        items: orderData.items.map((it) => ({
+          productName: it.productName,
+          category: it.category || 'Món chính',
+          unitPrice: it.price,
+          quantity: it.quantity,
+          subtotal: it.price * it.quantity,
+          note: it.note || '',
+        })),
+      });
+
+      if (inventoryData.tableOrders) {
+        const nextOrders = inventoryData.tableOrders.map((o) =>
+          o.tableName === orderData.tableName && o.status !== 'billed' && o.status !== 'cancelled'
+            ? { ...o, status: 'billed' as const, updatedAtMs: Date.now() }
+            : o
+        );
+        await handleSaveTableOrders(nextOrders);
+      }
+      showToast(`Đã chuyển Order của ${orderData.tableName} thành Hóa đơn thành công!`);
+    } catch (err: any) {
+      showToast(`Không thể tạo hóa đơn: ${err?.message || 'Lỗi không xác định'}`);
+    }
+  };
+
+  // If not logged in, render AuthScreen or standalone GamificationTab
   if (!currentStaffAccount) {
+    if (unauthView === 'gamification') {
+      return (
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-3 sm:p-6 max-w-7xl mx-auto">
+          <GamificationTab
+            bills={bills}
+            billItems={effectiveBillItems}
+            debts={bills.filter((b) => b.paymentType === 'debt' || (b.debtStatus && b.debtStatus !== 'paid'))}
+            todayStr={todayStr}
+            isStandalone={true}
+            onBackToLogin={() => setUnauthView('login')}
+            darkMode={darkMode}
+            onToggleDarkMode={() => setDarkMode((d) => !d)}
+            onInspectBill={(b) => setInspectingBill(b)}
+          />
+          <LunarCalendarFloatingWidget
+            calendarEvents={inventoryData.calendarEvents || []}
+            onSaveCalendarEvents={handleSaveCalendarEvents}
+            currentUsername="guest"
+          />
+        </div>
+      );
+    }
+
     return (
       <>
         <AuthScreen
@@ -5394,6 +5528,7 @@ export default function App() {
           darkMode={darkMode}
           onToggleDarkMode={() => setDarkMode((d) => !d)}
           authError={authError}
+          onSwitchToGamification={() => setUnauthView('gamification')}
         />
         <LunarCalendarFloatingWidget
           calendarEvents={inventoryData.calendarEvents || []}
@@ -5421,6 +5556,12 @@ export default function App() {
       label: 'Tổng quan & Doanh thu',
       shortLabel: 'Tổng quan',
       icon: <LayoutDashboard className="w-4 h-4" />,
+    },
+    {
+      id: 'table_orders',
+      label: 'Order Món Theo Bàn (Báo Bếp & In Bill)',
+      shortLabel: 'Order Bàn',
+      icon: <UtensilsCrossed className="w-4 h-4" />,
     },
     {
       id: 'ocr',
@@ -5494,11 +5635,18 @@ export default function App() {
       shortLabel: 'Cài đặt Menu',
       icon: <SlidersHorizontal className="w-4 h-4" />,
     },
+    {
+      id: 'gamification',
+      label: 'Khu Vui Chơi & Sơ Đồ Bàn',
+      shortLabel: 'Vui chơi & Bàn',
+      icon: <Sparkles className="w-4 h-4" />,
+    },
   ];
 
   const tabIconMap: Record<ManagementTabId, React.ReactNode> = {
     home: <Home className="w-4 h-4" />,
     dashboard: <LayoutDashboard className="w-4 h-4" />,
+    table_orders: <UtensilsCrossed className="w-4 h-4" />,
     ocr: <Camera className="w-4 h-4" />,
     categories: <Layers className="w-4 h-4" />,
     inventory: <Boxes className="w-4 h-4" />,
@@ -5511,6 +5659,7 @@ export default function App() {
     products: <Package className="w-4 h-4" />,
     accounts: <Shield className="w-4 h-4" />,
     menu_settings: <SlidersHorizontal className="w-4 h-4" />,
+    gamification: <Sparkles className="w-4 h-4" />,
   };
 
   // Strictly filter navigation items to ONLY the management categories assigned by Admin
@@ -5554,7 +5703,7 @@ export default function App() {
         </div>
 
         {/* Desktop Compact Horizontal Nav Links + Overflow Dropdown + External Links Dropdown */}
-        <nav className="hidden xl:flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/60 p-1 rounded-xl relative">
+        <nav className="hidden lg:flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/60 p-1 rounded-xl relative max-w-[55vw] overflow-x-auto no-scrollbar">
           {primaryNavItems.map((item) => (
             <button
               key={item.id}
@@ -5852,6 +6001,74 @@ export default function App() {
               <span>+ Tạo Bill</span>
             </button>
           )}
+
+          {/* Quick Access to Table Orders */}
+          <button
+            type="button"
+            onClick={() => handleSelectTab('table_orders')}
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer shadow-xs ${
+              activeTab === 'table_orders'
+                ? 'border-indigo-500 bg-indigo-600 text-white shadow-md'
+                : 'border-indigo-200 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40'
+            }`}
+            title="Mở nhanh Order Món Theo Bàn (Báo Bếp & In Bill)"
+          >
+            <UtensilsCrossed className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline">Order Bàn</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const next = toggleSoundMute();
+              setSoundMutedState(next);
+            }}
+            className={`p-2 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+              soundMuted
+                ? 'border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
+            }`}
+            title={
+              soundMuted
+                ? 'Đang Tắt Âm Thanh POS (Muted) — Bấm để Bật lại'
+                : 'Đang Bật Âm Thanh POS (Kaching, Chime) — Bấm để Tắt'
+            }
+          >
+            {soundMuted ? (
+              <VolumeX className="w-3.5 h-3.5 text-rose-500" />
+            ) : (
+              <Volume2 className="w-3.5 h-3.5 text-emerald-500" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (activeTab === 'gamification') {
+                handleSelectTab(previousTab || 'home');
+              } else {
+                setPreviousTab(activeTab);
+                handleSelectTab('gamification');
+              }
+            }}
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-black inline-flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer shadow-xs ${
+              activeTab === 'gamification'
+                ? 'border-amber-400 bg-amber-500 text-white shadow-md'
+                : 'border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100'
+            }`}
+            title={
+              activeTab === 'gamification'
+                ? `Quay lại ${allNavItems.find((n) => n.id === previousTab)?.shortLabel || 'Trang trước'}`
+                : 'Mở nhanh Khu Vui Chơi, Vòng Quay & Sơ Đồ Bàn'
+            }
+          >
+            <span className="text-sm">🎡</span>
+            <span className="hidden sm:inline">
+              {activeTab === 'gamification'
+                ? `Về ${allNavItems.find((n) => n.id === previousTab)?.shortLabel || 'Trang chủ'}`
+                : 'Vui chơi & Bàn'}
+            </span>
+          </button>
 
           <button
             type="button"
@@ -8074,6 +8291,43 @@ export default function App() {
               tabIcons={tabIconMap}
               kiotvietSyncLocked={Boolean(inventoryData.kiotvietSyncLocked)}
               onToggleKiotvietSyncLock={handleToggleKiotvietSyncLock}
+            />
+          )}
+
+          {/* TAB 9: GAMIFICATION & INTERACTIVE HUB (KHU VUI CHƠI, VÒNG QUAY, SƠ ĐỒ BÀN) */}
+          {activeTab === 'gamification' && (
+            <GamificationTab
+              bills={bills}
+              billItems={effectiveBillItems}
+              debts={bills.filter((b) => b.paymentType === 'debt' || (b.debtStatus && b.debtStatus !== 'paid'))}
+              todayStr={todayStr}
+              isStandalone={false}
+              onBackToWorkspace={() => handleSelectTab(previousTab || 'home')}
+              previousTabLabel={allNavItems.find((n) => n.id === previousTab)?.shortLabel || 'Trang chủ'}
+              onInspectBill={(b) => setInspectingBill(b)}
+              onOpenOcrWithTable={() => {
+                handleSelectTab('ocr');
+              }}
+              onOpenOrderWithTable={(tbl) => {
+                setOrderInitialTable(tbl);
+                handleSelectTab('table_orders');
+              }}
+              darkMode={darkMode}
+              onToggleDarkMode={() => setDarkMode((d) => !d)}
+              currentStaffAccount={currentStaffAccount}
+            />
+          )}
+
+          {/* TAB 10: ORDER MÓN THEO BÀN (BÁO BẾP & IN PHIẾU BILL) */}
+          {activeTab === 'table_orders' && (
+            <TableOrdersTab
+              products={products}
+              currentStaffAccount={currentStaffAccount}
+              employees={effectiveEmployees}
+              tableOrders={inventoryData.tableOrders || []}
+              onSaveOrders={handleSaveTableOrders}
+              initialSelectedTable={orderInitialTable}
+              onConvertToBill={handleConvertOrderToBill}
             />
           )}
         </main>

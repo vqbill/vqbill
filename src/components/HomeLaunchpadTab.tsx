@@ -467,6 +467,17 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
     btnClass: string;
   }[] = [
     {
+      id: 'table_orders',
+      title: 'Order Món Theo Bàn (Báo Bếp & In Bill)',
+      pathLabel: '/order-ban',
+      desc: 'Gọi món nhanh theo bàn, ghi chú món ăn (ít cay, không hành...), chuông báo âm thanh và in phiếu order trực tiếp ra máy in bill.',
+      statText: 'Order món bàn, chuông báo & in phiếu bếp',
+      icon: <UtensilsCrossed className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />,
+      accentClass:
+        'border-indigo-200/90 dark:border-indigo-900/60 hover:border-indigo-500 dark:hover:border-indigo-500 bg-gradient-to-br from-indigo-50/20 to-blue-50/20',
+      btnClass: 'text-indigo-700 dark:text-indigo-300',
+    },
+    {
       id: 'ocr',
       title: 'Chụp / Nhập Bill OCR',
       pathLabel: '/nhap-bill',
@@ -608,6 +619,17 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       accentClass:
         'border-emerald-200/90 dark:border-emerald-900/60 hover:border-emerald-500 dark:hover:border-emerald-500',
       btnClass: 'text-emerald-700 dark:text-emerald-300',
+    },
+    {
+      id: 'gamification',
+      title: 'Khu Vui Chơi, Vòng Quay & Sơ Đồ Bàn',
+      pathLabel: '/vui-choi',
+      desc: 'Vòng quay may mắn trúng thưởng (Lucky Wheel), Sơ đồ bàn 2D trực quan, Bảng vàng món ngôi sao và mẹo phong thủy ngày mới.',
+      statText: 'Minigame giải trí & sơ đồ bàn trực quan',
+      icon: <Sparkles className="w-5 h-5 text-amber-500" />,
+      accentClass:
+        'border-amber-200/90 dark:border-amber-900/60 hover:border-amber-500 dark:hover:border-amber-500 bg-gradient-to-br from-amber-50/20 to-rose-50/20',
+      btnClass: 'text-amber-700 dark:text-amber-300',
     },
   ];
 
