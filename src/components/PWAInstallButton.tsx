@@ -108,11 +108,11 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
         <button
           type="button"
           onClick={handleTriggerClick}
-          className="px-2.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+          className="px-2.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shrink-0"
           title="Cài đặt ứng dụng VQBill ra màn hình chính điện thoại / máy tính"
         >
           <Smartphone className="w-3.5 h-3.5 shrink-0" />
-          <span className="hidden md:inline">Cài đặt App</span>
+          <span className="hidden 2xl:inline whitespace-nowrap">Cài đặt App</span>
         </button>
       ) : (
         <button

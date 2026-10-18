@@ -62,6 +62,7 @@ import {
   Volume2,
   VolumeX,
   AlertTriangle,
+  MinusCircle,
 } from 'lucide-react';
 import {
   auth,
@@ -202,6 +203,7 @@ import { BillSplitMergeModal } from './components/BillSplitMergeModal';
 import { ConfirmDialogModal } from './components/ConfirmDialogModal';
 import { GeminiKeyBar } from './components/GeminiKeyBar';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { QuickDeductionModal } from './components/QuickDeductionModal';
 import { ChatAssistantWidget } from './components/ChatAssistantWidget';
 import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { GamificationTab } from './components/GamificationTab';
@@ -522,6 +524,7 @@ export default function App() {
   const [splitMergeBill, setSplitMergeBill] = useState<BillRecord | null>(null);
   const [showKiotVietSyncModal, setShowKiotVietSyncModal] = useState<boolean>(false);
   const [showQuickBillModal, setShowQuickBillModal] = useState<boolean>(false);
+  const [showQuickDeductionModal, setShowQuickDeductionModal] = useState<boolean>(false);
   const [showSettledDebtsModal, setShowSettledDebtsModal] = useState<boolean>(false);
   const [preselectedReturnBillId, setPreselectedReturnBillId] = useState<string | null>(
     null
@@ -5708,7 +5711,7 @@ export default function App() {
         </div>
 
         {/* Desktop Compact Horizontal Nav Links + Overflow Dropdown + External Links Dropdown */}
-        <nav className="hidden lg:flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/60 p-1 rounded-xl relative max-w-[55vw] overflow-x-auto no-scrollbar">
+        <nav className="hidden 2xl:flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/60 p-1 rounded-xl relative max-w-[40vw] overflow-x-auto no-scrollbar shrink">
           {primaryNavItems.map((item) => (
             <button
               key={item.id}
@@ -5718,7 +5721,7 @@ export default function App() {
                 setHeaderMoreDropdownOpen(false);
                 setHeaderExtLinksDropdownOpen(false);
               }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 shrink-0 ${
                 activeTab === item.id
                   ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -5731,7 +5734,7 @@ export default function App() {
 
           {/* Overflow Dropdown Column for Remaining Features */}
           {overflowNavItems.length > 0 && (
-            <div className="relative">
+            <div className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => {
@@ -5811,7 +5814,7 @@ export default function App() {
           )}
 
           {/* External Links Dropdown Tab (Thu ngân, Sổ quỹ, NDS) */}
-          <div className="relative">
+          <div className="relative shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -5884,13 +5887,13 @@ export default function App() {
         </nav>
 
         {/* Primary Actions */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 ml-auto overflow-x-auto no-scrollbar max-w-[calc(100vw-110px)] sm:max-w-none py-0.5">
           <PWAInstallButton variant="header" />
 
           <button
             type="button"
             onClick={handleToggleHideMoney}
-            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+            className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shrink-0 ${
               hideMoney
                 ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
                 : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
@@ -5904,12 +5907,12 @@ export default function App() {
             {hideMoney ? (
               <>
                 <EyeOff className="w-3.5 h-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                <span className="hidden md:inline">Đang ẩn: ****** ₫</span>
+                <span className="hidden 2xl:inline whitespace-nowrap">Đang ẩn: ****** ₫</span>
               </>
             ) : (
               <>
                 <Eye className="w-3.5 h-3.5 shrink-0 text-slate-500" />
-                <span className="hidden md:inline">Ẩn số tiền</span>
+                <span className="hidden 2xl:inline whitespace-nowrap">Ẩn số tiền</span>
               </>
             )}
           </button>
@@ -5917,7 +5920,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setShowCloudSyncModal(true)}
-            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+            className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shrink-0 ${
               cloudSyncStatus === 'synced'
                 ? 'border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
                 : cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting'
@@ -5931,7 +5934,7 @@ export default function App() {
             ) : (
               <Cloud className="w-3.5 h-3.5 shrink-0" />
             )}
-            <span className="hidden md:inline">
+            <span className="hidden 2xl:inline whitespace-nowrap">
               {cloudSyncStatus === 'synced'
                 ? 'Cloud: Đồng bộ'
                 : cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting'
@@ -5943,7 +5946,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setShowGeminiKeyModal(true)}
-            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+            className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shrink-0 ${
               geminiKeyStatus.verified
                 ? 'border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
                 : geminiKeyStatus.configured
@@ -5953,7 +5956,7 @@ export default function App() {
             title="Cấu hình & Check Gemini API Key"
           >
             <KeyRound className="w-3.5 h-3.5 shrink-0" />
-            <span className="hidden sm:inline">
+            <span className="hidden 2xl:inline whitespace-nowrap">
               {geminiKeyStatus.verified
                 ? 'Gemini: OK'
                 : geminiKeyStatus.configured
@@ -5965,17 +5968,17 @@ export default function App() {
           <button
             type="button"
             onClick={() => setShowChatAssistant((prev) => !prev)}
-            className="px-2.5 py-1.5 rounded-xl border border-teal-200 dark:border-teal-800/80 bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 text-teal-800 dark:text-teal-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-2xs"
+            className="px-2 sm:px-2.5 py-1.5 rounded-xl border border-teal-200 dark:border-teal-800/80 bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 text-teal-800 dark:text-teal-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-2xs shrink-0"
             title="Mở Trợ lý ảo Kho & Báo Cáo (Chat Web & Telegram Bot)"
           >
             <Bot className="w-3.5 h-3.5 shrink-0 text-teal-600 dark:text-teal-400" />
-            <span className="hidden sm:inline">Trợ lý Kho & Chat</span>
+            <span className="hidden 2xl:inline whitespace-nowrap">Trợ lý Kho</span>
           </button>
 
           <button
             type="button"
             onClick={() => setShowKiotVietSyncModal(true)}
-            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-2xs ${
+            className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-2xs shrink-0 ${
               inventoryData.kiotvietSyncLocked
                 ? 'border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
                 : 'border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/40 hover:bg-rose-100 text-rose-700 dark:text-rose-300'
@@ -5991,8 +5994,8 @@ export default function App() {
             ) : (
               <Zap className="w-3.5 h-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
             )}
-            <span className="hidden sm:inline">
-              {inventoryData.kiotvietSyncLocked ? 'KiotViet (Đã khóa)' : 'Sync KiotViet (F9)'}
+            <span className="hidden 2xl:inline whitespace-nowrap">
+              {inventoryData.kiotvietSyncLocked ? 'KiotViet (Đã khóa)' : 'Sync KiotViet'}
             </span>
           </button>
 
@@ -6000,7 +6003,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => handleSelectTab('ocr')}
-              className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-xs"
+              className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-xs shrink-0"
             >
               <Camera className="w-3.5 h-3.5 shrink-0" />
               <span>+ Tạo Bill</span>
@@ -6011,7 +6014,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => handleSelectTab('table_orders')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer shadow-xs ${
+            className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer shadow-xs shrink-0 ${
               activeTab === 'table_orders'
                 ? 'border-indigo-500 bg-indigo-600 text-white shadow-md'
                 : 'border-indigo-200 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40'
@@ -6019,7 +6022,7 @@ export default function App() {
             title="Mở nhanh Order Món Theo Bàn (Báo Bếp & In Bill)"
           >
             <UtensilsCrossed className="w-3.5 h-3.5 shrink-0" />
-            <span className="hidden sm:inline">Order Bàn</span>
+            <span className="hidden 2xl:inline whitespace-nowrap">Order Bàn</span>
           </button>
 
           <button
@@ -6028,7 +6031,7 @@ export default function App() {
               const next = toggleSoundMute();
               setSoundMutedState(next);
             }}
-            className={`p-2 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+            className={`p-1.5 sm:p-2 rounded-xl border text-xs font-semibold inline-flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
               soundMuted
                 ? 'border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
                 : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
@@ -6040,9 +6043,9 @@ export default function App() {
             }
           >
             {soundMuted ? (
-              <VolumeX className="w-3.5 h-3.5 text-rose-500" />
+              <VolumeX className="w-3.5 h-3.5 shrink-0 text-rose-500" />
             ) : (
-              <Volume2 className="w-3.5 h-3.5 text-emerald-500" />
+              <Volume2 className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
             )}
           </button>
 
@@ -6056,7 +6059,7 @@ export default function App() {
                 handleSelectTab('gamification');
               }
             }}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-black inline-flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer shadow-xs ${
+            className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-xs font-black inline-flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer shadow-xs shrink-0 ${
               activeTab === 'gamification'
                 ? 'border-amber-400 bg-amber-500 text-white shadow-md'
                 : 'border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100'
@@ -6067,24 +6070,24 @@ export default function App() {
                 : 'Mở nhanh Khu Vui Chơi, Vòng Quay & Sơ Đồ Bàn'
             }
           >
-            <span className="text-sm">🎡</span>
-            <span className="hidden sm:inline">
+            <span className="text-sm shrink-0">🎡</span>
+            <span className="hidden 2xl:inline whitespace-nowrap">
               {activeTab === 'gamification'
                 ? `Về ${allNavItems.find((n) => n.id === previousTab)?.shortLabel || 'Trang chủ'}`
-                : 'Vui chơi & Bàn'}
+                : 'Vui chơi'}
             </span>
           </button>
 
           <button
             type="button"
             onClick={() => setDarkMode((d) => !d)}
-            className="p-2 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
+            className="p-1.5 sm:p-2 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer shrink-0"
             title={darkMode ? 'Chế độ Sáng' : 'Chế độ Tối'}
           >
             {darkMode ? (
-              <Sun className="w-4 h-4 text-amber-400" />
+              <Sun className="w-4 h-4 shrink-0 text-amber-400" />
             ) : (
-              <Moon className="w-4 h-4" />
+              <Moon className="w-4 h-4 shrink-0" />
             )}
           </button>
         </div>
@@ -6848,16 +6851,16 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
                     {/* Ô 1: Tiền mặt ca bán sau khoản trừ */}
                     <div
-                      className={`p-3.5 sm:p-4 rounded-xl border flex flex-col justify-between transition-all ${
+                      className={`p-3.5 sm:p-4 rounded-xl border flex flex-col justify-between transition-all min-w-0 ${
                         financialSummary.netCashRevenue < 0
                           ? 'border-2 border-rose-500/80 bg-rose-50/90 dark:bg-rose-950/50 shadow-xs ring-1 ring-rose-500/20'
                           : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40'
                       }`}
                     >
                       <div>
-                        <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-start justify-between gap-1.5 min-w-0">
                           <div
-                            className={`text-xs ${
+                            className={`text-xs min-w-0 leading-tight ${
                               financialSummary.netCashRevenue < 0
                                 ? 'font-bold text-rose-900 dark:text-rose-200 flex items-center gap-1.5'
                                 : 'font-semibold text-slate-700 dark:text-slate-300'
@@ -6866,10 +6869,10 @@ export default function App() {
                             {financialSummary.netCashRevenue < 0 && (
                               <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                             )}
-                            <span>1. Tiền Mặt Bán Ngày (Sau Trừ Chi)</span>
+                            <span className="break-words">1. Tiền Mặt Bán Ngày (Sau Trừ Chi)</span>
                           </div>
                           {financialSummary.netCashRevenue < 0 && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white animate-pulse">
+                            <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white animate-pulse whitespace-nowrap">
                               ÂM TIỀN
                             </span>
                           )}
@@ -6885,7 +6888,7 @@ export default function App() {
                         </div>
                       </div>
                       <div className="mt-2 space-y-1">
-                        <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                        <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 break-words">
                           {formatVND(financialSummary.grossCashFromBills)} bill - {formatVND(financialSummary.totalDeductions)} chi
                         </div>
                         {financialSummary.netCashRevenue < 0 && (
@@ -6897,18 +6900,18 @@ export default function App() {
                     </div>
 
                     {/* Ô 2: CÔNG NỢ ĐÃ THANH TOÁN */}
-                    <div className="p-3.5 sm:p-4 rounded-xl border border-amber-300/80 dark:border-amber-800/80 bg-amber-50/60 dark:bg-amber-950/30 flex flex-col justify-between">
+                    <div className="p-3.5 sm:p-4 rounded-xl border border-amber-300/80 dark:border-amber-800/80 bg-amber-50/60 dark:bg-amber-950/30 flex flex-col justify-between min-w-0">
                       <div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                            <span>2. Công Nợ Đã Thanh Toán</span>
+                        <div className="flex items-start justify-between gap-1.5 min-w-0">
+                          <span className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1 min-w-0 leading-tight">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                            <span className="break-words">2. Công Nợ Đã Thanh Toán</span>
                           </span>
                           {financialSummary.periodDebtPayments.length > 0 && (
                             <button
                               type="button"
                               onClick={() => setShowSettledDebtsModal(true)}
-                              className="text-[10px] font-bold text-amber-700 dark:text-amber-300 hover:underline cursor-pointer"
+                              className="shrink-0 text-[10px] font-bold text-amber-700 dark:text-amber-300 hover:underline cursor-pointer whitespace-nowrap"
                             >
                               Chi tiết ({financialSummary.periodDebtPayments.length})
                             </button>
@@ -6918,37 +6921,37 @@ export default function App() {
                           {formatVND(financialSummary.periodSettledDebtTotal)}
                         </div>
                       </div>
-                      <div className="mt-2 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                      <div className="mt-2 text-[11px] font-mono text-slate-600 dark:text-slate-400 break-words">
                         TM: {formatVND(financialSummary.periodDebtCashCollected)} · CK: {formatVND(financialSummary.periodDebtTransferCollected)}
                       </div>
                     </div>
 
                     {/* Ô 3: TỔNG TIỀN MẶT THỰC NHẬN SAU KHI THU CÔNG NỢ */}
                     <div
-                      className={`p-3.5 sm:p-4 rounded-xl border-2 shadow-xs flex flex-col justify-between transition-all ${
+                      className={`p-3.5 sm:p-4 rounded-xl border-2 shadow-xs flex flex-col justify-between transition-all min-w-0 ${
                         financialSummary.totalNetCashAfterDebt < 0
                           ? 'border-rose-500/80 bg-rose-50/80 dark:bg-rose-950/40 ring-1 ring-rose-500/20'
                           : 'border-emerald-500/80 bg-emerald-50/70 dark:bg-emerald-950/40 ring-1 ring-emerald-500/20'
                       }`}
                     >
                       <div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-start justify-between gap-1.5 min-w-0">
                           <span
-                            className={`text-xs font-bold flex items-center gap-1 ${
+                            className={`text-xs font-bold flex items-center gap-1 min-w-0 leading-tight ${
                               financialSummary.totalNetCashAfterDebt < 0
                                 ? 'text-rose-900 dark:text-rose-200'
                                 : 'text-emerald-900 dark:text-emerald-200'
                             }`}
                           >
                             {financialSummary.totalNetCashAfterDebt < 0 ? (
-                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                             ) : (
-                              <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                              <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                             )}
-                            <span>3. Tiền Mặt Sau Thu Nợ</span>
+                            <span className="break-words">3. Tiền Mặt Sau Thu Nợ</span>
                           </span>
                           <span
-                            className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                            className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap ${
                               financialSummary.totalNetCashAfterDebt < 0
                                 ? 'bg-rose-600 text-white'
                                 : 'bg-emerald-600 text-white'
@@ -6969,7 +6972,7 @@ export default function App() {
                       </div>
                       <div className="mt-2 space-y-1">
                         <div
-                          className={`text-[11px] font-mono ${
+                          className={`text-[11px] font-mono break-words ${
                             financialSummary.totalNetCashAfterDebt < 0
                               ? 'text-rose-700 dark:text-rose-300'
                               : 'text-emerald-700 dark:text-emerald-300'
@@ -6978,7 +6981,7 @@ export default function App() {
                           = {formatVND(financialSummary.netCashRevenue)} ca bán + {formatVND(financialSummary.periodDebtCashCollected)} thu nợ TM
                         </div>
                         {financialSummary.totalNetCashAfterDebt < 0 && (
-                          <div className="p-1 rounded bg-rose-100 dark:bg-rose-900/50 text-[10px] text-rose-800 dark:text-rose-200 font-semibold">
+                          <div className="p-1 rounded bg-rose-100 dark:bg-rose-900/50 text-[10px] text-rose-800 dark:text-rose-200 font-semibold leading-tight">
                             ⚠️ Két tiền mặt hiện tại bị âm {formatVND(Math.abs(financialSummary.totalNetCashAfterDebt))}!
                           </div>
                         )}
@@ -6986,16 +6989,16 @@ export default function App() {
                     </div>
 
                     {/* Ô 4: Doanh thu chuyển khoản */}
-                    <div className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 flex flex-col justify-between">
+                    <div className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 flex flex-col justify-between min-w-0">
                       <div>
-                        <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                        <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 leading-tight break-words">
                           4. Doanh Thu Chuyển Khoản
                         </div>
                         <div className="mt-1.5 text-lg sm:text-xl font-bold font-mono text-blue-600 dark:text-blue-400">
                           {formatVND(financialSummary.netTransferRevenue)}
                         </div>
                       </div>
-                      <div className="mt-2 text-[11px] text-slate-500">
+                      <div className="mt-2 text-[11px] text-slate-500 break-words">
                         {financialSummary.periodDebtTransferCollected > 0
                           ? `${formatVND(financialSummary.grossTransferFromBills)} bill + ${formatVND(financialSummary.periodDebtTransferCollected)} thu nợ CK`
                           : 'Toàn bộ bill CK / VietQR'}
@@ -7003,16 +7006,16 @@ export default function App() {
                     </div>
 
                     {/* Ô 5: Tổng ngày thực thu */}
-                    <div className="p-3.5 sm:p-4 rounded-xl border-2 border-blue-500/60 bg-blue-50/40 dark:bg-blue-950/30 flex flex-col justify-between">
+                    <div className="p-3.5 sm:p-4 rounded-xl border-2 border-blue-500/60 bg-blue-50/40 dark:bg-blue-950/30 flex flex-col justify-between min-w-0">
                       <div>
-                        <div className="text-xs font-bold text-slate-900 dark:text-white">
+                        <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight break-words">
                           5. TỔNG NGÀY THỰC THU
                         </div>
                         <div className="mt-1.5 text-xl sm:text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
                           {formatVND(financialSummary.netDayTotal)}
                         </div>
                       </div>
-                      <div className="mt-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      <div className="mt-2 text-[11px] font-mono text-slate-500 dark:text-slate-400 break-words">
                         Tiền mặt sau nợ ({formatVND(financialSummary.totalNetCashAfterDebt)}) + CK ({formatVND(financialSummary.netTransferRevenue)})
                       </div>
                     </div>
@@ -7695,7 +7698,7 @@ export default function App() {
 
                     {/* Desktop Table (>= md) */}
                     <div className="hidden md:block border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
-                      <table className="w-full text-left border-collapse text-xs">
+                      <table className="w-full min-w-[760px] text-left border-collapse text-xs">
                         <thead>
                           <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                             <th className="py-2.5 px-3 w-10 text-center">
@@ -9036,26 +9039,65 @@ export default function App() {
       {/* Floating Scroll-to-Top Button */}
       <ScrollToTopButton />
 
-      {/* Nút Nhập Bill Ghim Chắc Chắn Ở Giữa Cạnh Phải Màn Hình (Req 1: nằm ở tất cả các trang ngoại trừ trang nhap-bill) */}
-      {activeTab !== 'ocr' && (
-        <button
-          type="button"
-          onClick={() => setShowQuickBillModal(true)}
-          className="fixed right-0 top-1/2 -translate-y-1/2 z-[60] bg-gradient-to-b from-emerald-500 via-teal-600 to-emerald-700 hover:from-emerald-600 hover:to-teal-800 text-white shadow-[0_4px_24px_rgba(16,185,129,0.5)] rounded-l-2xl py-4 px-2.5 flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l-2 border-emerald-200/90 hover:-translate-x-1.5 transition-all select-none group"
-          title="Nhập Hóa Đơn / Tạo Bill Mới"
-        >
-          <div className="w-7 h-7 rounded-full bg-white text-emerald-600 flex items-center justify-center shrink-0 shadow-sm group-hover:scale-110 transition-transform">
-            <Receipt className="w-4.5 h-4.5 text-emerald-600" />
-          </div>
-          <span
-            className="text-[11px] font-extrabold tracking-widest text-white select-none uppercase drop-shadow-xs py-1"
-            style={{ writingMode: 'vertical-rl' }}
+      {/* 2 Nút Ghim Cạnh Phải Màn Hình: + NHẬP BILL & + KHOẢN TRỪ TRONG NGÀY
+          - Nếu đang ở tab khoản trừ (deductions) => chỉ hiện nút nhập bill
+          - Nếu đang ở tab nhập bill (ocr) => chỉ hiện nút khoản trừ
+          - Còn lại (trang chủ, dashboard, các tab khác) => hiện 2 nút cùng lúc */}
+      {(() => {
+        const showQuickBill = activeTab !== 'ocr';
+        const showQuickDeduction = activeTab !== 'deductions';
+
+        if (!showQuickBill && !showQuickDeduction) return null;
+
+        return (
+          <aside
+            aria-label="Thao tác nhanh cạnh phải màn hình"
+            className="fixed right-0 top-1/2 -translate-y-1/2 z-[60] flex flex-col items-end gap-2.5 sm:gap-3 pointer-events-none select-none"
           >
-            + NHẬP BILL
-          </span>
-          <div className="w-2 h-2 rounded-full bg-emerald-200 animate-pulse mt-0.5" />
-        </button>
-      )}
+            {/* Nút 1: + NHẬP BILL (Màu xanh Emerald) */}
+            {showQuickBill && (
+              <button
+                type="button"
+                onClick={() => setShowQuickBillModal(true)}
+                className="pointer-events-auto bg-gradient-to-b from-emerald-500 via-teal-600 to-emerald-700 hover:from-emerald-600 hover:to-teal-800 text-white shadow-[0_4px_24px_rgba(16,185,129,0.5)] rounded-l-2xl py-3.5 sm:py-4 px-2 sm:px-2.5 flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l-2 border-emerald-200/90 hover:-translate-x-1.5 transition-all select-none group shrink-0"
+                title="Nhập Hóa Đơn / Tạo Bill Mới"
+              >
+                <div className="w-6.5 h-6.5 sm:w-7 sm:h-7 rounded-full bg-white text-emerald-600 flex items-center justify-center shrink-0 shadow-sm group-hover:scale-110 transition-transform">
+                  <Receipt className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-emerald-600" />
+                </div>
+                <span
+                  className="text-[10px] sm:text-[11px] font-extrabold tracking-widest text-white select-none uppercase drop-shadow-xs py-1 whitespace-nowrap"
+                  style={{ writingMode: 'vertical-rl' }}
+                >
+                  + NHẬP BILL
+                </span>
+                <div className="w-2 h-2 rounded-full bg-emerald-200 animate-pulse mt-0.5" />
+              </button>
+            )}
+
+            {/* Nút 2: + KHOẢN TRỪ TRONG NGÀY (Màu cam Amber) */}
+            {showQuickDeduction && (
+              <button
+                type="button"
+                onClick={() => setShowQuickDeductionModal(true)}
+                className="pointer-events-auto bg-gradient-to-b from-amber-500 via-amber-600 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white shadow-[0_4px_24px_rgba(217,119,6,0.45)] rounded-l-2xl py-3.5 sm:py-4 px-2 sm:px-2.5 flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l-2 border-amber-200/80 hover:-translate-x-1.5 transition-all select-none group shrink-0"
+                title="Nhập Khoản Trừ / Khoản Chi Trong Ngày"
+              >
+                <div className="w-6.5 h-6.5 sm:w-7 sm:h-7 rounded-full bg-white text-amber-600 flex items-center justify-center shrink-0 shadow-sm group-hover:scale-110 transition-transform">
+                  <MinusCircle className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-amber-600" />
+                </div>
+                <span
+                  className="text-[10px] sm:text-[10.5px] font-extrabold tracking-widest text-white select-none uppercase drop-shadow-xs py-1 whitespace-nowrap"
+                  style={{ writingMode: 'vertical-rl' }}
+                >
+                  + KHOẢN TRỪ
+                </span>
+                <div className="w-2 h-2 rounded-full bg-amber-200 animate-pulse mt-0.5" />
+              </button>
+            )}
+          </aside>
+        );
+      })()}
 
       {/* POPUP MODAL: NHẬP BILL THANH TOÁN (Req 1) */}
       {showQuickBillModal && (
@@ -9122,6 +9164,17 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* POPUP MODAL: NHẬP KHOẢN TRỪ TRONG NGÀY */}
+      <QuickDeductionModal
+        isOpen={showQuickDeductionModal}
+        onClose={() => setShowQuickDeductionModal(false)}
+        todayStr={todayStr}
+        categories={effectiveDeductionCategories}
+        formatVND={formatVND}
+        onSaveDeduction={handleAddExpenseDeduction}
+        onNavigateToTab={() => handleSelectTab('deductions')}
+      />
     </div>
   );
 }

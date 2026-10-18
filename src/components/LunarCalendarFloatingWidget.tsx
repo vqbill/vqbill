@@ -629,12 +629,12 @@ export const LunarCalendarFloatingWidget: React.FC<
         id="lunar-calendar-floating-btn"
         type="button"
         onClick={() => setIsOpen((v) => !v)}
-        className="fixed bottom-16 lg:bottom-4 right-3 sm:right-6 z-40 flex items-center gap-1.5 sm:gap-2 px-2.5 py-1 sm:px-3 sm:py-1 rounded-full bg-[#1c1c1a]/92 dark:bg-[#fbfbfa]/92 text-white dark:text-[#1c1c1a] shadow-md border border-[#e4e4db]/60 dark:border-[#2c2c28]/60 cursor-pointer select-none backdrop-blur-md transition-all hover:scale-105 active:scale-95 group"
+        className="fixed bottom-16 lg:bottom-4 right-3 sm:right-6 z-40 flex items-center gap-1.5 sm:gap-2 px-2.5 py-1 sm:px-3 sm:py-1 rounded-full bg-[#1c1c1a]/92 dark:bg-[#fbfbfa]/92 text-white dark:text-[#1c1c1a] shadow-md border border-[#e4e4db]/60 dark:border-[#2c2c28]/60 cursor-pointer select-none backdrop-blur-md transition-all hover:scale-105 active:scale-95 group whitespace-nowrap shrink-0"
         title="Xem Lịch Âm Dương & Ghi chú sự kiện"
         aria-label="Xem Lịch Âm Dương"
       >
         <Clock className="w-3.5 h-3.5 text-emerald-400 dark:text-emerald-600 shrink-0 group-hover:rotate-6 transition-transform" />
-        <div className="text-[10px] sm:text-[10.5px] font-mono leading-tight text-left">
+        <div className="text-[10px] sm:text-[10.5px] font-mono leading-tight text-left whitespace-nowrap shrink-0">
           <div className="font-bold tabular-nums flex items-center gap-1">
             <span>
               {liveTimeStr} · {liveSolarStr}

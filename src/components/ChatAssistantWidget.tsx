@@ -633,14 +633,14 @@ export const ChatAssistantWidget: React.FC<ChatAssistantWidgetProps> = ({
         <button
           type="button"
           onClick={onToggle}
-          className="fixed bottom-26 lg:bottom-14 right-3 sm:right-6 z-40 px-2.5 py-1.5 sm:px-3 sm:py-1.5 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-[11px] sm:text-xs shadow-md flex items-center gap-1.5 sm:gap-2 transition-all transform hover:scale-105 active:scale-95 cursor-pointer border border-emerald-400/30"
+          className="fixed bottom-26 lg:bottom-14 right-3 sm:right-6 z-40 px-2.5 py-1.5 sm:px-3 sm:py-1.5 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-[11px] sm:text-xs shadow-md flex items-center gap-1.5 sm:gap-2 transition-all transform hover:scale-105 active:scale-95 cursor-pointer border border-emerald-400/30 whitespace-nowrap shrink-0 select-none"
           title="Mở Trợ Lý Ảo Kho & Báo Cáo (Hỗ trợ chat Web & Telegram)"
         >
-          <div className="relative">
-            <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-pulse" />
+          <div className="relative shrink-0">
+            <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-pulse shrink-0" />
             <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-400 rounded-full border border-white" />
           </div>
-          <span className="hidden sm:inline">Trợ Lý Kho & Báo Cáo</span>
+          <span className="hidden sm:inline whitespace-nowrap">Trợ Lý Kho & Báo Cáo</span>
         </button>
       )}
 

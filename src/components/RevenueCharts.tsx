@@ -945,29 +945,29 @@ export const RevenueTrendChart: React.FC<RevenueTrendChartProps> = ({
 
       {/* 4 Quick Stat Badges */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3 text-xs font-mono">
-        <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/60 dark:bg-emerald-950/20">
-          <span className="text-[11px] font-sans text-emerald-800 dark:text-emerald-300 block font-medium">
+        <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/60 dark:bg-emerald-950/20 min-w-0">
+          <span className="text-[11px] font-sans text-emerald-800 dark:text-emerald-300 block font-medium truncate">
             Tổng {metricMode === 'gross' ? 'tổng bán' : 'thực thu'} kỳ này:
           </span>
-          <strong className="text-base sm:text-lg font-bold text-emerald-700 dark:text-emerald-300">
+          <strong className="text-base sm:text-lg font-bold text-emerald-700 dark:text-emerald-300 truncate block">
             {formatVND(metricMode === 'gross' ? totalPeriodGross : totalPeriodNet)}
           </strong>
         </div>
 
-        <div className="p-3 rounded-xl border border-blue-200 dark:border-blue-900/50 bg-blue-50/60 dark:bg-blue-950/20">
-          <span className="text-[11px] font-sans text-blue-800 dark:text-blue-300 block font-medium">
+        <div className="p-3 rounded-xl border border-blue-200 dark:border-blue-900/50 bg-blue-50/60 dark:bg-blue-950/20 min-w-0">
+          <span className="text-[11px] font-sans text-blue-800 dark:text-blue-300 block font-medium truncate">
             Trung bình mỗi ngày:
           </span>
-          <strong className="text-base sm:text-lg font-bold text-blue-700 dark:text-blue-300">
+          <strong className="text-base sm:text-lg font-bold text-blue-700 dark:text-blue-300 truncate block">
             {formatVND(metricMode === 'gross' ? avgPerDayGross : avgPerDayNet)}
           </strong>
         </div>
 
-        <div className="p-3 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-950/20">
-          <span className="text-[11px] font-sans text-amber-800 dark:text-amber-300 block font-medium">
+        <div className="p-3 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-950/20 min-w-0">
+          <span className="text-[11px] font-sans text-amber-800 dark:text-amber-300 block font-medium truncate">
             Ngày cao nhất kỳ:
           </span>
-          <div className="flex items-center gap-1.5 mt-0.5">
+          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
             <strong className="text-sm sm:text-base font-bold text-amber-700 dark:text-amber-300">
               {peakDay.dayLabel} ({peakDay.shortDate})
             </strong>
@@ -977,11 +977,11 @@ export const RevenueTrendChart: React.FC<RevenueTrendChartProps> = ({
           </div>
         </div>
 
-        <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex flex-col justify-between">
-          <span className="text-[11px] font-sans text-slate-500 dark:text-slate-400 block font-medium">
+        <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex flex-col justify-between min-w-0">
+          <span className="text-[11px] font-sans text-slate-500 dark:text-slate-400 block font-medium truncate">
             Tăng trưởng đầu vs cuối kỳ:
           </span>
-          <div className="flex items-center gap-1.5 mt-0.5">
+          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
             {overallGrowthPct >= 0 ? (
               <span className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 font-bold text-sm">
                 <ArrowUpRight className="w-4 h-4" />

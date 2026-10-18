@@ -778,27 +778,27 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
               </div>
 
               <div
-                className={`p-3.5 rounded-xl transition-all ${
+                className={`p-3.5 rounded-xl transition-all min-w-0 ${
                   todayStats.netCash < 0
                     ? 'bg-rose-50/90 dark:bg-rose-950/50 border-2 border-rose-500/80 shadow-xs ring-1 ring-rose-500/20'
                     : 'bg-slate-50/80 dark:bg-slate-950/50 border border-slate-200/70 dark:border-slate-800/80'
                 }`}
               >
-                <div className="flex items-center justify-between gap-1">
+                <div className="flex items-start justify-between gap-1.5 min-w-0">
                   <div
-                    className={`text-xs ${
+                    className={`text-xs min-w-0 leading-tight ${
                       todayStats.netCash < 0
                         ? 'text-rose-900 dark:text-rose-200 font-bold flex items-center gap-1.5'
-                        : 'text-slate-500 dark:text-slate-400'
+                        : 'text-slate-500 dark:text-slate-400 font-medium'
                     }`}
                   >
                     {todayStats.netCash < 0 && (
                       <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                     )}
-                    <span>Tiền Mặt Bán Ngày (Sau Khoản Trừ)</span>
+                    <span className="break-words">Tiền Mặt Bán Ngày (Sau Khoản Trừ)</span>
                   </div>
                   {todayStats.netCash < 0 && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white animate-pulse">
+                    <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white animate-pulse whitespace-nowrap">
                       ÂM TIỀN
                     </span>
                   )}
@@ -823,41 +823,41 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
               </div>
 
               {todayStats.todaySettledDebt > 0 && (
-                <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800">
-                  <div className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 min-w-0">
+                  <div className="text-xs font-semibold text-amber-800 dark:text-amber-300 leading-tight">
                     Công Nợ Đã Thu Hôm Nay
                   </div>
                   <div className="mt-1 text-lg sm:text-xl font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400">
                     +{formatVND(todayStats.todaySettledDebt)}
                   </div>
-                  <div className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400 font-mono">
+                  <div className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400 font-mono truncate">
                     TM: {formatVND(todayStats.todayDebtCash)} · CK: {formatVND(todayStats.todayDebtTransfer)}
                   </div>
                 </div>
               )}
 
               <div
-                className={`p-3.5 rounded-xl border-2 shadow-xs ${
+                className={`p-3.5 rounded-xl border-2 shadow-xs min-w-0 ${
                   todayStats.totalCashAfterDebt < 0
                     ? 'bg-rose-50/90 dark:bg-rose-950/50 border-rose-500/80 ring-1 ring-rose-500/20'
                     : 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-500/70'
                 }`}
               >
-                <div className="text-xs font-bold flex items-center justify-between">
+                <div className="text-xs font-bold flex items-start justify-between gap-1.5 min-w-0">
                   <span
-                    className={
+                    className={`leading-tight min-w-0 ${
                       todayStats.totalCashAfterDebt < 0
                         ? 'text-rose-900 dark:text-rose-200 flex items-center gap-1.5'
                         : 'text-emerald-900 dark:text-emerald-200'
-                    }
+                    }`}
                   >
                     {todayStats.totalCashAfterDebt < 0 && (
                       <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                     )}
-                    <span>Tiền Mặt Thực Nhận (Két Cuối Ca)</span>
+                    <span className="break-words">Tiền Mặt Thực Nhận (Két Cuối Ca)</span>
                   </span>
                   {todayStats.totalCashAfterDebt < 0 && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-rose-600 text-white">
+                    <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-rose-600 text-white whitespace-nowrap">
                       Két Đang Âm
                     </span>
                   )}

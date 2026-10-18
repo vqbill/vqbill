@@ -3024,30 +3024,6 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         </div>
       )}
 
-      {/* Nút Khoản Trừ ở giữa bên cạnh phải theo đúng yêu cầu & ảnh mẫu của người dùng (ẩn khi ở trong popup modal) */}
-      {!isModal && (
-        <button
-          type="button"
-          onClick={() => {
-            setQuickDeductionDate(billDate || todayBusinessStr);
-            setShowQuickDeductionModal(true);
-          }}
-          className="fixed right-0 top-1/2 -translate-y-1/2 z-50 bg-gradient-to-b from-amber-500 via-amber-600 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white shadow-[0_4px_24px_rgba(217,119,6,0.45)] rounded-l-2xl py-4 px-2.5 flex flex-col items-center gap-2 cursor-pointer border-t border-b border-l-2 border-amber-200/80 hover:-translate-x-1.5 transition-all select-none group"
-          title="Nhập khoản chi / khoản trừ trong ngày"
-        >
-          <div className="w-7 h-7 rounded-full bg-white text-amber-600 flex items-center justify-center shrink-0 shadow-sm group-hover:scale-110 transition-transform">
-            <MinusCircle className="w-4.5 h-4.5 text-amber-600" />
-          </div>
-          <span
-            className="text-[11px] font-extrabold tracking-widest text-white select-none uppercase drop-shadow-xs py-1"
-            style={{ writingMode: 'vertical-rl' }}
-          >
-            + KHOẢN TRỪ TRONG NGÀY
-          </span>
-          <div className="w-2 h-2 rounded-full bg-amber-200 animate-pulse mt-0.5" />
-        </button>
-      )}
-
       {/* POPUP MODAL: NHẬP KHOẢN TRỪ TRONG NGÀY (REQ 4) */}
       {showQuickDeductionModal && (
         <div
