@@ -6989,22 +6989,6 @@ export default function App() {
                         {p.label}
                       </button>
                     ))}
-
-                    {/* Nút hình tròn xem khoản trừ tương ứng kỳ xem */}
-                    <button
-                      type="button"
-                      onClick={() => setShowPeriodDeductionsModal(true)}
-                      className="w-8 h-8 rounded-full bg-gradient-to-tr from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 text-white flex items-center justify-center transition-all shadow-sm hover:shadow-md hover:scale-105 active:scale-95 cursor-pointer relative group shrink-0 ml-1"
-                      title={`Bấm vào nút tròn để xem ${periodDeductions.length} khoản trừ của ${periodLabel} (Tổng: -${formatVND(financialSummary.totalDeductions)})`}
-                      aria-label="Xem khoản trừ theo kỳ"
-                    >
-                      <Receipt className="w-4 h-4" />
-                      {periodDeductions.length > 0 && (
-                        <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] px-1 rounded-full bg-slate-900 text-white text-[9px] font-mono font-bold flex items-center justify-center border border-white dark:border-slate-800">
-                          {periodDeductions.length}
-                        </span>
-                      )}
-                    </button>
                   </div>
 
                   {/* Date Stepper with Single Day Shift ← → (Tiến / Lùi ngày giống bên Khoản trừ theo thời gian) */}
@@ -9664,11 +9648,11 @@ export default function App() {
         }}
       />
 
-      {/* NÚT HÌNH TRÒN NỔI XEM KHOẢN TRỪ TƯƠNG ỨNG KỲ XEM TRÊN TRANG TỔNG QUAN DOANH THU */}
-      {activeTab === 'dashboard' && allowedTabs.includes('dashboard') && (
+      {/* NÚT HÌNH TRÒN NỔI XEM KHOẢN TRỪ (Hiển thị ở TẤT CẢ các tab, chỉ không hiển thị tại tab Khoản trừ) */}
+      {activeTab !== 'deductions' && (
         <aside
           aria-label="Nút tròn xem khoản trừ theo kỳ"
-          className="fixed bottom-20 right-4 sm:bottom-24 sm:right-6 z-40 select-none"
+          className="fixed bottom-48 lg:bottom-36 right-3 sm:right-6 z-40 select-none"
         >
           <button
             type="button"

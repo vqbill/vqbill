@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Calendar,
   X,
   Sparkles,
   RotateCcw,
