@@ -12,6 +12,11 @@ import {
   CheckSquare,
   Square,
   UtensilsCrossed,
+  MinusCircle,
+  UserCheck,
+  Check,
+  Banknote,
+  CreditCard,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -20,6 +25,7 @@ import {
   PaymentType,
   DebtStatus,
   ConfirmRequestOptions,
+  DeductionRecord,
 } from '../types';
 import {
   formatVND,
@@ -32,6 +38,7 @@ import {
   isFoodDiscountEligible,
   calculateItemsDiscountSummary,
   getBillPaymentBreakdown,
+  extractBillTableName,
 } from '../utils/parser';
 
 interface BillEditModalProps {
@@ -40,8 +47,18 @@ interface BillEditModalProps {
   categories: string[];
   products: ProductRecord[];
   debtors?: string[];
+  billDeductions?: DeductionRecord[];
   onClose: () => void;
   onSaveEdit: (updatedBill: BillRecord, updatedItems: BillItemRecord[]) => Promise<void>;
+  onSaveCommissionPayout?: (params: {
+    bill: BillRecord;
+    deductionDate: string;
+    amount: number;
+    recipientName: string;
+    paymentMethod: 'cash' | 'transfer';
+    note: string;
+    existingDeductionId?: string;
+  }) => Promise<void>;
   onDeleteBill?: (bill: BillRecord) => void;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
@@ -52,8 +69,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   categories,
   products,
   debtors = [],
+  billDeductions = [],
   onClose,
   onSaveEdit,
+  onSaveCommissionPayout,
   onDeleteBill,
   requestConfirm,
 }) => {
@@ -77,29 +96,49 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   const [editItems, setEditItems] = useState<BillItemRecord[]>(() =>
     initialItems.map((it) => ({ ...it }))
   );
-  const [discountAmount, setDiscountAmount] = useState<number>(bill.discountAmount || 0);
-  const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>('percent');
-  const [discountPercent, setDiscountPercent] = useState<number>(() => {
-    if (bill.discountAmount && bill.discountAmount > 0) {
-      const foodTotal = initialItems
-        .filter((it) => it.isDiscountEligible !== false)
-        .reduce((s, it) => s + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
-      if (foodTotal > 0) {
-        const pct = Math.round((bill.discountAmount / foodTotal) * 100);
-        if (pct > 0 && Math.abs(Math.round((foodTotal * pct) / 100) - bill.discountAmount) <= 1000) {
+  const initialDiscount = Math.max(0, Math.round(Number(bill.discountAmount) || 0));
+  const [discountAmount, setDiscountAmount] = useState<number>(initialDiscount);
+
+  const initialFoodTotal = React.useMemo(() => {
+    return initialItems
+      .filter((it) => it.isDiscountEligible !== false)
+      .reduce((s, it) => s + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
+  }, [initialItems]);
+
+  const initialAllTotal = React.useMemo(() => {
+    return initialItems.reduce((s, it) => s + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
+  }, [initialItems]);
+
+  const detectedPercent = React.useMemo(() => {
+    if (initialDiscount > 0) {
+      const noteMatch = (bill.note || '').match(/\[CK\s*(\d+)%/i);
+      if (noteMatch && noteMatch[1]) {
+        return Math.min(100, Math.max(1, Number(noteMatch[1]) || 0));
+      }
+      if (initialFoodTotal > 0) {
+        const pct = Math.round((initialDiscount / initialFoodTotal) * 100);
+        if (pct > 0 && Math.abs(Math.round((initialFoodTotal * pct) / 100) - initialDiscount) <= 1000) {
           return pct;
         }
       }
-      const allTotal = initialItems.reduce((s, it) => s + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
-      if (allTotal > 0) {
-        const pct = Math.round((bill.discountAmount / allTotal) * 100);
-        if (pct > 0 && Math.abs(Math.round((allTotal * pct) / 100) - bill.discountAmount) <= 1000) {
+      if (initialAllTotal > 0) {
+        const pct = Math.round((initialDiscount / initialAllTotal) * 100);
+        if (pct > 0 && Math.abs(Math.round((initialAllTotal * pct) / 100) - initialDiscount) <= 1000) {
           return pct;
         }
       }
     }
     return 0;
+  }, [initialDiscount, bill.note, initialFoodTotal, initialAllTotal]);
+
+  const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>(() => {
+    if (initialDiscount > 0 && detectedPercent === 0) {
+      return 'amount';
+    }
+    return 'percent';
   });
+
+  const [discountPercent, setDiscountPercent] = useState<number>(detectedPercent);
   const [paymentType, setPaymentType] = useState<PaymentType>(bill.paymentType);
   const [splitCashInput, setSplitCashInput] = useState<string>(() => {
     if (bill.paymentType === 'split') {
@@ -145,6 +184,32 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
 
   const computedTotal = Math.max(0, subtotalAmount - safeDiscount);
 
+  const existingCommission = React.useMemo(() => {
+    return (billDeductions || []).find(
+      (d) =>
+        d.billId === bill.id &&
+        (d.category.includes('đặt bàn') ||
+          d.category.includes('Hoa hồng') ||
+          d.productName.includes('đặt bàn') ||
+          d.productName.includes('hoa hồng') ||
+          (d.note || '').includes('đặt bàn'))
+    );
+  }, [billDeductions, bill.id]);
+
+  const [autoPayCommission, setAutoPayCommission] = useState<boolean>(() => {
+    return Boolean(existingCommission);
+  });
+  const [commissionRecipient, setCommissionRecipient] = useState<string>(() => {
+    if (existingCommission) {
+      const match = (existingCommission.productName || '').match(/Chi hoa hồng.*?:\s*(.+)$/i);
+      if (match && match[1]) return match[1].trim();
+    }
+    const bookerMatch = (bill.note || '').match(/(?:người đặt|đặt bàn|ck đặt bàn|hoa hồng)\s*[:\-]\s*([^\-·,\n]+)/i);
+    if (bookerMatch && bookerMatch[1]) return bookerMatch[1].trim();
+    return bill.debtorName || '';
+  });
+  const [commissionPaymentMethod, setCommissionPaymentMethod] = useState<'cash' | 'transfer'>('cash');
+
   const handleSelectFoodOnlyForDiscount = () => {
     setEditItems((prev) =>
       prev.map((it) => ({
@@ -187,6 +252,8 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     if (safeDiscount !== Math.max(0, Math.round(Number(bill.discountAmount) || 0))) {
       return true;
     }
+    if (autoPayCommission !== Boolean(existingCommission)) return true;
+    if (autoPayCommission && existingCommission && existingCommission.amount !== safeDiscount) return true;
     if (paymentType !== bill.paymentType) return true;
     if (paymentType === 'split') {
       const currentCash = Math.max(0, Number(splitCashInput) || 0);
@@ -430,10 +497,13 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               c = Math.round(computedTotal / 2);
               t = computedTotal - c;
             } else if (c + t !== computedTotal) {
-              if (c > 0 && t === 0) {
+              if (c <= computedTotal && c > 0) {
                 t = Math.max(0, computedTotal - c);
-              } else if (t > 0 && c === 0) {
+              } else if (t <= computedTotal && t > 0) {
                 c = Math.max(0, computedTotal - t);
+              } else {
+                c = Math.round(computedTotal / 2);
+                t = computedTotal - c;
               }
             }
             finalPaidCash = c;
@@ -441,13 +511,18 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
           }
 
           let finalNote = note.trim();
-          if (discountMode === 'percent' && discountPercent > 0 && safeDiscount > 0) {
-            const ckTag = `[CK ${discountPercent}% món ăn: -${formatVND(safeDiscount)}]`;
-            if (/\[CK\s*\d+%.*?\]/i.test(finalNote)) {
-              finalNote = finalNote.replace(/\[CK\s*\d+%.*?\]/i, ckTag);
-            } else if (!finalNote.includes(`CK ${discountPercent}%`)) {
+          if (safeDiscount > 0) {
+            const ckTag =
+              discountMode === 'percent' && discountPercent > 0
+                ? `[CK ${discountPercent}% món ăn: -${formatVND(safeDiscount)}]`
+                : `[CK đặt bàn: -${formatVND(safeDiscount)}]`;
+            if (/\[CK\s*.*?\]/i.test(finalNote)) {
+              finalNote = finalNote.replace(/\[CK\s*.*?\]/i, ckTag);
+            } else {
               finalNote = finalNote ? `${finalNote} · ${ckTag}` : ckTag;
             }
+          } else if (/\[CK\s*.*?\]/i.test(finalNote)) {
+            finalNote = finalNote.replace(/\[CK\s*.*?\]/i, '').replace(/\s*·\s*$/, '').trim();
           }
 
           if (finalPaymentType === 'split' && finalPaidCash !== undefined && finalPaidTransfer !== undefined) {
@@ -489,6 +564,17 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
           }));
 
           await onSaveEdit(updatedBill, normalizedItems);
+          if (autoPayCommission && safeDiscount > 0 && onSaveCommissionPayout) {
+            await onSaveCommissionPayout({
+              bill: updatedBill,
+              deductionDate: billDate,
+              amount: safeDiscount,
+              recipientName: commissionRecipient.trim() || 'Người đặt bàn',
+              paymentMethod: commissionPaymentMethod,
+              note: `Chiết khấu / Hoa hồng gửi người đặt bàn (${extractBillTableName(updatedBill) || updatedBill.tableName || 'Bàn'}) · Hóa đơn ${updatedBill.billCode}`,
+              existingDeductionId: existingCommission?.id,
+            });
+          }
           onClose();
         } finally {
           setIsSaving(false);
@@ -600,6 +686,11 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                     type="button"
                     onClick={() => {
                       setDiscountMode('percent');
+                      if (discountPercent === 0 && safeDiscount > 0) {
+                        const base = discountItemsSummary.eligibleTotal || subtotalAmount || 1;
+                        const approx = Math.min(100, Math.max(1, Math.round((safeDiscount / base) * 100)));
+                        setDiscountPercent(approx);
+                      }
                     }}
                     className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
                       discountMode === 'percent'
@@ -613,7 +704,9 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                     type="button"
                     onClick={() => {
                       setDiscountMode('amount');
-                      setDiscountAmount(safeDiscount);
+                      if (safeDiscount > 0 && (!discountAmount || discountAmount === 0)) {
+                        setDiscountAmount(safeDiscount);
+                      }
                     }}
                     className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
                       discountMode === 'amount'
@@ -667,7 +760,12 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                         <button
                           key={pct}
                           type="button"
-                          onClick={() => setDiscountPercent(pct)}
+                          onClick={() => {
+                            setDiscountPercent(pct);
+                            if (discountItemsSummary.eligibleCount === 0) {
+                              handleSelectFoodOnlyForDiscount();
+                            }
+                          }}
                           className={`h-7 px-2 rounded-lg text-xs font-bold font-mono border transition-colors cursor-pointer ${
                             discountPercent === pct
                               ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
@@ -683,9 +781,13 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                           min={0}
                           max={100}
                           value={discountPercent || ''}
-                          onChange={(e) =>
-                            setDiscountPercent(Math.min(100, Math.max(0, Number(e.target.value) || 0)))
-                          }
+                          onChange={(e) => {
+                            const val = Math.min(100, Math.max(0, Number(e.target.value) || 0));
+                            setDiscountPercent(val);
+                            if (val > 0 && discountItemsSummary.eligibleCount === 0) {
+                              handleSelectFoodOnlyForDiscount();
+                            }
+                          }}
                           placeholder="%"
                           className="w-full h-7 pl-2 pr-4 text-xs font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                         />
@@ -708,7 +810,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                       </span>
                       {discountItemsSummary.nonEligibleTotal > 0 && (
                         <span className="text-slate-400">
-                          Không CK (Bia/nước/bún): {formatVND(discountItemsSummary.nonEligibleTotal)}
+                          Không CK (Bia/nước/khăn): {formatVND(discountItemsSummary.nonEligibleTotal)}
                         </span>
                       )}
                     </div>
@@ -724,26 +826,126 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <input
-                      type="number"
-                      min={0}
-                      step={1000}
-                      value={discountAmount || ''}
-                      onChange={(e) =>
-                        setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
-                      }
-                      placeholder="Nhập số tiền giảm giá trực tiếp..."
-                      className="w-full h-9 pl-3 pr-8 text-xs font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                    />
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
-                      ₫
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        value={discountAmount || ''}
+                        onChange={(e) =>
+                          setDiscountAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))
+                        }
+                        placeholder="Nhập số tiền giảm giá trực tiếp..."
+                        className="w-full h-9 pl-3 pr-8 text-xs font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
+                        ₫
+                      </span>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">
+                      -{formatVND(safeDiscount)}
                     </span>
                   </div>
-                  <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">
-                    -{formatVND(safeDiscount)}
-                  </span>
+                  {/* Quick VND presets */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] font-semibold text-slate-500">Mức nhanh:</span>
+                    {[50000, 100000, 200000, 500000].map((amt) => (
+                      <button
+                        key={amt}
+                        type="button"
+                        onClick={() => setDiscountAmount(amt)}
+                        className={`px-2 py-0.5 rounded-lg text-[11px] font-mono font-semibold border transition-colors cursor-pointer ${
+                          discountAmount === amt
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500'
+                        }`}
+                      >
+                        {formatVND(amt)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Commission / Gửi tiền chiết khấu cho người đặt bàn */}
+              {safeDiscount > 0 && (
+                <div className="pt-2.5 border-t border-emerald-200/60 dark:border-emerald-900/40 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={autoPayCommission}
+                        onChange={(e) => setAutoPayCommission(e.target.checked)}
+                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
+                      />
+                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                        {existingCommission
+                          ? 'Đồng bộ khoản chi hoa hồng/chiết khấu vào Sổ quỹ ngày'
+                          : 'Ghi nhận khoản chi gửi tiền chiết khấu cho người đặt bàn vào Sổ quỹ'}
+                      </span>
+                    </label>
+                    {existingCommission && (
+                      <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md">
+                        Đã có khoản chi: {formatVND(existingCommission.amount)}
+                      </span>
+                    )}
+                  </div>
+
+                  {autoPayCommission && (
+                    <div className="p-2.5 rounded-xl bg-white/90 dark:bg-slate-900/90 border border-emerald-300 dark:border-emerald-800 space-y-2 text-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 block mb-0.5">
+                            Người nhận (Tên / SĐT người đặt bàn):
+                          </span>
+                          <input
+                            type="text"
+                            value={commissionRecipient}
+                            onChange={(e) => setCommissionRecipient(e.target.value)}
+                            placeholder="VD: Anh Nam đặt bàn 0988xxx..."
+                            className="w-full h-8 px-2.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 block mb-0.5">
+                            Hình thức chi tiền:
+                          </span>
+                          <div className="grid grid-cols-2 gap-1.5 h-8">
+                            <button
+                              type="button"
+                              onClick={() => setCommissionPaymentMethod('cash')}
+                              className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer ${
+                                commissionPaymentMethod === 'cash'
+                                  ? 'bg-amber-500 text-white border-amber-500 shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              Tiền mặt
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCommissionPaymentMethod('transfer')}
+                              className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer ${
+                                commissionPaymentMethod === 'transfer'
+                                  ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              Chuyển khoản
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
+                        <Check className="w-3.5 h-3.5 shrink-0" />
+                        <span>
+                          Sẽ tự động {existingCommission ? 'cập nhật' : 'tạo'} khoản chi <strong>-{formatVND(safeDiscount)}</strong> (Nhóm: Hoa hồng / Chiết khấu đặt bàn) vào ngày {billDate}.
+                        </span>
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

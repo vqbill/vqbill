@@ -63,6 +63,8 @@ import {
   VolumeX,
   AlertTriangle,
   MinusCircle,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import {
   auth,
@@ -121,6 +123,7 @@ import {
   getBillPaymentBreakdown,
   mergeInventoryData,
   shiftDateByDays,
+  extractSalaryAdvancesFromDeductions,
 } from './utils/parser';
 import {
   fetchGeminiStatus,
@@ -204,6 +207,8 @@ import { ConfirmDialogModal } from './components/ConfirmDialogModal';
 import { GeminiKeyBar } from './components/GeminiKeyBar';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { QuickDeductionModal } from './components/QuickDeductionModal';
+import { CommissionPayoutModal } from './components/CommissionPayoutModal';
+import { PeriodDeductionsModal } from './components/PeriodDeductionsModal';
 import { ChatAssistantWidget } from './components/ChatAssistantWidget';
 import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { GamificationTab } from './components/GamificationTab';
@@ -525,6 +530,7 @@ export default function App() {
   const [showKiotVietSyncModal, setShowKiotVietSyncModal] = useState<boolean>(false);
   const [showQuickBillModal, setShowQuickBillModal] = useState<boolean>(false);
   const [showQuickDeductionModal, setShowQuickDeductionModal] = useState<boolean>(false);
+  const [commissionBill, setCommissionBill] = useState<BillRecord | null>(null);
   const [showSettledDebtsModal, setShowSettledDebtsModal] = useState<boolean>(false);
   const [preselectedReturnBillId, setPreselectedReturnBillId] = useState<string | null>(
     null
@@ -669,6 +675,113 @@ export default function App() {
   const [sidebarExtLinksDropdownOpen, setSidebarExtLinksDropdownOpen] = useState(false);
   const [mobileMoreDropdownOpen, setMobileMoreDropdownOpen] = useState(false);
   const [mobileExtLinksDropdownOpen, setMobileExtLinksDropdownOpen] = useState(false);
+
+  // Modal xem danh sách khoản trừ tương ứng kỳ đang xem (Button hình tròn trên Tổng quan doanh thu)
+  const [showPeriodDeductionsModal, setShowPeriodDeductionsModal] = useState(false);
+
+  // Quản lý độ rộng & phóng to thu nhỏ Danh mục quản lý (Sidebar resizer & zoom)
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('vqbill_sidebar_width');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= 72 && val <= 480) return val;
+      }
+    } catch {
+      // ignore
+    }
+    return 256;
+  });
+
+  const [sidebarZoom, setSidebarZoom] = useState<'compact' | 'normal' | 'expanded'>(() => {
+    try {
+      const saved = localStorage.getItem('vqbill_sidebar_zoom');
+      if (saved === 'compact' || saved === 'normal' || saved === 'expanded') return saved;
+    } catch {
+      // ignore
+    }
+    return 'normal';
+  });
+
+  const isResizingSidebarRef = useRef(false);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+
+  const handleSidebarZoomIn = useCallback(() => {
+    setSidebarWidth((w) => {
+      const next = Math.min(460, Math.max(w + 35, 290));
+      try {
+        localStorage.setItem('vqbill_sidebar_width', String(next));
+      } catch {}
+      return next;
+    });
+    setSidebarZoom('expanded');
+    try {
+      localStorage.setItem('vqbill_sidebar_zoom', 'expanded');
+    } catch {}
+  }, []);
+
+  const handleSidebarZoomOut = useCallback(() => {
+    setSidebarWidth((w) => {
+      const next = Math.max(180, Math.min(w - 35, 220));
+      try {
+        localStorage.setItem('vqbill_sidebar_width', String(next));
+      } catch {}
+      return next;
+    });
+    setSidebarZoom('compact');
+    try {
+      localStorage.setItem('vqbill_sidebar_zoom', 'compact');
+    } catch {}
+  }, []);
+
+  const handleSidebarResetWidth = useCallback(() => {
+    setSidebarWidth(256);
+    setSidebarZoom('normal');
+    try {
+      localStorage.setItem('vqbill_sidebar_width', '256');
+      localStorage.setItem('vqbill_sidebar_zoom', 'normal');
+    } catch {}
+  }, []);
+
+  const handleStartSidebarResize = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    isResizingSidebarRef.current = true;
+    setIsResizingSidebar(true);
+
+    const onMove = (moveEvent: MouseEvent | TouchEvent) => {
+      if (!isResizingSidebarRef.current) return;
+      const clientX = 'touches' in moveEvent ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      let targetWidth = clientX;
+      if (targetWidth < 120) {
+        targetWidth = 72;
+      } else {
+        targetWidth = Math.min(480, Math.max(180, targetWidth));
+      }
+      setSidebarWidth(targetWidth);
+    };
+
+    const onUp = () => {
+      if (isResizingSidebarRef.current) {
+        isResizingSidebarRef.current = false;
+        setIsResizingSidebar(false);
+        setSidebarWidth((curr) => {
+          try {
+            localStorage.setItem('vqbill_sidebar_width', String(curr));
+          } catch {}
+          return curr;
+        });
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        window.removeEventListener('touchmove', onMove);
+        window.removeEventListener('touchend', onUp);
+      }
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchend', onUp);
+  }, []);
 
   // Sync Gemini Key on boot with backend or static fallback (Netlify / Vercel safe)
   useEffect(() => {
@@ -2048,6 +2161,25 @@ export default function App() {
   const totalBillPages = Math.max(1, Math.ceil(displayedBills.length / BILLS_PER_PAGE));
   const safeBillCurrentPage = Math.min(Math.max(1, billCurrentPage), totalBillPages);
 
+  // Ref container & scroll handler for bills table (Requirement: Tự động scroll lên trên khi bấm qua trang tiếp theo 2, 3, 4)
+  const billsTableContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBillsTableTop = useCallback(() => {
+    if (billsTableContainerRef.current) {
+      billsTableContainerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      window.scrollTo({ top: 380, behavior: 'smooth' });
+    }
+  }, []);
+
+  const prevBillPageRef = useRef<number>(safeBillCurrentPage);
+  useEffect(() => {
+    if (activeTab === 'dashboard' && prevBillPageRef.current !== safeBillCurrentPage) {
+      prevBillPageRef.current = safeBillCurrentPage;
+      scrollToBillsTableTop();
+    }
+  }, [safeBillCurrentPage, activeTab, scrollToBillsTableTop]);
+
   const paginatedBills = useMemo(() => {
     const startIndex = (safeBillCurrentPage - 1) * BILLS_PER_PAGE;
     return displayedBills.slice(startIndex, startIndex + BILLS_PER_PAGE);
@@ -2969,12 +3101,17 @@ export default function App() {
     subtotalAmount?: number;
     discountAmount?: number;
     items: ExtractedBillItem[];
+    commissionPayout?: {
+      enabled: boolean;
+      recipientName: string;
+      paymentMethod: 'cash' | 'transfer';
+      amount: number;
+    };
   }) => {
     setWorkspaceInitialized(true);
     const itemCats = params.items
       .map((it) => it.category?.trim())
       .filter(Boolean);
-
     let mergedCatsToSave: string[] | null = null;
     setCategories((prev) => {
       const next = [...prev];
@@ -3038,6 +3175,28 @@ export default function App() {
       ])
     );
     setProducts(dedupeRecordsById(res.updatedProducts));
+
+    if (params.commissionPayout?.enabled && (params.discountAmount || 0) > 0) {
+      const catName = 'Hoa hồng / Chiết khấu đặt bàn';
+      const tableLabel = extractBillTableName(res.bill) || res.bill.tableName || 'Bàn';
+      const expenseTitle = `Chi hoa hồng đặt bàn: ${params.commissionPayout.recipientName || tableLabel}`;
+      const noteStr = `[Gửi tiền chiết khấu đặt bàn] ${params.commissionPayout.recipientName || ''} · ${tableLabel} (${res.bill.billCode}) - ${params.commissionPayout.paymentMethod === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'}`;
+      saveExpenseDeductionToCloud({
+        ownerId,
+        deductionDate: res.bill.billDate,
+        billDate: res.bill.billDate,
+        billCode: res.bill.billCode,
+        customBillId: res.bill.id,
+        expenseTitle,
+        category: catName,
+        quantity: 1,
+        unitPrice: params.commissionPayout.amount,
+        amount: params.commissionPayout.amount,
+        note: noteStr,
+      }).then((ded) => {
+        setDeductions((prev) => dedupeRecordsById([ded, ...prev.filter((d) => d.id !== ded.id)]));
+      }).catch(() => {});
+    }
 
     try {
       const localSnap = loadLocalMirror(ownerId);
@@ -3997,6 +4156,9 @@ export default function App() {
     unitPrice?: number;
     amount: number;
     note: string;
+    billCode?: string;
+    billDate?: string;
+    customBillId?: string;
   }) => {
     setWorkspaceInitialized(true);
     const cleanCat = (params.category || 'Khác').trim() || 'Khác';
@@ -4014,6 +4176,7 @@ export default function App() {
       setInventoryData(nextInv);
       saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
     }
+
     const ded = await saveExpenseDeductionToCloud({
       ownerId,
       deductionDate: params.deductionDate,
@@ -4023,15 +4186,58 @@ export default function App() {
       unitPrice: params.unitPrice ?? params.amount,
       amount: params.amount,
       note: params.note,
+      billCode: params.billCode,
+      billDate: params.billDate,
+      customBillId: params.customBillId,
     });
     isApplyingRemoteSnapshotRef.current = false;
     setDeductions((prev) =>
       dedupeRecordsById([ded, ...prev.filter((d) => d.id !== ded.id)])
     );
+
+    // Tự động đồng bộ sang Sổ ứng lương nhân viên nếu khoản trừ thuộc loại ứng lương
+    const isSalaryAdvCat =
+      cleanCat.toLowerCase().includes('ứng lương') ||
+      cleanCat.toLowerCase().includes('ung luong') ||
+      params.expenseTitle.toLowerCase().startsWith('ứng lương') ||
+      params.billCode === 'UNG-LUONG' ||
+      ded.id.startsWith('ded_sal_');
+
+    if (isSalaryAdvCat) {
+      const advInfo = extractSalaryAdvancesFromDeductions(
+        [ded],
+        inventoryData.salaryAdvances || [],
+        effectiveEmployees
+      );
+      if (advInfo.mergedAdvances.length > 0) {
+        const nextAdvances = dedupeRecordsById([
+          ...advInfo.mergedAdvances,
+          ...(inventoryData.salaryAdvances || []),
+        ]);
+        const nextEmployees =
+          advInfo.inferredEmployees.length > 0
+            ? dedupeRecordsById([
+                ...(inventoryData.employees || []),
+                ...advInfo.inferredEmployees,
+              ])
+            : inventoryData.employees;
+        const nextInv: WorkspaceInventoryData = {
+          ...inventoryData,
+          employees: nextEmployees,
+          salaryAdvances: nextAdvances,
+          updatedAtMs: Date.now(),
+        };
+        setInventoryData(nextInv);
+        saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+      }
+    }
+
     showToast(
       `Đã lưu khoản trừ "${params.expenseTitle}" (-${formatVND(
         params.amount
-      )}) vào ngày ${params.deductionDate}!`
+      )}) vào ngày ${params.deductionDate}!${
+        isSalaryAdvCat ? ' (Đã đồng bộ sang Sổ ứng lương nhân viên)' : ''
+      }`
     );
   };
 
@@ -4119,6 +4325,62 @@ export default function App() {
         params.amount
       )}, ngày ${params.deductionDate})!`
     );
+  };
+
+  const handleSaveCommissionPayout = async (params: {
+    bill: BillRecord;
+    deductionDate: string;
+    amount: number;
+    recipientName: string;
+    paymentMethod: 'cash' | 'transfer';
+    note: string;
+    existingDeductionId?: string;
+  }) => {
+    setWorkspaceInitialized(true);
+    const catName = 'Hoa hồng / Chiết khấu đặt bàn';
+    const tableLabel = extractBillTableName(params.bill) || params.bill.tableName || 'Bàn';
+    const recipient = params.recipientName.trim() || 'Người đặt bàn';
+    const expenseTitle = `Chi hoa hồng đặt bàn: ${recipient}`;
+    const cleanNote =
+      params.note.trim() ||
+      `[Chiết khấu đặt bàn] ${recipient} · ${tableLabel} (${params.bill.billCode}) - ${
+        params.paymentMethod === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'
+      }`;
+
+    if (params.existingDeductionId) {
+      const existing = deductions.find((d) => d.id === params.existingDeductionId);
+      if (existing) {
+        await handleUpdateExpenseDeduction({
+          deduction: existing,
+          deductionDate: params.deductionDate,
+          expenseTitle,
+          category: catName,
+          quantity: 1,
+          unitPrice: params.amount,
+          amount: params.amount,
+          note: cleanNote,
+        });
+        showToast(
+          `Đã cập nhật khoản chi hoa hồng đặt bàn -${formatVND(
+            params.amount
+          )} cho ${recipient}!`
+        );
+        return;
+      }
+    }
+
+    await handleAddExpenseDeduction({
+      deductionDate: params.deductionDate,
+      billDate: params.bill.billDate,
+      billCode: params.bill.billCode,
+      customBillId: params.bill.id,
+      expenseTitle,
+      category: catName,
+      quantity: 1,
+      unitPrice: params.amount,
+      amount: params.amount,
+      note: cleanNote,
+    });
   };
 
   const handleRecordReturn = async (params: {
@@ -4253,6 +4515,19 @@ export default function App() {
   // ============================================================================
   // EMPLOYEE & SALARY ADVANCE HANDLERS (AUTO-SYNCED WITH KHOẢN TRỪ & STAFF ACCOUNTS)
   // ============================================================================
+  // Tự động phát hiện và trích xuất tất cả các khoản ứng lương từ Khoản trừ (deductions)
+  // để đảm bảo 100% phiếu ứng lương cũ và mới đều hiển thị trong Lịch sử ứng lương theo tháng
+  const {
+    mergedAdvances: extractedSalaryAdvances,
+    inferredEmployees: autoInferredEmployees,
+  } = useMemo(() => {
+    return extractSalaryAdvancesFromDeductions(
+      deductions,
+      inventoryData.salaryAdvances || [],
+      inventoryData.employees || []
+    );
+  }, [deductions, inventoryData.salaryAdvances, inventoryData.employees]);
+
   const effectiveEmployees = useMemo<EmployeeRecord[]>(() => {
     const deletedSet = new Set<string>([
       ...Array.from(getDeletedEmployeeIds()),
@@ -4261,19 +4536,74 @@ export default function App() {
     const baseList = Array.isArray(inventoryData.employees)
       ? inventoryData.employees
       : buildInitialInventoryData(todayStr, yesterdayStr).employees || [];
-    return baseList.filter(
+
+    // Tự động bổ sung nhân viên từ các phiếu ứng lương cũ/mới nếu chưa có trong danh sách
+    const allEmps = [...baseList];
+    const knownNames = new Set(
+      baseList.map((e) => e.fullName.trim().toLowerCase())
+    );
+    for (const inf of autoInferredEmployees) {
+      if (
+        !knownNames.has(inf.fullName.trim().toLowerCase()) &&
+        !deletedSet.has(inf.id) &&
+        !deletedSet.has(sanitizeId(inf.id))
+      ) {
+        allEmps.push(inf);
+        knownNames.add(inf.fullName.trim().toLowerCase());
+      }
+    }
+
+    return allEmps.filter(
       (emp) => !deletedSet.has(emp.id) && !deletedSet.has(sanitizeId(emp.id))
     );
   }, [
     inventoryData.employees,
     inventoryData.deletedEmployeeIds,
+    autoInferredEmployees,
     todayStr,
     yesterdayStr,
   ]);
 
   const effectiveSalaryAdvances = useMemo<SalaryAdvanceRecord[]>(() => {
-    return dedupeRecordsById(inventoryData.salaryAdvances || []);
-  }, [inventoryData.salaryAdvances]);
+    return extractedSalaryAdvances;
+  }, [extractedSalaryAdvances]);
+
+  // Tự động lưu các phiếu ứng lương đã trích xuất từ Khoản trừ vào inventoryData.salaryAdvances
+  // để dữ liệu cũ luôn đồng bộ trên tất cả thiết bị và Cloud
+  useEffect(() => {
+    const curAdvances = inventoryData.salaryAdvances || [];
+    const missingAdvances = extractedSalaryAdvances.filter(
+      (ext) =>
+        !curAdvances.some(
+          (cur) =>
+            cur.id === ext.id ||
+            (cur.linkedDeductionId &&
+              ext.linkedDeductionId &&
+              cur.linkedDeductionId === ext.linkedDeductionId)
+        )
+    );
+    if (missingAdvances.length > 0 && workspaceInitialized) {
+      const nextAdvances = dedupeRecordsById([
+        ...curAdvances,
+        ...missingAdvances,
+      ]);
+      const nextInv: WorkspaceInventoryData = {
+        ...inventoryData,
+        employees: effectiveEmployees,
+        salaryAdvances: nextAdvances,
+        updatedAtMs: Date.now(),
+      };
+      setInventoryData(nextInv);
+      saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+    }
+  }, [
+    extractedSalaryAdvances,
+    inventoryData.salaryAdvances,
+    effectiveEmployees,
+    workspaceInitialized,
+    ownerId,
+    rolePermissions,
+  ]);
 
   const handleAddEmployee = async (
     empInput: EmployeeUpsertInput
@@ -6231,25 +6561,60 @@ export default function App() {
 
       {/* Workspace Layout: Sidebar + Main Viewport */}
       <div className="flex-1 flex">
-        {/* Desktop Sidebar (256px) */}
-        <aside className="hidden lg:flex w-64 shrink-0 border-r border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex-col justify-between p-4">
+        {/* Desktop Sidebar (Tùy chỉnh kéo dãn khoảng cách & phóng to thu nhỏ) */}
+        <aside
+          style={{ width: `${sidebarWidth}px` }}
+          className={`hidden lg:flex shrink-0 relative border-r border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex-col justify-between ${
+            sidebarWidth < 120 ? 'p-2' : sidebarZoom === 'compact' ? 'p-3 space-y-4' : 'p-4 space-y-6'
+          } ${isResizingSidebar ? 'select-none pointer-events-none' : ''}`}
+        >
           <div className="space-y-6">
             <div className="space-y-1">
               <div className="px-3 pb-1 flex items-center justify-between">
-                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                  Danh mục quản lý
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 truncate">
+                  {sidebarWidth < 120 ? 'Quản lý' : 'Danh mục quản lý'}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => handleSelectTab('menu_settings')}
-                  title="Cài đặt các tính năng hiển thị trong Danh mục quản lý"
-                  className="text-[10px] font-mono font-semibold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <SlidersHorizontal className="w-3 h-3" />
-                  <span>
-                    {primaryNavItems.length}/{navItems.length}
-                  </span>
-                </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  {/* Nút thu nhỏ danh mục */}
+                  <button
+                    type="button"
+                    onClick={handleSidebarZoomOut}
+                    className="p-1 rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                    title="Thu nhỏ độ rộng danh mục quản lý (Zoom Out)"
+                  >
+                    <ZoomOut className="w-3 h-3" />
+                  </button>
+                  {/* Nút phóng to danh mục */}
+                  <button
+                    type="button"
+                    onClick={handleSidebarZoomIn}
+                    className="p-1 rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                    title="Phóng to / Mở rộng danh mục quản lý (Zoom In)"
+                  >
+                    <ZoomIn className="w-3 h-3" />
+                  </button>
+                  {sidebarWidth !== 256 && (
+                    <button
+                      type="button"
+                      onClick={handleSidebarResetWidth}
+                      className="text-[10px] font-mono px-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      title="Về độ rộng chuẩn (256px)"
+                    >
+                      ↺
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleSelectTab('menu_settings')}
+                    title="Cài đặt các tính năng hiển thị trong Danh mục quản lý"
+                    className="text-[10px] font-mono font-semibold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-0.5 cursor-pointer ml-0.5"
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    <span>
+                      {primaryNavItems.length}/{navItems.length}
+                    </span>
+                  </button>
+                </div>
               </div>
               {primaryNavItems.map((item) => (
                 <button
@@ -6498,6 +6863,38 @@ export default function App() {
               </button>
             )}
           </div>
+
+          {/* CÁI ĐƯỜNG DỌC MŨI TÊN CHỈ VÀO: KÉO DÃN KHOẢNG CÁCH, PHÓNG TO THU NHỎ DANH MỤC QUẢN LÝ */}
+          <div
+            onMouseDown={handleStartSidebarResize}
+            onTouchStart={handleStartSidebarResize}
+            onDoubleClick={handleSidebarResetWidth}
+            className={`pointer-events-auto absolute top-0 -right-2.5 bottom-0 w-5 z-40 cursor-col-resize flex items-center justify-center select-none group transition-colors ${
+              isResizingSidebar ? 'bg-emerald-500/10' : 'hover:bg-emerald-500/10'
+            }`}
+            title="Kéo sang trái/phải để kéo dãn độ rộng danh mục quản lý · Nhấp đúp để đặt lại mặc định (256px)"
+          >
+            {/* Visual Highlight vertical line */}
+            <div
+              className={`w-[2px] h-full transition-colors ${
+                isResizingSidebar
+                  ? 'bg-emerald-500 shadow-sm'
+                  : 'bg-transparent group-hover:bg-emerald-500'
+              }`}
+            />
+            {/* Pill drag grip handle centered on the vertical line */}
+            <div
+              className={`absolute top-1/2 -translate-y-1/2 w-4 h-11 rounded-full border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-md flex flex-col items-center justify-center gap-0.5 transition-all ${
+                isResizingSidebar
+                  ? 'scale-110 border-emerald-500 ring-2 ring-emerald-400/40 bg-emerald-50 dark:bg-emerald-950 opacity-100'
+                  : 'opacity-60 group-hover:opacity-100 group-hover:scale-105 group-hover:border-emerald-500'
+              }`}
+            >
+              <div className="w-1.5 h-0.5 rounded-full bg-slate-400 group-hover:bg-emerald-600" />
+              <div className="w-1.5 h-0.5 rounded-full bg-slate-400 group-hover:bg-emerald-600" />
+              <div className="w-1.5 h-0.5 rounded-full bg-slate-400 group-hover:bg-emerald-600" />
+            </div>
+          </div>
         </aside>
 
         {/* Main Content Viewport */}
@@ -6592,6 +6989,22 @@ export default function App() {
                         {p.label}
                       </button>
                     ))}
+
+                    {/* Nút hình tròn xem khoản trừ tương ứng kỳ xem */}
+                    <button
+                      type="button"
+                      onClick={() => setShowPeriodDeductionsModal(true)}
+                      className="w-8 h-8 rounded-full bg-gradient-to-tr from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 text-white flex items-center justify-center transition-all shadow-sm hover:shadow-md hover:scale-105 active:scale-95 cursor-pointer relative group shrink-0 ml-1"
+                      title={`Bấm vào nút tròn để xem ${periodDeductions.length} khoản trừ của ${periodLabel} (Tổng: -${formatVND(financialSummary.totalDeductions)})`}
+                      aria-label="Xem khoản trừ theo kỳ"
+                    >
+                      <Receipt className="w-4 h-4" />
+                      {periodDeductions.length > 0 && (
+                        <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] px-1 rounded-full bg-slate-900 text-white text-[9px] font-mono font-bold flex items-center justify-center border border-white dark:border-slate-800">
+                          {periodDeductions.length}
+                        </span>
+                      )}
+                    </button>
                   </div>
 
                   {/* Date Stepper with Single Day Shift ← → (Tiến / Lùi ngày giống bên Khoản trừ theo thời gian) */}
@@ -6772,15 +7185,38 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs">
-                  <div className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
-                    3. Khoản trừ (Chi trong ngày)
+                <div className="p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs relative group">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
+                      3. Khoản trừ (Chi trong ngày)
+                    </div>
+                    {/* Button hình tròn xem khoản trừ tương ứng kỳ xem */}
+                    <button
+                      type="button"
+                      onClick={() => setShowPeriodDeductionsModal(true)}
+                      className="w-7 h-7 rounded-full bg-rose-100 hover:bg-rose-200 dark:bg-rose-950/70 dark:hover:bg-rose-900 text-rose-600 dark:text-rose-300 border border-rose-300 dark:border-rose-800 flex items-center justify-center transition-all hover:scale-110 active:scale-95 shadow-2xs cursor-pointer group/btn"
+                      title={`Bấm vào nút tròn để xem ${periodDeductions.length} khoản trừ của ${periodLabel} (Tổng: -${formatVND(financialSummary.totalDeductions)})`}
+                      aria-label="Xem chi tiết khoản trừ kỳ xem"
+                    >
+                      <Receipt className="w-3.5 h-3.5 group-hover/btn:scale-110 transition-transform" />
+                    </button>
                   </div>
-                  <div className="mt-1 text-base sm:text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 truncate">
+                  <div
+                    onClick={() => setShowPeriodDeductionsModal(true)}
+                    className="mt-1 text-base sm:text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 truncate cursor-pointer hover:underline"
+                    title="Bấm để xem danh sách chi tiết các khoản trừ trong kỳ này"
+                  >
                     -{formatVND(financialSummary.totalDeductions)}
                   </div>
-                  <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                    {periodDeductions.length} khoản chi tiêu ngày
+                  <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
+                    <span>{periodDeductions.length} khoản chi tiêu ngày</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowPeriodDeductionsModal(true)}
+                      className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold hover:underline cursor-pointer"
+                    >
+                      Xem chi tiết →
+                    </button>
                   </div>
                 </div>
 
@@ -7154,7 +7590,11 @@ export default function App() {
               </div>
 
               {/* Row 4: Advanced Search & Bills List */}
-              <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
+              <div
+                ref={billsTableContainerRef}
+                id="dashboard-bills-table"
+                className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4 scroll-mt-20"
+              >
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                   <div>
                     <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
@@ -7222,7 +7662,10 @@ export default function App() {
                       <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 px-2 py-1.5 rounded-xl text-xs font-semibold shrink-0 border border-slate-200/80 dark:border-slate-700 shadow-2xs">
                         <button
                           type="button"
-                          onClick={() => setBillCurrentPage((p) => Math.max(1, p - 1))}
+                          onClick={() => {
+                            setBillCurrentPage((p) => Math.max(1, p - 1));
+                            scrollToBillsTableTop();
+                          }}
                           disabled={safeBillCurrentPage <= 1}
                           className="p-1 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
                           title="Trang trước"
@@ -7234,7 +7677,10 @@ export default function App() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => setBillCurrentPage((p) => Math.min(totalBillPages, p + 1))}
+                          onClick={() => {
+                            setBillCurrentPage((p) => Math.min(totalBillPages, p + 1));
+                            scrollToBillsTableTop();
+                          }}
                           disabled={safeBillCurrentPage >= totalBillPages}
                           className="p-1 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
                           title="Trang tiếp theo"
@@ -8006,7 +8452,7 @@ export default function App() {
                             type="button"
                             onClick={() => {
                               setBillCurrentPage(1);
-                              window.scrollTo({ top: 300, behavior: 'smooth' });
+                              scrollToBillsTableTop();
                             }}
                             disabled={safeBillCurrentPage <= 1}
                             className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-700 dark:text-slate-300 cursor-pointer transition-colors"
@@ -8020,7 +8466,7 @@ export default function App() {
                             type="button"
                             onClick={() => {
                               setBillCurrentPage((p) => Math.max(1, p - 1));
-                              window.scrollTo({ top: 300, behavior: 'smooth' });
+                              scrollToBillsTableTop();
                             }}
                             disabled={safeBillCurrentPage <= 1}
                             className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1 cursor-pointer transition-colors"
@@ -8064,7 +8510,7 @@ export default function App() {
                                     type="button"
                                     onClick={() => {
                                       setBillCurrentPage(pageNum);
-                                      window.scrollTo({ top: 300, behavior: 'smooth' });
+                                      scrollToBillsTableTop();
                                     }}
                                     className={`min-w-8 h-8 px-2 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
                                       isActive
@@ -8084,7 +8530,7 @@ export default function App() {
                             type="button"
                             onClick={() => {
                               setBillCurrentPage((p) => Math.min(totalBillPages, p + 1));
-                              window.scrollTo({ top: 300, behavior: 'smooth' });
+                              scrollToBillsTableTop();
                             }}
                             disabled={safeBillCurrentPage >= totalBillPages}
                             className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-slate-700 dark:text-slate-300 inline-flex items-center gap-1 cursor-pointer transition-colors"
@@ -8099,7 +8545,7 @@ export default function App() {
                             type="button"
                             onClick={() => {
                               setBillCurrentPage(totalBillPages);
-                              window.scrollTo({ top: 300, behavior: 'smooth' });
+                              scrollToBillsTableTop();
                             }}
                             disabled={safeBillCurrentPage >= totalBillPages}
                             className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-700 dark:text-slate-300 cursor-pointer transition-colors"
@@ -8127,6 +8573,7 @@ export default function App() {
               onDeleteDebtor={handleDeleteDebtor}
               deductionCategories={effectiveDeductionCategories}
               onAddExpenseDeduction={handleAddExpenseDeduction}
+              onQuickPayCommission={(b) => setCommissionBill(b)}
               autoAddProducts={autoAddProducts}
               onToggleAutoAddProducts={setAutoAddProducts}
               onSaveExtractedBill={handleSaveExtractedBill}
@@ -8750,6 +9197,7 @@ export default function App() {
                 handleSelectTab('returns');
               }}
               onDeleteBill={(b) => handleConfirmDeleteBill(b)}
+              onQuickPayCommission={(b) => setCommissionBill(b)}
               onOpenSplitMerge={
                 canWrite ? (b) => setSplitMergeBill(b) : undefined
               }
@@ -8782,8 +9230,10 @@ export default function App() {
           categories={effectiveCategories}
           products={products}
           debtors={effectiveDebtors}
+          billDeductions={effectiveDeductions.filter((d) => d.billId === editingBill.id)}
           onClose={() => setEditingBill(null)}
           onSaveEdit={handleSaveEditedBill}
+          onSaveCommissionPayout={handleSaveCommissionPayout}
           onDeleteBill={
             canDelete
               ? (b) => {
@@ -9147,6 +9597,7 @@ export default function App() {
                 onDeleteDebtor={handleDeleteDebtor}
                 deductionCategories={effectiveDeductionCategories}
                 onAddExpenseDeduction={handleAddExpenseDeduction}
+                onQuickPayCommission={(b) => setCommissionBill(b)}
                 autoAddProducts={autoAddProducts}
                 onToggleAutoAddProducts={setAutoAddProducts}
                 onSaveExtractedBill={handleSaveExtractedBill}
@@ -9175,6 +9626,69 @@ export default function App() {
         onSaveDeduction={handleAddExpenseDeduction}
         onNavigateToTab={() => handleSelectTab('deductions')}
       />
+
+      {/* POPUP MODAL: CHI TIỀN HOA HỒNG / CHIẾT KHẤU ĐẶT BÀN */}
+      {commissionBill && (
+        <CommissionPayoutModal
+          isOpen={Boolean(commissionBill)}
+          onClose={() => setCommissionBill(null)}
+          bill={commissionBill}
+          existingDeduction={effectiveDeductions.find(
+            (d) =>
+              d.billId === commissionBill.id &&
+              (d.category.includes('đặt bàn') ||
+                d.category.includes('Hoa hồng') ||
+                d.productName.includes('đặt bàn') ||
+                d.productName.includes('hoa hồng') ||
+                (d.note || '').includes('đặt bàn'))
+          )}
+          onSave={handleSaveCommissionPayout}
+          formatVND={formatVND}
+        />
+      )}
+
+      {/* POPUP MODAL: XEM DANH SÁCH KHOẢN TRỪ TƯƠNG ỨNG KỲ ĐANG XEM */}
+      <PeriodDeductionsModal
+        isOpen={showPeriodDeductionsModal}
+        onClose={() => setShowPeriodDeductionsModal(false)}
+        periodLabel={periodLabel}
+        deductions={periodDeductions}
+        formatVND={formatVND}
+        onOpenAddDeduction={() => {
+          setShowPeriodDeductionsModal(false);
+          setShowQuickDeductionModal(true);
+        }}
+        onNavigateToDeductionsTab={() => {
+          setShowPeriodDeductionsModal(false);
+          handleSelectTab('deductions');
+        }}
+      />
+
+      {/* NÚT HÌNH TRÒN NỔI XEM KHOẢN TRỪ TƯƠNG ỨNG KỲ XEM TRÊN TRANG TỔNG QUAN DOANH THU */}
+      {activeTab === 'dashboard' && allowedTabs.includes('dashboard') && (
+        <aside
+          aria-label="Nút tròn xem khoản trừ theo kỳ"
+          className="fixed bottom-20 right-4 sm:bottom-24 sm:right-6 z-40 select-none"
+        >
+          <button
+            type="button"
+            onClick={() => setShowPeriodDeductionsModal(true)}
+            className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-tr from-rose-600 via-rose-500 to-pink-500 text-white shadow-xl hover:shadow-2xl hover:scale-110 active:scale-95 flex items-center justify-center transition-all duration-200 border-2 border-white/90 dark:border-slate-800 cursor-pointer group relative"
+            title={`Bấm vào nút tròn để xem ${periodDeductions.length} khoản trừ của ${periodLabel} (Tổng: -${formatVND(financialSummary.totalDeductions)})`}
+            aria-label="Xem khoản trừ tương ứng kỳ xem"
+          >
+            <Receipt className="w-5 h-5 sm:w-6 sm:h-6 group-hover:rotate-6 transition-transform" />
+            {periodDeductions.length > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[20px] h-[20px] px-1 rounded-full bg-slate-900 text-white text-[10px] font-mono font-bold flex items-center justify-center border-2 border-white dark:border-slate-800 shadow-md">
+                {periodDeductions.length}
+              </span>
+            )}
+            <span className="absolute right-full mr-2.5 px-2.5 py-1 rounded-lg bg-slate-900/95 text-white text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-150 shadow-md">
+              Khoản trừ kỳ {periodLabel} ({periodDeductions.length})
+            </span>
+          </button>
+        </aside>
+      )}
     </div>
   );
 }

@@ -12,6 +12,8 @@ import {
   CheckCheck,
   Printer,
   Scissors,
+  MinusCircle,
+  Check,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -49,6 +51,7 @@ interface BillCheckModalProps {
   onReturnBill: (bill: BillRecord) => void;
   onDeleteBill: (bill: BillRecord) => void;
   onOpenSplitMerge?: (bill: BillRecord) => void;
+  onQuickPayCommission?: (bill: BillRecord) => void;
 }
 
 function extractReceiptTableLabel(note?: string): {
@@ -200,6 +203,7 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
   onEditBill,
   onReturnBill,
   onDeleteBill,
+  onQuickPayCommission,
   onOpenSplitMerge,
 }) => {
   const receiptPrintRef = useRef<HTMLDivElement | null>(null);
@@ -383,10 +387,25 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
     </tbody>
   </table>
   <div style="padding-top: 6px;">
-    <div style="display: flex; justify-content: space-between; font-weight: 600;">
-      <span>Chiết khấu:</span>
-      <span>${formatReceiptMoney(discountAmount)}</span>
-    </div>
+    ${
+      discountAmount > 0
+        ? `
+      <div style="display: flex; justify-content: space-between; font-weight: 600;">
+        <span>Tổng gốc món ăn:</span>
+        <span>${formatReceiptMoney(bill.subtotalAmount || (bill.totalAmount + discountAmount))}</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-weight: 600; color: #047857;">
+        <span>Chiết khấu (Đặt bàn):</span>
+        <span>-${formatReceiptMoney(discountAmount)}</span>
+      </div>
+    `
+        : `
+      <div style="display: flex; justify-content: space-between; font-weight: 600;">
+        <span>Chiết khấu:</span>
+        <span>0</span>
+      </div>
+    `
+    }
     <div style="display: flex; justify-content: space-between; font-size: ${targetSize === 'K58' ? '14px' : '16px'}; font-weight: 800; padding-top: 2px;">
       <span>Tổng Cộng:</span>
       <span>${formatReceiptMoney(bill.totalAmount)}</span>
@@ -742,13 +761,26 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
 
             {/* Receipt Totals Section (Chiết khấu & Tổng Cộng) */}
             <div className="pt-2.5 space-y-1 text-xs sm:text-[13px] text-slate-950 tabular-nums">
-              <div className="flex items-center justify-between font-semibold">
-                <span>Chiết khấu:</span>
-                <span>{formatReceiptMoney(discountAmount)}</span>
-              </div>
+              {discountAmount > 0 ? (
+                <>
+                  <div className="flex items-center justify-between font-semibold">
+                    <span>Tổng tiền gốc món ăn:</span>
+                    <span>{formatReceiptMoney(bill.subtotalAmount || (bill.totalAmount + discountAmount))}</span>
+                  </div>
+                  <div className="flex items-center justify-between font-semibold text-emerald-700">
+                    <span>Chiết khấu (Cho người đặt bàn):</span>
+                    <span>-{formatReceiptMoney(discountAmount)}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center justify-between font-semibold">
+                  <span>Chiết khấu:</span>
+                  <span>0</span>
+                </div>
+              )}
 
               <div className="flex items-center justify-between text-base sm:text-lg font-extrabold text-black pt-0.5">
-                <span>Tổng Cộng:</span>
+                <span>Tổng Cộng Khách Trả:</span>
                 <span>{formatReceiptMoney(bill.totalAmount)}</span>
               </div>
 
@@ -857,6 +889,46 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
               <span>In Bill {paperSize} / PDF</span>
             </button>
 
+            {canWrite && discountAmount > 0 && onQuickPayCommission && (() => {
+              const commDed = billDeductions.find(
+                (d) =>
+                  d.category.includes('đặt bàn') ||
+                  d.category.includes('Hoa hồng') ||
+                  d.productName.includes('đặt bàn') ||
+                  d.productName.includes('hoa hồng') ||
+                  (d.note || '').includes('đặt bàn')
+              );
+              if (commDed) {
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onQuickPayCommission(bill);
+                    }}
+                    className="px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs font-bold text-emerald-800 dark:text-emerald-200 inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    title="Đã có khoản chi gửi tiền hoa hồng/chiết khấu cho người đặt bàn (Bấm để xem/sửa)"
+                  >
+                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Đã chi hoa hồng (-{formatVND(commDed.amount)})</span>
+                  </button>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onQuickPayCommission(bill);
+                  }}
+                  className="px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-xs font-bold text-amber-800 dark:text-amber-200 inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  title="Ghi nhận khoản chi gửi tiền hoa hồng/chiết khấu cho người đặt bàn vào sổ quỹ ngày"
+                >
+                  <MinusCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  <span>Chi hoa hồng đặt bàn (-{formatVND(discountAmount)})</span>
+                </button>
+              );
+            })()}
             {canWrite && onOpenSplitMerge && (
               <button
                 type="button"

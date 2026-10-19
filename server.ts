@@ -323,6 +323,28 @@ function mergeServerInventoryData(
     ...(clientInv.itemConfigs || {}),
   };
 
+  // 8. Merge employees
+  const allEmps = [...(serverInv.employees || []), ...(clientInv.employees || [])];
+  const empMap = new Map<string, any>();
+  for (const e of allEmps) {
+    if (!e || !e.id) continue;
+    const existing = empMap.get(e.id);
+    if (!existing || (e.updatedAtMs || 0) >= (existing.updatedAtMs || 0)) {
+      empMap.set(e.id, e);
+    }
+  }
+
+  // 9. Merge salaryAdvances
+  const allAdvances = [...(serverInv.salaryAdvances || []), ...(clientInv.salaryAdvances || [])];
+  const advMap = new Map<string, any>();
+  for (const a of allAdvances) {
+    if (!a || !a.id) continue;
+    const existing = advMap.get(a.id);
+    if (!existing || (a.updatedAtMs || 0) >= (existing.updatedAtMs || 0)) {
+      advMap.set(a.id, a);
+    }
+  }
+
   return {
     ...serverInv,
     ...clientInv,
@@ -333,6 +355,8 @@ function mergeServerInventoryData(
     customCategoryGroups: Array.from(groupMap.values()),
     categoryAliases: mergedAliases,
     telegramConfig: mergedTgConfig,
+    employees: Array.from(empMap.values()),
+    salaryAdvances: Array.from(advMap.values()),
     kiotvietSyncLocked:
       clientInv?.kiotvietSyncLocked !== undefined
         ? clientInv.kiotvietSyncLocked

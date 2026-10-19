@@ -499,6 +499,7 @@ export const DEFAULT_DEDUCTION_CATEGORIES = [
   'Vật tư / Đá / Gas',
   'Vật tư / Tạp phẩm quán',
   'Chi phí vận hành trong ngày',
+  'Hoa hồng / Chiết khấu đặt bàn',
   'Ứng lương nhân viên',
   'Hoàn bia / món thừa',
   'Khác',

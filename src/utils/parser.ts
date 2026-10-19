@@ -9,6 +9,9 @@ import {
   DailyInventoryEntry,
   InventoryImportLog,
   CustomCategoryGroup,
+  DeductionRecord,
+  SalaryAdvanceRecord,
+  EmployeeRecord,
 } from '../types';
 
 export function sanitizeId(raw: string): string {
@@ -171,22 +174,24 @@ export function getBillPaymentBreakdown(bill: {
 
 /**
  * Kiểm tra món có phải là Đồ Ăn (được áp dụng chiết khấu người đặt bàn) hay không.
- * Tự động loại trừ: Bia, Nước ngọt, Đồ uống, Nước suối, Bún, Bánh mì, Khăn lạnh, v.v.
- * Ví dụ theo yêu cầu người dùng:
- * "bill 2 triệu: 1.5 triệu tiền đồ ăn, 500k tiền nước bia và bún, bánh mì.
- * Chiết khấu 5% thì sẽ chiết khấu từ các món đã chọn / 1.5 triệu tiền đồ ăn".
+ * Tự động loại trừ: Bia, Nước ngọt đóng chai, Nước suối, Đồ uống có cồn/giải khát, Khăn lạnh, Thuốc lá, Phụ thu.
+ * Các món ăn (kể cả món lẩu/nước, cơm chiên, mì xào, hải sản...) đều được tính chiết khấu mặc định.
  */
 export function isFoodDiscountEligible(item: { productName?: string; category?: string }): boolean {
   const pName = (item.productName || '').toLowerCase().trim();
   const cat = (item.category || '').toLowerCase().trim();
 
-  // 1. Kiểm tra danh mục đồ uống / giải khát
+  // 1. Kiểm tra danh mục đồ uống / giải khát / thuốc lá / khăn
   if (
-    cat.includes('bia') ||
+    cat === 'bia' ||
+    cat === 'nước ngọt' ||
+    cat === 'đồ uống' ||
+    cat === 'giải khát' ||
+    cat.includes('nước giải khát') ||
     cat.includes('nước ngọt') ||
-    cat.includes('nước') ||
-    cat.includes('đồ uống') ||
-    cat.includes('giải khát') ||
+    cat.includes('nước khoáng') ||
+    cat.includes('nước suối') ||
+    cat.includes('thuốc lá') ||
     cat.includes('khăn') ||
     cat.includes('phụ thu')
   ) {
@@ -202,14 +207,14 @@ export function isFoodDiscountEligible(item: { productName?: string; category?: 
 
   // 3. Kiểm tra tên sản phẩm các loại Nước ngọt / Nước suối / Nước đóng chai
   if (
-    /\b(coca|pepsi|7up|seven up|sting|redbull|red bull|bò húc|bò cụng|twister|mirinda|fanta|sprite|aquafina|dasani|lavie|la vie|nước suối|nước khoáng|revive|soda|trà đào|trà chanh|trà tắc|trà xanh|c2|o long|ô long|khoáng mặn)\b/i.test(pName)
+    /\b(coca|pepsi|7up|seven up|sting|redbull|red bull|bò húc|bò cụng|twister|mirinda|fanta|sprite|aquafina|dasani|lavie|la vie|nước suối|nước khoáng|revive|soda|khoáng mặn)\b/i.test(pName)
   ) {
     return false;
   }
 
-  // 4. Kiểm tra các món tinh bột phụ, khăn lạnh, thuốc lá, đá đi kèm thường không chiết khấu hoa hồng
+  // 4. Kiểm tra phụ phẩm tiêu hao, thuốc lá, phụ thu
   if (
-    /\b(bún|bánh m[ìy]|mì gói|mì tôm|mì trứng|cơm trắng|cơm thêm|đậu phộng|lạc|khăn|thuốc lá|bật lửa|hộp quẹt|đá me|đá bi|đá lạnh|phụ thu)\b/i.test(pName)
+    /\b(khăn lạnh|khăn ướt|thuốc lá|bật lửa|hộp quẹt|đá bi|đá cây|đá lạnh|phụ thu)\b/i.test(pName)
   ) {
     return false;
   }
@@ -242,7 +247,6 @@ export function calculateItemsDiscountSummary(
     const qty = Math.max(1, Math.round(Number(it.quantity) || 1));
     const price = Math.max(0, Math.round(Number(it.unitPrice) || 0));
     const itemSubtotal = qty * price;
-
     const isEligible =
       it.isDiscountEligible !== undefined
         ? it.isDiscountEligible
@@ -258,19 +262,23 @@ export function calculateItemsDiscountSummary(
 
   const subtotal = eligibleTotal + nonEligibleTotal;
   const safePercent = Math.max(0, Math.min(100, Number(discountPercent) || 0));
+  
+  // Nếu có % chiết khấu (> 0) mà eligibleTotal = 0 (ví dụ chưa gán hoặc không có món phân loại ăn),
+  // tự động áp dụng % trên subtotal để chiết khấu không bao giờ bị rơi về 0 một cách bất thường.
+  const effectiveBase = eligibleTotal > 0 ? eligibleTotal : (safePercent > 0 ? subtotal : 0);
   const discountAmount = Math.min(
-    eligibleTotal,
-    Math.round((eligibleTotal * safePercent) / 100)
+    effectiveBase,
+    Math.round((effectiveBase * safePercent) / 100)
   );
   const finalTotal = Math.max(0, subtotal - discountAmount);
 
   return {
-    eligibleTotal,
-    nonEligibleTotal,
+    eligibleTotal: eligibleTotal > 0 ? eligibleTotal : effectiveBase,
+    nonEligibleTotal: eligibleTotal > 0 ? nonEligibleTotal : 0,
     subtotal,
     discountAmount,
     finalTotal,
-    eligibleCount,
+    eligibleCount: eligibleCount > 0 ? eligibleCount : (safePercent > 0 ? items.length : 0),
   };
 }
 
@@ -3059,6 +3067,17 @@ export function mergeInventoryData(
     return Array.from(map.values());
   })();
 
+  // 8b. Salary Advances merge (Preserve all employee advances across cloud/local snapshots)
+  const allAdvances = [...(base.salaryAdvances || []), ...(incoming.salaryAdvances || [])];
+  const advMap = new Map<string, SalaryAdvanceRecord>();
+  for (const a of allAdvances) {
+    if (!a || !a.id) continue;
+    const existing = advMap.get(a.id);
+    if (!existing || (a.updatedAtMs || 0) >= (existing.updatedAtMs || 0)) {
+      advMap.set(a.id, a);
+    }
+  }
+
   return {
     ...base,
     ...incoming,
@@ -3074,6 +3093,7 @@ export function mergeInventoryData(
         ? incoming.kiotvietSyncLocked
         : base?.kiotvietSyncLocked,
     employees: Array.from(empMap.values()),
+    salaryAdvances: Array.from(advMap.values()),
     kitchenCategories: incoming.kitchenCategories || base.kitchenCategories || undefined,
     kitchenSuppliers: mergedKitchenSuppliers,
     kitchenSupplyItems: mergedKitchenSupplyItems,
@@ -3081,5 +3101,157 @@ export function mergeInventoryData(
     kitchenSupplierPayments: mergedKitchenSupplierPayments,
     kitchenStockUsages: mergedKitchenStockUsages,
     updatedAtMs: Math.max(base.updatedAtMs || 0, incoming.updatedAtMs || 0, Date.now()),
+  };
+}
+
+/**
+ * Tự động đồng bộ và trích xuất tất cả các phiếu ứng lương từ danh sách Khoản trừ (deductions)
+ * sang định dạng SalaryAdvanceRecord để luôn hiển thị đầy đủ trong "Lịch sử ứng lương theo tháng"
+ */
+export function extractSalaryAdvancesFromDeductions(
+  deductions: DeductionRecord[],
+  existingAdvances: SalaryAdvanceRecord[] = [],
+  employees: EmployeeRecord[] = []
+): {
+  mergedAdvances: SalaryAdvanceRecord[];
+  inferredEmployees: EmployeeRecord[];
+} {
+  const advMap = new Map<string, SalaryAdvanceRecord>();
+  // 1. Khởi tạo từ danh sách ứng lương hiện có
+  for (const a of existingAdvances) {
+    if (a && a.id) advMap.set(a.id, a);
+  }
+
+  const inferredEmps: EmployeeRecord[] = [];
+  const knownEmpNames = new Set(
+    employees.map((e) => e.fullName.trim().toLowerCase())
+  );
+
+  const STANDARD_ROLE_REGEX =
+    /bếp|quản lý|phục vụ|thu ngân|kiểm kho|pha chế|tiếp thực|tạp vụ/i;
+
+  for (const ded of deductions || []) {
+    const cat = String(ded.category || '').toLowerCase();
+    const prod = String(ded.productName || '').toLowerCase();
+    const code = String(ded.billCode || '').toUpperCase();
+    const id = String(ded.id || '');
+    const isAdv =
+      id.startsWith('ded_sal_') ||
+      code === 'UNG-LUONG' ||
+      cat.includes('ứng lương') ||
+      cat.includes('ung luong') ||
+      prod.startsWith('ứng lương') ||
+      prod.startsWith('ung luong');
+
+    if (!isAdv) continue;
+
+    let rawName = ded.productName || '';
+    let employeeRole = '';
+    const matchPrefix = rawName.match(/^ứng lương\s*[:\-]\s*(.+)$/i);
+    if (matchPrefix) {
+      rawName = matchPrefix[1].trim();
+    }
+    const roleMatch = rawName.match(/^(.*?)\s*\(([^)]+)\)$/);
+    if (roleMatch) {
+      const candidateRole = roleMatch[2].trim();
+      if (STANDARD_ROLE_REGEX.test(candidateRole)) {
+        rawName = roleMatch[1].trim();
+        employeeRole = candidateRole;
+      }
+    }
+
+    const matchedEmp = employees.find(
+      (e) =>
+        e.fullName.trim().toLowerCase() === rawName.toLowerCase() ||
+        rawName.toLowerCase().includes(e.fullName.trim().toLowerCase()) ||
+        e.fullName.trim().toLowerCase().includes(rawName.toLowerCase())
+    );
+
+    const empName = matchedEmp ? matchedEmp.fullName : rawName.trim();
+    const empRole =
+      employeeRole ||
+      (matchedEmp ? matchedEmp.roleOrPosition : 'Nhân viên phục vụ');
+    let empId = matchedEmp ? matchedEmp.id : '';
+
+    if (!matchedEmp) {
+      const lowerName = empName.toLowerCase();
+      let foundInferred = inferredEmps.find(
+        (e) => e.fullName.toLowerCase() === lowerName
+      );
+      if (!foundInferred && !knownEmpNames.has(lowerName)) {
+        let hash = 0;
+        for (let i = 0; i < empName.length; i++) {
+          hash = (hash << 5) - hash + empName.charCodeAt(i);
+          hash |= 0;
+        }
+        const newEmp: EmployeeRecord = {
+          id: `emp_auto_${Math.abs(hash)}`,
+          fullName: empName,
+          roleOrPosition: empRole || 'Nhân viên phục vụ',
+          active: true,
+          hasLoginAccount: false,
+          baseSalary: 0,
+          createdAtMs: ded.createdAtMs || Date.now(),
+          updatedAtMs: ded.updatedAtMs || Date.now(),
+        };
+        inferredEmps.push(newEmp);
+        knownEmpNames.add(lowerName);
+        foundInferred = newEmp;
+      }
+      empId = foundInferred
+        ? foundInferred.id
+        : `emp_${ded.id.replace(/^ded_/, '')}`;
+    }
+
+    const advId =
+      ded.billId && ded.billId.startsWith('sal_')
+        ? ded.billId
+        : id.startsWith('ded_sal_')
+        ? id.replace(/^ded_/, '')
+        : `sal_${id.replace(/^ded_/, '')}`;
+
+    // Tìm xem đã có advance nào tương ứng với khoản trừ này chưa
+    let foundKey = advId;
+    for (const [k, v] of advMap.entries()) {
+      if (
+        v.linkedDeductionId === ded.id ||
+        v.id === advId ||
+        `ded_${v.id}` === ded.id
+      ) {
+        foundKey = k;
+        break;
+      }
+    }
+
+    const existing = advMap.get(foundKey);
+    const candidate: SalaryAdvanceRecord = {
+      id: advId,
+      ownerId: ded.ownerId || 'vqbill_shared_workspace',
+      employeeId: empId,
+      employeeName: empName,
+      employeeRole: empRole,
+      amount: Math.max(0, Math.round(Number(ded.amount) || 0)),
+      advanceDate: ded.deductionDate || ded.billDate || '2026-10-18',
+      note: ded.note || '',
+      linkedDeductionId: ded.id,
+      createdAtMs: ded.createdAtMs || Date.now(),
+      updatedAtMs: ded.updatedAtMs || Date.now(),
+      createdBy: existing?.createdBy || 'sync',
+    };
+
+    if (!existing || (candidate.updatedAtMs || 0) >= (existing.updatedAtMs || 0)) {
+      advMap.set(foundKey, candidate);
+    }
+  }
+
+  const sortedAdvances = Array.from(advMap.values()).sort(
+    (a, b) =>
+      b.advanceDate.localeCompare(a.advanceDate) ||
+      (b.createdAtMs || 0) - (a.createdAtMs || 0)
+  );
+
+  return {
+    mergedAdvances: sortedAdvances,
+    inferredEmployees: inferredEmps,
   };
 }

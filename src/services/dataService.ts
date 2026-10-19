@@ -51,6 +51,7 @@ import {
   extractBillTableName,
   formatReturnDeductionTitle,
   formatDateDMY,
+  isFoodDiscountEligible,
 } from '../utils/parser';
 
 export const FIXED_ADMIN_USERNAME = 'admin';
@@ -669,9 +670,11 @@ export async function saveWorkspaceMetaToFirestore(params: {
 
 export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnapshot | null> {
   const wsId = SHARED_WORKSPACE_ID;
+  const targetOwnerIds = [SHARED_WORKSPACE_ID, 'vqbill_default_workspace'];
   try {
     const [
       metaSnap,
+      fallbackMetaSnap,
       billsSnap,
       itemsSnap,
       productsSnap,
@@ -680,16 +683,18 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
       staffSnap,
     ] = await Promise.all([
       getDoc(doc(db, 'workspace_meta', wsId)),
-      getDocs(query(collection(db, 'bills'), where('ownerId', '==', wsId))),
-      getDocs(query(collection(db, 'bill_items'), where('ownerId', '==', wsId))),
-      getDocs(query(collection(db, 'products'), where('ownerId', '==', wsId))),
-      getDocs(query(collection(db, 'deductions'), where('ownerId', '==', wsId))),
-      getDocs(query(collection(db, 'returns'), where('ownerId', '==', wsId))),
-      getDocs(query(collection(db, 'staff_accounts'), where('ownerId', '==', wsId))),
+      getDoc(doc(db, 'workspace_meta', 'vqbill_default_workspace')),
+      getDocs(query(collection(db, 'bills'), where('ownerId', 'in', targetOwnerIds))),
+      getDocs(query(collection(db, 'bill_items'), where('ownerId', 'in', targetOwnerIds))),
+      getDocs(query(collection(db, 'products'), where('ownerId', 'in', targetOwnerIds))),
+      getDocs(query(collection(db, 'deductions'), where('ownerId', 'in', targetOwnerIds))),
+      getDocs(query(collection(db, 'returns'), where('ownerId', 'in', targetOwnerIds))),
+      getDocs(query(collection(db, 'staff_accounts'), where('ownerId', 'in', targetOwnerIds))),
     ]);
 
     const hasAnyDocs =
       metaSnap.exists() ||
+      fallbackMetaSnap.exists() ||
       !billsSnap.empty ||
       !productsSnap.empty ||
       !deductionsSnap.empty ||
@@ -699,7 +704,9 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
       return null;
     }
 
-    const metaData = metaSnap.exists() ? metaSnap.data() : null;
+    const primaryMeta = metaSnap.exists() ? metaSnap.data() : null;
+    const fallbackMeta = fallbackMetaSnap.exists() ? fallbackMetaSnap.data() : null;
+    const metaData = primaryMeta || fallbackMeta;
     let categories: string[] | undefined;
     let debtors: string[] | undefined;
     let rolePermissions: RolePermissionsMap | undefined;
@@ -817,6 +824,10 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
         unitPrice,
         subtotal: Number(data.subtotal) || 0,
         originalUnitPrice,
+        isDiscountEligible:
+          data.isDiscountEligible !== undefined
+            ? Boolean(data.isDiscountEligible)
+            : isFoodDiscountEligible({ productName, category: data.category }),
         createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
         updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
       };
@@ -1609,6 +1620,10 @@ export async function saveNewBillToCloud(params: {
     const pName = truncateStr(it.productName, 150, 'Món ăn');
     const itemNote = truncateStr(it.note || '', 400, '');
     const cat = truncateStr(it.category || inferCategory(pName), 80, 'Khác');
+    const isEligible =
+      it.isDiscountEligible !== undefined
+        ? Boolean(it.isDiscountEligible)
+        : isFoodDiscountEligible({ productName: pName, category: cat });
     return {
       productName: pName,
       note: itemNote,
@@ -1617,6 +1632,7 @@ export async function saveNewBillToCloud(params: {
       unitPrice: uPrice,
       originalUnitPrice: origPrice,
       subtotal: sub,
+      isDiscountEligible: isEligible,
     };
   });
 
@@ -1626,7 +1642,6 @@ export async function saveNewBillToCloud(params: {
     Math.max(0, Math.round(Number(discountAmount) || 0))
   );
   const totalAmount = Math.max(0, subtotalAmount - cleanDiscount);
-
   const summaryStr = truncateStr(
     validItems
       .map(
@@ -1641,7 +1656,6 @@ export async function saveNewBillToCloud(params: {
   const isOwnerSlip =
     codePrefix.toUpperCase().startsWith('CHU-QL') ||
     (note || '').toUpperCase().includes('[CHỦ/QL SỬ DỤNG]');
-
   const cleanDebtor =
     paymentType === 'debt'
       ? truncateStr(debtorName, 120, 'Khách nợ')
@@ -1703,6 +1717,7 @@ export async function saveNewBillToCloud(params: {
     unitPrice: it.unitPrice,
     subtotal: it.subtotal,
     originalUnitPrice: it.originalUnitPrice,
+    isDiscountEligible: it.isDiscountEligible !== false,
     createdAtMs: now,
     updatedAtMs: now,
   }));
@@ -1795,6 +1810,7 @@ export async function saveNewBillToCloud(params: {
             returnedQuantity: bi.returnedQuantity,
             unitPrice: bi.unitPrice,
             subtotal: bi.subtotal,
+            isDiscountEligible: bi.isDiscountEligible !== false,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -1948,6 +1964,7 @@ export async function updateBillAndItemsInCloud(params: {
           returnedQuantity: Math.max(0, Math.round(ni.returnedQuantity)),
           unitPrice: Math.max(0, Math.round(ni.unitPrice)),
           subtotal: Math.max(0, Math.round(ni.subtotal)),
+          isDiscountEligible: ni.isDiscountEligible !== false,
           updatedAt: serverTimestamp(),
         });
       } else {
@@ -1962,6 +1979,7 @@ export async function updateBillAndItemsInCloud(params: {
           returnedQuantity: Math.max(0, Math.round(ni.returnedQuantity)),
           unitPrice: Math.max(0, Math.round(ni.unitPrice)),
           subtotal: Math.max(0, Math.round(ni.subtotal)),
+          isDiscountEligible: ni.isDiscountEligible !== false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });

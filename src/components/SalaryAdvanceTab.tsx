@@ -331,6 +331,17 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
     customEnd,
   ]);
 
+  // Danh sách các tháng có dữ liệu ứng lương để bấm chuyển nhanh
+  const availableAdvanceMonths = useMemo(() => {
+    const monthCounts = new Map<string, number>();
+    for (const a of salaryAdvances) {
+      if (!a.advanceDate) continue;
+      const m = a.advanceDate.slice(0, 7);
+      monthCounts.set(m, (monthCounts.get(m) || 0) + 1);
+    }
+    return Array.from(monthCounts.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [salaryAdvances]);
+
   // Helper to resolve linked StaffAccount for an employee if any
   const getEmployeeLoginInfo = (emp: EmployeeRecord) => {
     const linkedAcc = staffAccounts.find(
@@ -1535,15 +1546,89 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
               )}
 
               {periodMode === 'month' && (
-                <div className="flex items-center gap-2 text-xs font-mono">
-                  <Calendar className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Chọn tháng:</span>
-                  <input
-                    type="month"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                  />
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+                    <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/80 px-2.5 py-1 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Chọn tháng:</span>
+                      <input
+                        type="month"
+                        value={selectedMonth}
+                        onChange={(e) => setSelectedMonth(e.target.value)}
+                        className="px-2 py-0.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 font-bold text-slate-800 dark:text-slate-100"
+                      />
+                    </div>
+                    {/* Stepper buttons */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const [y, m] = selectedMonth.split('-').map(Number);
+                          const prevDate = new Date(y, m - 2, 1);
+                          const prevStr = `${prevDate.getFullYear()}-${String(
+                            prevDate.getMonth() + 1
+                          ).padStart(2, '0')}`;
+                          setSelectedMonth(prevStr);
+                        }}
+                        className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer"
+                        title="Tháng trước"
+                      >
+                        ← Tháng trước
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMonth(todayStr.slice(0, 7))}
+                        className={`px-2 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                          selectedMonth === todayStr.slice(0, 7)
+                            ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                            : 'border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+                        }`}
+                        title="Về tháng hiện tại"
+                      >
+                        Tháng này
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const [y, m] = selectedMonth.split('-').map(Number);
+                          const nextDate = new Date(y, m, 1);
+                          const nextStr = `${nextDate.getFullYear()}-${String(
+                            nextDate.getMonth() + 1
+                          ).padStart(2, '0')}`;
+                          setSelectedMonth(nextStr);
+                        }}
+                        className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer"
+                        title="Tháng sau"
+                      >
+                        Tháng sau →
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick month pills from available history */}
+                  {availableAdvanceMonths.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="text-slate-500 text-[10px]">Tháng có dữ liệu ứng:</span>
+                      {availableAdvanceMonths.map(([mStr, count]) => {
+                        const [y, m] = mStr.split('-');
+                        const isCur = selectedMonth === mStr;
+                        return (
+                          <button
+                            key={mStr}
+                            type="button"
+                            onClick={() => setSelectedMonth(mStr)}
+                            className={`px-2 py-0.5 rounded-lg border font-mono font-semibold transition-colors cursor-pointer ${
+                              isCur
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                            }`}
+                          >
+                            T{m}/{y} ({count} phiếu)
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
