@@ -1776,22 +1776,30 @@ export async function saveNewBillToCloud(params: {
       try {
         await setDoc(doc(db, 'bills', billId), {
           ownerId: fsOwner,
-          billCode: billRecord.billCode,
+          billCode: truncateStr(billRecord.billCode, 64, 'HD-001'),
           billDate: billRecord.billDate,
-          rawDate: billRecord.rawDate || billRecord.billDate,
-          checkInTime: billRecord.checkInTime || '',
-          checkOutTime: billRecord.checkOutTime || '',
+          rawDate: truncateStr(billRecord.rawDate || billRecord.billDate, 100, ''),
+          checkInTime: truncateStr(billRecord.checkInTime || '', 50, ''),
+          checkOutTime: truncateStr(billRecord.checkOutTime || '', 50, ''),
+          tableName: truncateStr(billRecord.tableName || '', 100, ''),
           paymentType: billRecord.paymentType,
-          debtorName: billRecord.debtorName,
+          debtorName: truncateStr(billRecord.debtorName || '', 120, ''),
           debtStatus: billRecord.debtStatus,
+          settleDate: truncateStr(billRecord.settleDate || '', 50, ''),
+          settledMethod:
+            billRecord.settledMethod === 'transfer'
+              ? 'transfer'
+              : billRecord.settledMethod === 'cash'
+              ? 'cash'
+              : '',
           paidCashAmount: billRecord.paidCashAmount || 0,
           paidTransferAmount: billRecord.paidTransferAmount || 0,
           subtotalAmount: billRecord.subtotalAmount || billRecord.totalAmount,
           discountAmount: billRecord.discountAmount || 0,
           totalAmount: billRecord.totalAmount,
           deductedAmount: billRecord.deductedAmount,
-          itemsSummary: billRecord.itemsSummary,
-          note: billRecord.note,
+          itemsSummary: truncateStr(billRecord.itemsSummary || '', 5000, ''),
+          note: truncateStr(billRecord.note || '', 2000, ''),
           status: billRecord.status,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -1803,13 +1811,21 @@ export async function saveNewBillToCloud(params: {
             ownerId: fsOwner,
             billId: bi.billId,
             billDate: bi.billDate,
-            productName: bi.productName,
-            note: bi.note || '',
-            category: bi.category,
-            quantity: bi.quantity,
-            returnedQuantity: bi.returnedQuantity,
-            unitPrice: bi.unitPrice,
-            subtotal: bi.subtotal,
+            productName: truncateStr(bi.productName, 150, 'Món ăn'),
+            note: truncateStr(bi.note || '', 500, ''),
+            category: truncateStr(bi.category, 80, 'Khác'),
+            quantity: Math.max(1, Math.round(bi.quantity)),
+            returnedQuantity: Math.max(0, Math.round(bi.returnedQuantity)),
+            unitPrice: Math.max(0, Math.round(bi.unitPrice)),
+            subtotal: Math.max(0, Math.round(bi.subtotal)),
+            originalUnitPrice:
+              bi.originalUnitPrice !== undefined
+                ? Math.max(0, Math.round(bi.originalUnitPrice))
+                : Math.max(0, Math.round(bi.unitPrice)),
+            discountAmount:
+              bi.discountAmount !== undefined ? Math.max(0, Math.round(bi.discountAmount)) : 0,
+            discountPercent:
+              bi.discountPercent !== undefined ? Math.max(0, Math.round(bi.discountPercent)) : 0,
             isDiscountEligible: bi.isDiscountEligible !== false,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -1866,6 +1882,14 @@ export async function updateBillAndItemsInCloud(params: {
   if (!isFirestoreCloudActive()) return;
 
   try {
+    const cleanSettledMethod =
+      bill.settledMethod === 'transfer'
+        ? 'transfer'
+        : bill.settledMethod === 'cash'
+        ? 'cash'
+        : '';
+    const cleanTableName = truncateStr(bill.tableName || '', 100, '');
+
     await upsertFirestoreDoc(
       'bills',
       bill.id,
@@ -1873,14 +1897,15 @@ export async function updateBillAndItemsInCloud(params: {
         ownerId: getFirestoreOwnerUid(cleanOwnerId),
         billCode: truncateStr(bill.billCode, 64, 'HD-001'),
         billDate: bill.billDate,
-        rawDate: truncateStr(bill.rawDate || bill.billDate || '', 20, ''),
-        checkInTime: truncateStr(bill.checkInTime || '', 20, ''),
-        checkOutTime: truncateStr(bill.checkOutTime || '', 20, ''),
+        rawDate: truncateStr(bill.rawDate || bill.billDate || '', 100, ''),
+        checkInTime: truncateStr(bill.checkInTime || '', 50, ''),
+        checkOutTime: truncateStr(bill.checkOutTime || '', 50, ''),
+        tableName: cleanTableName,
         paymentType: bill.paymentType,
-        debtorName: truncateStr(bill.debtorName, 120, ''),
+        debtorName: truncateStr(bill.debtorName || '', 120, ''),
         debtStatus: bill.debtStatus,
-        settleDate: truncateStr(bill.settleDate || '', 20, ''),
-        settledMethod: bill.settledMethod || '',
+        settleDate: truncateStr(bill.settleDate || '', 50, ''),
+        settledMethod: cleanSettledMethod,
         paidCashAmount:
           bill.paymentType === 'split'
             ? (bill.paidCashAmount !== undefined && bill.paidCashAmount !== null
@@ -1903,21 +1928,22 @@ export async function updateBillAndItemsInCloud(params: {
         discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
         totalAmount: Math.max(0, Math.round(bill.totalAmount)),
         deductedAmount: Math.max(0, Math.round(bill.deductedAmount)),
-        itemsSummary: truncateStr(bill.itemsSummary, 1000, ''),
-        note: truncateStr(bill.note, 500, ''),
+        itemsSummary: truncateStr(bill.itemsSummary || '', 5000, ''),
+        note: truncateStr(bill.note || '', 2000, ''),
         status: bill.status,
       },
       {
         billCode: truncateStr(bill.billCode, 64, 'HD-001'),
         billDate: bill.billDate,
-        rawDate: truncateStr(bill.rawDate || bill.billDate || '', 20, ''),
-        checkInTime: truncateStr(bill.checkInTime || '', 20, ''),
-        checkOutTime: truncateStr(bill.checkOutTime || '', 20, ''),
+        rawDate: truncateStr(bill.rawDate || bill.billDate || '', 100, ''),
+        checkInTime: truncateStr(bill.checkInTime || '', 50, ''),
+        checkOutTime: truncateStr(bill.checkOutTime || '', 50, ''),
+        tableName: cleanTableName,
         paymentType: bill.paymentType,
-        debtorName: truncateStr(bill.debtorName, 120, ''),
+        debtorName: truncateStr(bill.debtorName || '', 120, ''),
         debtStatus: bill.debtStatus,
-        settleDate: truncateStr(bill.settleDate || '', 20, ''),
-        settledMethod: bill.settledMethod || '',
+        settleDate: truncateStr(bill.settleDate || '', 50, ''),
+        settledMethod: cleanSettledMethod,
         paidCashAmount:
           bill.paymentType === 'split'
             ? (bill.paidCashAmount !== undefined && bill.paidCashAmount !== null
@@ -1940,8 +1966,8 @@ export async function updateBillAndItemsInCloud(params: {
         discountAmount: Math.max(0, Math.round(bill.discountAmount || 0)),
         totalAmount: Math.max(0, Math.round(bill.totalAmount)),
         deductedAmount: Math.max(0, Math.round(bill.deductedAmount)),
-        itemsSummary: truncateStr(bill.itemsSummary, 1000, ''),
-        note: truncateStr(bill.note, 500, ''),
+        itemsSummary: truncateStr(bill.itemsSummary || '', 5000, ''),
+        note: truncateStr(bill.note || '', 2000, ''),
         status: bill.status,
       }
     );
@@ -1958,12 +1984,20 @@ export async function updateBillAndItemsInCloud(params: {
         await updateDoc(doc(db, 'bill_items', ni.id), {
           billDate: ni.billDate,
           productName: truncateStr(ni.productName, 150, 'Món ăn'),
-          note: truncateStr(ni.note || '', 400, ''),
+          note: truncateStr(ni.note || '', 500, ''),
           category: truncateStr(ni.category, 80, 'Khác'),
           quantity: Math.max(1, Math.round(ni.quantity)),
           returnedQuantity: Math.max(0, Math.round(ni.returnedQuantity)),
           unitPrice: Math.max(0, Math.round(ni.unitPrice)),
           subtotal: Math.max(0, Math.round(ni.subtotal)),
+          originalUnitPrice:
+            ni.originalUnitPrice !== undefined
+              ? Math.max(0, Math.round(ni.originalUnitPrice))
+              : Math.max(0, Math.round(ni.unitPrice)),
+          discountAmount:
+            ni.discountAmount !== undefined ? Math.max(0, Math.round(ni.discountAmount)) : 0,
+          discountPercent:
+            ni.discountPercent !== undefined ? Math.max(0, Math.round(ni.discountPercent)) : 0,
           isDiscountEligible: ni.isDiscountEligible !== false,
           updatedAt: serverTimestamp(),
         });
@@ -1973,12 +2007,20 @@ export async function updateBillAndItemsInCloud(params: {
           billId: bill.id,
           billDate: ni.billDate,
           productName: truncateStr(ni.productName, 150, 'Món ăn'),
-          note: truncateStr(ni.note || '', 400, ''),
+          note: truncateStr(ni.note || '', 500, ''),
           category: truncateStr(ni.category, 80, 'Khác'),
           quantity: Math.max(1, Math.round(ni.quantity)),
           returnedQuantity: Math.max(0, Math.round(ni.returnedQuantity)),
           unitPrice: Math.max(0, Math.round(ni.unitPrice)),
           subtotal: Math.max(0, Math.round(ni.subtotal)),
+          originalUnitPrice:
+            ni.originalUnitPrice !== undefined
+              ? Math.max(0, Math.round(ni.originalUnitPrice))
+              : Math.max(0, Math.round(ni.unitPrice)),
+          discountAmount:
+            ni.discountAmount !== undefined ? Math.max(0, Math.round(ni.discountAmount)) : 0,
+          discountPercent:
+            ni.discountPercent !== undefined ? Math.max(0, Math.round(ni.discountPercent)) : 0,
           isDiscountEligible: ni.isDiscountEligible !== false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),

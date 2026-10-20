@@ -22,6 +22,12 @@ import {
   Lock,
   Eye,
   EyeOff,
+  Table,
+  Image,
+  FileText,
+  Printer,
+  Sparkles,
+  Download,
 } from 'lucide-react';
 import {
   EmployeeRecord,
@@ -170,6 +176,222 @@ function slugifyUsernameFromFullName(name: string): string {
     .slice(0, 24);
 }
 
+export function formatNumberToVietnameseWords(amount: number): string {
+  if (!amount || amount <= 0) return 'Không đồng';
+  const units = ['', 'nghìn', 'triệu', 'tỷ'];
+  const digits = [
+    'không',
+    'một',
+    'hai',
+    'ba',
+    'bốn',
+    'năm',
+    'sáu',
+    'bảy',
+    'tám',
+    'chín',
+  ];
+
+  function readGroup(n: number, showZeroHundred: boolean): string {
+    const h = Math.floor(n / 100);
+    const t = Math.floor((n % 100) / 10);
+    const u = n % 10;
+    let res = '';
+    if (h > 0 || showZeroHundred) {
+      res += digits[h] + ' trăm ';
+    }
+    if (t > 1) {
+      res += digits[t] + ' mươi ';
+      if (u === 1) res += 'mốt';
+      else if (u === 5) res += 'lăm';
+      else if (u > 0) res += digits[u];
+    } else if (t === 1) {
+      res += 'mười ';
+      if (u === 5) res += 'lăm';
+      else if (u > 0) res += digits[u];
+    } else if (u > 0) {
+      if (h > 0 || showZeroHundred) res += 'lẻ ' + digits[u];
+      else res += digits[u];
+    }
+    return res.trim();
+  }
+
+  const str = Math.round(amount).toString();
+  const groups: number[] = [];
+  for (let i = str.length; i > 0; i -= 3) {
+    groups.unshift(parseInt(str.slice(Math.max(0, i - 3), i), 10));
+  }
+
+  const words: string[] = [];
+  const len = groups.length;
+  for (let i = 0; i < len; i++) {
+    const g = groups[i];
+    if (g > 0) {
+      const gStr = readGroup(g, i > 0);
+      const unitIdx = len - 1 - i;
+      const unit = units[unitIdx % 4];
+      words.push(gStr + (unit ? ' ' + unit : ''));
+    }
+  }
+  const result = words.join(' ').replace(/\s+/g, ' ').trim() + ' đồng';
+  return result.charAt(0).toUpperCase() + result.slice(1);
+}
+
+export function downloadAdvanceSlipAsImage(adv: SalaryAdvanceRecord) {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 800;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Decorative border
+    ctx.strokeStyle = '#059669';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(16, 16, canvas.width - 32, canvas.height - 32);
+
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(22, 22, canvas.width - 44, canvas.height - 44);
+
+    // Header
+    ctx.fillStyle = '#065f46';
+    ctx.font = 'bold 22px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('PHIẾU XÁC NHẬN TẠM ỨNG LƯƠNG', canvas.width / 2, 70);
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '13px monospace';
+    ctx.fillText(`Mã phiếu: ${adv.id}`, canvas.width / 2, 98);
+    ctx.fillText(
+      `Ngày tạm ứng: ${formatDateDMY(adv.advanceDate)}`,
+      canvas.width / 2,
+      118
+    );
+
+    // Divider line
+    ctx.beginPath();
+    ctx.setLineDash([6, 4]);
+    ctx.moveTo(40, 138);
+    ctx.lineTo(canvas.width - 40, 138);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Info rows
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillStyle = '#334155';
+    ctx.fillText('Họ và tên nhân viên:', 44, 180);
+    ctx.font = 'bold 18px system-ui, sans-serif';
+    ctx.fillStyle = '#0f172a';
+    ctx.fillText(adv.employeeName, 220, 180);
+
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillStyle = '#334155';
+    ctx.fillText('Chức vụ / Bộ phận:', 44, 215);
+    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillStyle = '#475569';
+    ctx.fillText(adv.employeeRole || 'Nhân viên phục vụ', 220, 215);
+
+    // Amount box
+    ctx.fillStyle = '#fff1f2';
+    ctx.fillRect(40, 245, canvas.width - 80, 110);
+    ctx.strokeStyle = '#fda4af';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(40, 245, canvas.width - 80, 110);
+
+    ctx.fillStyle = '#e11d48';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('SỐ TIỀN TẠM ỨNG (VNĐ)', canvas.width / 2, 275);
+
+    ctx.font = 'bold 32px monospace';
+    ctx.fillText(`-${formatVND(adv.amount)}`, canvas.width / 2, 315);
+
+    ctx.fillStyle = '#be123c';
+    ctx.font = 'italic 13px system-ui, sans-serif';
+    ctx.fillText(
+      `Bằng chữ: ${formatNumberToVietnameseWords(adv.amount)}`,
+      canvas.width / 2,
+      342
+    );
+
+    // Note section
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(40, 380, canvas.width - 80, 75);
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(40, 380, canvas.width - 80, 75);
+
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillText('Ghi chú / Mục đích ứng:', 55, 405);
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.fillStyle = '#1e293b';
+    ctx.fillText(adv.note || 'Tạm ứng lương nhân viên trong kỳ', 55, 435);
+
+    // Synchronized status badge
+    ctx.fillStyle = '#ecfdf5';
+    ctx.fillRect(40, 475, canvas.width - 80, 38);
+    ctx.strokeStyle = '#a7f3d0';
+    ctx.strokeRect(40, 475, canvas.width - 80, 38);
+
+    ctx.fillStyle = '#047857';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(
+      '✓ ĐÃ TỰ ĐỘNG KHẤU TRỪ VÀO KHOẢN TRỪ (CHI TRONG NGÀY)',
+      canvas.width / 2,
+      499
+    );
+
+    // Signatures
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    ctx.fillText('Người Lập Phiếu / Kế Toán', 150, 560);
+    ctx.fillText('Người Nhận Tiền Tạm Ứng', canvas.width - 150, 560);
+
+    ctx.font = 'italic 12px system-ui, sans-serif';
+    ctx.fillStyle = '#64748b';
+    ctx.fillText('(Ký & ghi rõ họ tên)', 150, 580);
+    ctx.fillText('(Ký xác nhận đã nhận đủ tiền)', canvas.width - 150, 580);
+
+    // Name under signature
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillStyle = '#0f172a';
+    ctx.fillText(adv.employeeName, canvas.width - 150, 680);
+
+    // Footer note
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillText(
+      'Hệ thống Quản lý VQ-Bill · Sổ Quản lý Nhân sự & Ứng Lương',
+      canvas.width / 2,
+      750
+    );
+
+    const dataUrl = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `Phieu_Ung_Luong_${adv.employeeName.replace(
+      /\s+/g,
+      '_'
+    )}_${adv.advanceDate}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (e) {
+    console.error('Failed to export advance slip image', e);
+  }
+}
+
 export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
   employees,
   salaryAdvances,
@@ -190,10 +412,16 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
   const todayStr = getCurrentBusinessDate();
   const yesterdayStr = getYesterdayBusinessDate();
 
-  // Sub-view toggle: 'advances' (Ghi nhận & Lịch sử ứng lương) | 'employees' (Quản lý nhân viên & Phân Role)
-  const [activeSubView, setActiveSubView] = useState<'advances' | 'employees'>(
-    'advances'
-  );
+  // Sub-view toggle: 'advances' (Nhập & Sổ phiếu) | 'monthly_table' (Bảng theo dõi theo tháng) | 'employees' (Quản lý nhân viên & Phân Role)
+  const [activeSubView, setActiveSubView] = useState<
+    'advances' | 'monthly_table' | 'employees'
+  >('advances');
+
+  // Chế độ hiển thị: 'table' (Dạng bảng theo dõi theo tháng) | 'cards' (Dạng xem như ảnh/thẻ phiếu)
+  const [advanceViewMode, setAdvanceViewMode] = useState<'table' | 'cards'>('table');
+
+  // Modal xem chi tiết phiếu ứng dạng ảnh phiếu in / voucher
+  const [viewSlipAdvance, setViewSlipAdvance] = useState<SalaryAdvanceRecord | null>(null);
 
   // Status banner
   const [statusMsg, setStatusMsg] = useState<{
@@ -341,6 +569,75 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
     }
     return Array.from(monthCounts.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   }, [salaryAdvances]);
+
+  // Dữ liệu cho Chế độ Theo Dõi Theo Tháng (Table View & Tóm Tắt Tổng Ứng)
+  const monthlyAdvancesList = useMemo(() => {
+    return salaryAdvances
+      .filter((adv) => {
+        if (!adv.advanceDate || !adv.advanceDate.startsWith(selectedMonth)) return false;
+        if (employeeFilter !== 'ALL' && adv.employeeId !== employeeFilter) {
+          const matchEmp = employees.find((e) => e.id === employeeFilter);
+          if (
+            !matchEmp ||
+            matchEmp.fullName.trim().toLowerCase() !== adv.employeeName.trim().toLowerCase()
+          ) {
+            return false;
+          }
+        }
+        if (!searchKeyword.trim()) return true;
+        const q = searchKeyword.toLowerCase();
+        return (
+          adv.employeeName.toLowerCase().includes(q) ||
+          (adv.employeeRole || '').toLowerCase().includes(q) ||
+          (adv.note || '').toLowerCase().includes(q) ||
+          adv.advanceDate.includes(q) ||
+          formatDateDMY(adv.advanceDate).includes(q)
+        );
+      })
+      .sort((a, b) => b.advanceDate.localeCompare(a.advanceDate) || b.createdAtMs - a.createdAtMs);
+  }, [salaryAdvances, selectedMonth, employeeFilter, searchKeyword, employees]);
+
+  const monthlyTotalAdvance = useMemo(() => {
+    return monthlyAdvancesList.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  }, [monthlyAdvancesList]);
+
+  const monthlyEmployeeSummaryList = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        employeeId: string;
+        employeeName: string;
+        employeeRole: string;
+        baseSalary: number;
+        count: number;
+        totalAmount: number;
+        advanceDates: string[];
+      }
+    >();
+
+    for (const adv of monthlyAdvancesList) {
+      const matchEmp =
+        employees.find((e) => e.id === adv.employeeId) ||
+        employees.find((e) => e.fullName.trim().toLowerCase() === adv.employeeName.trim().toLowerCase());
+      const key = matchEmp ? matchEmp.id : adv.employeeName.trim().toLowerCase();
+      const existing = map.get(key) || {
+        employeeId: matchEmp?.id || adv.employeeId,
+        employeeName: matchEmp?.fullName || adv.employeeName,
+        employeeRole: matchEmp?.roleOrPosition || adv.employeeRole || 'Nhân viên phục vụ',
+        baseSalary: matchEmp?.baseSalary || 0,
+        count: 0,
+        totalAmount: 0,
+        advanceDates: [],
+      };
+      existing.count += 1;
+      existing.totalAmount += Number(adv.amount) || 0;
+      if (!existing.advanceDates.includes(adv.advanceDate)) {
+        existing.advanceDates.push(adv.advanceDate);
+      }
+      map.set(key, existing);
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [monthlyAdvancesList, employees]);
 
   // Helper to resolve linked StaffAccount for an employee if any
   const getEmployeeLoginInfo = (emp: EmployeeRecord) => {
@@ -1028,7 +1325,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <div className="p-1 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center gap-1">
+            <div className="p-1 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center gap-1 flex-wrap">
               <button
                 type="button"
                 onClick={() => setActiveSubView('advances')}
@@ -1039,7 +1336,22 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                 }`}
               >
                 <Banknote className="w-3.5 h-3.5" />
-                <span>Phiếu Ứng Lương ({salaryAdvances.length})</span>
+                <span>1. Nhập & Phiếu Ứng ({salaryAdvances.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveSubView('monthly_table');
+                  setPeriodMode('month');
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  activeSubView === 'monthly_table'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Table className="w-3.5 h-3.5" />
+                <span>2. Bảng Theo Dõi Theo Tháng</span>
               </button>
               <button
                 type="button"
@@ -1051,7 +1363,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                 }`}
               >
                 <Users className="w-3.5 h-3.5" />
-                <span>Danh Sách Nhân Viên & Phân Role ({employees.length})</span>
+                <span>3. Quản Lý Nhân Viên ({employees.length})</span>
               </button>
             </div>
 
@@ -1481,27 +1793,72 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
           {/* Right Column (7 cols): Bảng Lịch Sử Ứng Lương & Chỉnh Sửa Trực Tiếp */}
           <div className="lg:col-span-7 space-y-4">
             <div className="p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
-              {/* Filter Controls */}
+              {/* Filter Controls & View Switcher */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                    2. Sổ Lịch Sử Nhân Viên Ứng Lương ({filteredAdvances.length} phiếu)
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Bấm "Sửa" để đổi nhân viên, tiền ứng, ngày ứng hoặc "Xóa" để hoàn lại Khoản trừ
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      2. Sổ Lịch Sử Nhân Viên Ứng Lương ({filteredAdvances.length} phiếu)
+                    </h3>
+                    <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold border border-slate-200 dark:border-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => setAdvanceViewMode('table')}
+                        className={`px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors cursor-pointer ${
+                          advanceViewMode === 'table'
+                            ? 'bg-emerald-600 text-white shadow-2xs font-bold'
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                        }`}
+                        title="Xem dạng bảng (table)"
+                      >
+                        <Table className="w-3 h-3" />
+                        <span>Dạng Bảng</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdvanceViewMode('cards')}
+                        className={`px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors cursor-pointer ${
+                          advanceViewMode === 'cards'
+                            ? 'bg-emerald-600 text-white shadow-2xs font-bold'
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                        }`}
+                        title="Xem dạng thẻ / ảnh phiếu ứng lương"
+                      >
+                        <Image className="w-3 h-3" />
+                        <span>Xem như ảnh</span>
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Tùy chọn xem dạng bảng (table) hoặc xem dạng ảnh phiếu chi tiết kèm xuất ảnh/in phiếu.
                   </p>
                 </div>
 
-                {canDelete && filteredAdvances.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
-                    onClick={handleRequestDeleteFilteredAdvances}
-                    className="px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer self-start"
+                    onClick={() => {
+                      setActiveSubView('monthly_table');
+                      setPeriodMode('month');
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    title="Mở Bảng Theo Dõi Theo Tháng toàn màn hình"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Xóa tất cả ({filteredAdvances.length})</span>
+                    <Table className="w-3.5 h-3.5" />
+                    <span>Mở Bảng Theo Tháng →</span>
                   </button>
-                )}
+
+                  {canDelete && filteredAdvances.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleRequestDeleteFilteredAdvances}
+                      className="px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Xóa ({filteredAdvances.length})</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Period Buttons */}
@@ -1784,64 +2141,95 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                 </form>
               )}
 
-              {/* Advances Table */}
+              {/* Advances Display: Table View OR Cards/Slips View */}
               {filteredAdvances.length === 0 ? (
-                <div className="py-12 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-500">
-                  Chưa có phiếu nhân viên ứng lương nào trong kỳ này.
+                <div className="py-12 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-500 space-y-2">
+                  <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+                    <Receipt className="w-5 h-5" />
+                  </div>
+                  <div className="font-semibold text-slate-700 dark:text-slate-300">
+                    Chưa có phiếu nhân viên ứng lương nào trong kỳ này.
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Sử dụng form bên trái để tạo phiếu ứng mới hoặc chọn kỳ thời gian khác.
+                  </p>
                 </div>
-              ) : (
+              ) : advanceViewMode === 'table' ? (
+                /* OPTION 1: TABLE VIEW */
                 <div className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-x-auto">
                   <table className="w-full text-left border-collapse text-xs">
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-bold text-slate-500">
+                        <th className="py-2.5 px-3 text-center w-10">STT</th>
                         <th className="py-2.5 px-3">Ngày ứng</th>
-                        <th className="py-2.5 px-3">Nhân viên</th>
-                        <th className="py-2.5 px-3">Ghi chú & Trạng thái</th>
-                        <th className="py-2.5 px-3 text-right">Số tiền ứng</th>
+                        <th className="py-2.5 px-3">Tên nhân viên</th>
+                        <th className="py-2.5 px-3">Ghi chú chi tiết</th>
+                        <th className="py-2.5 px-3 text-right">Tiền ứng</th>
                         <th className="py-2.5 px-3 text-right">Thao tác</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                      {filteredAdvances.map((adv) => (
+                      {filteredAdvances.map((adv, idx) => (
                         <tr
                           key={adv.id}
-                          className="hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                          className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
                         >
+                          <td className="py-3 px-3 text-center font-mono text-slate-400">
+                            {idx + 1}
+                          </td>
+
                           <td className="py-3 px-3 font-mono font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                            {formatDateDMY(adv.advanceDate)}
+                            <div>{formatDateDMY(adv.advanceDate)}</div>
                           </td>
 
                           <td className="py-3 px-3">
-                            <div className="font-bold text-slate-900 dark:text-white">
-                              {adv.employeeName}
-                            </div>
-                            <div className="text-[11px] text-slate-500">
-                              {adv.employeeRole || 'Nhân viên phục vụ'}
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-bold text-[11px] shrink-0">
+                                {adv.employeeName.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-bold text-slate-900 dark:text-white truncate">
+                                  {adv.employeeName}
+                                </div>
+                                <div className="text-[11px] text-slate-500 truncate">
+                                  {adv.employeeRole || 'Nhân viên phục vụ'}
+                                </div>
+                              </div>
                             </div>
                           </td>
 
                           <td className="py-3 px-3">
-                            <div className="text-slate-700 dark:text-slate-200">
-                              {adv.note || 'Ứng lương nhân viên'}
+                            <div className="text-slate-700 dark:text-slate-200 font-medium">
+                              {adv.note || '(Không có ghi chú)'}
                             </div>
-                            <div className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950/50 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
-                              <CheckCircle2 className="w-3 h-3" />
+                            <div className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.2 rounded bg-rose-50 dark:bg-rose-950/50 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
+                              <CheckCircle2 className="w-2.5 h-2.5" />
                               <span>Đã trừ qua Khoản trừ (UNG-LUONG)</span>
                             </div>
                           </td>
 
-                          <td className="py-3 px-3 text-right font-mono font-extrabold text-rose-600 dark:text-rose-400 whitespace-nowrap">
+                          <td className="py-3 px-3 text-right font-mono font-extrabold text-rose-600 dark:text-rose-400 whitespace-nowrap text-xs sm:text-sm">
                             -{formatVND(adv.amount)}
                           </td>
 
-                          <td className="py-3 px-3 text-right whitespace-nowrap space-x-1.5">
+                          <td className="py-3 px-3 text-right whitespace-nowrap space-x-1">
+                            <button
+                              type="button"
+                              onClick={() => setViewSlipAdvance(adv)}
+                              className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                              title="Xem như ảnh phiếu / in phiếu"
+                            >
+                              <Image className="w-3 h-3 text-emerald-600" />
+                              <span>Ảnh</span>
+                            </button>
                             {canWrite && (
                               <button
                                 type="button"
                                 onClick={() => handleStartEditAdvance(adv)}
-                                className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                                className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                                title="Sửa thông tin phiếu ứng"
                               >
-                                <Edit3 className="w-3 h-3" />
+                                <Edit3 className="w-3 h-3 text-amber-600" />
                                 <span>Sửa</span>
                               </button>
                             )}
@@ -1851,7 +2239,8 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                                 onClick={() =>
                                   handleRequestDeleteSingleAdvance(adv)
                                 }
-                                className="px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-[11px] font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1 cursor-pointer"
+                                className="px-2 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-[11px] font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1 cursor-pointer"
+                                title="Xóa phiếu ứng lương"
                               >
                                 <Trash2 className="w-3 h-3" />
                                 <span>Xóa</span>
@@ -1861,10 +2250,572 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                         </tr>
                       ))}
                     </tbody>
+                    <tfoot className="border-t-2 border-slate-300 dark:border-slate-700 bg-slate-50/90 dark:bg-slate-800/80 font-bold">
+                      <tr>
+                        <td colSpan={3} className="py-3 px-3 text-slate-800 dark:text-slate-100">
+                          <div className="flex items-center gap-2">
+                            <span className="uppercase text-[11px] tracking-wide text-slate-500">
+                              TỔNG ỨNG TRONG KỲ:
+                            </span>
+                            <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                              {filteredAdvances.length} phiếu ứng
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-[11px] text-slate-500 hidden sm:table-cell">
+                          Đã tự động khấu trừ vào chi trong ngày
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-black text-rose-600 dark:text-rose-400 text-sm sm:text-base whitespace-nowrap">
+                          -{formatVND(totalAdvanceInPeriod)}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveSubView('monthly_table');
+                              setPeriodMode('month');
+                            }}
+                            className="text-[11px] font-semibold text-emerald-600 hover:underline cursor-pointer"
+                          >
+                            Xem Sổ Tháng →
+                          </button>
+                        </td>
+                      </tr>
+                    </tfoot>
                   </table>
+                </div>
+              ) : (
+                /* OPTION 2: CARDS / SLIPS VIEW (XEM NHƯ ẢNH PHIẾU) */
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {filteredAdvances.map((adv) => (
+                    <div
+                      key={adv.id}
+                      className="p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-gradient-to-br from-white to-slate-50/50 dark:from-slate-900 dark:to-slate-800/40 shadow-xs hover:border-emerald-500/50 transition-all space-y-2.5 relative group"
+                    >
+                      <div className="flex items-center justify-between border-b border-dashed border-slate-200 dark:border-slate-800 pb-2">
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                          <span className="text-[10px] font-mono font-bold text-slate-500">
+                            PHIẾU #{adv.id.slice(-6).toUpperCase()}
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-mono font-semibold text-slate-600 dark:text-slate-300">
+                          {formatDateDMY(adv.advanceDate)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-extrabold text-xs shrink-0">
+                          {adv.employeeName.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                            {adv.employeeName}
+                          </div>
+                          <div className="text-[10px] text-slate-500 truncate">
+                            {adv.employeeRole || 'Nhân viên phục vụ'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Amount Box */}
+                      <div className="p-2.5 rounded-xl bg-rose-50/80 dark:bg-rose-950/40 border border-rose-200/70 dark:border-rose-900/60 text-center">
+                        <div className="text-[10px] uppercase font-bold text-rose-500">
+                          Số tiền ứng
+                        </div>
+                        <div className="text-base font-black font-mono text-rose-600 dark:text-rose-400">
+                          -{formatVND(adv.amount)}
+                        </div>
+                        <div className="text-[10px] italic text-rose-600/80 truncate mt-0.5">
+                          {formatNumberToVietnameseWords(adv.amount)}
+                        </div>
+                      </div>
+
+                      {/* Note */}
+                      <div className="text-[11px] text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/60 p-2 rounded-lg">
+                        <strong>Lý do:</strong> {adv.note || 'Tạm ứng lương nhân viên'}
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center justify-between pt-1 gap-1">
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setViewSlipAdvance(adv)}
+                            className="px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer hover:bg-emerald-100"
+                            title="Xem như ảnh phiếu / in phiếu"
+                          >
+                            <Image className="w-3 h-3" />
+                            <span>Xem ảnh</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => downloadAdvanceSlipAsImage(adv)}
+                            className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer hover:bg-slate-100"
+                            title="Tải ảnh PNG về máy"
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>Tải ảnh</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          {canWrite && (
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditAdvance(adv)}
+                              className="p-1 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-800 cursor-pointer"
+                              title="Sửa phiếu"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              type="button"
+                              onClick={() => handleRequestDeleteSingleAdvance(adv)}
+                              className="p-1 rounded-lg border border-rose-200 text-rose-500 hover:bg-rose-50 cursor-pointer"
+                              title="Xóa phiếu"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SUB-VIEW 2: SỔ THEO DÕI NHÂN VIÊN ỨNG LƯƠNG THEO THÁNG (DẠNG TABLE)
+          Đáp ứng chính xác yêu cầu: Tên nhân viên, Ngày ứng, Tiền ứng, Ghi chú chi tiết, và TỔNG ỨNG
+         ===================================================================== */}
+      {activeSubView === 'monthly_table' && (
+        <div className="space-y-4">
+          {/* Main Container */}
+          <div className="p-4 sm:p-6 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs space-y-4">
+            {/* Header with Title and Month Controls */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                    <Table className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      Bảng Theo Dõi Nhân Viên Ứng Lương Theo Tháng (Table View)
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Theo dõi chi tiết: Tên nhân viên · Ngày ứng · Tiền ứng · Ghi chú chi tiết · Và Hàng Tổng Ứng
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Month Selection Bar */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <Calendar className="w-4 h-4 text-emerald-600" />
+                  <span className="text-xs font-medium">Chọn tháng:</span>
+                  <input
+                    type="month"
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="px-2.5 py-0.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 font-bold text-xs text-slate-800 dark:text-slate-100 font-mono"
+                  />
+                </div>
+
+                {/* Steppers */}
+                <div className="flex items-center gap-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const [y, m] = selectedMonth.split('-').map(Number);
+                      const prevDate = new Date(y, m - 2, 1);
+                      const prevStr = `${prevDate.getFullYear()}-${String(
+                        prevDate.getMonth() + 1
+                      ).padStart(2, '0')}`;
+                      setSelectedMonth(prevStr);
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer"
+                  >
+                    ← Tháng trước
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMonth(todayStr.slice(0, 7))}
+                    className={`px-2.5 py-1.5 rounded-xl border font-semibold cursor-pointer ${
+                      selectedMonth === todayStr.slice(0, 7)
+                        ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                        : 'border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Tháng này
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const [y, m] = selectedMonth.split('-').map(Number);
+                      const nextDate = new Date(y, m, 1);
+                      const nextStr = `${nextDate.getFullYear()}-${String(
+                        nextDate.getMonth() + 1
+                      ).padStart(2, '0')}`;
+                      setSelectedMonth(nextStr);
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer"
+                  >
+                    Tháng sau →
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveSubView('advances')}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs ml-auto"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Nhập Phiếu Ứng</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Month Selector from available records */}
+            {availableAdvanceMonths.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-slate-500 text-[11px] font-medium">Tháng có dữ liệu ứng:</span>
+                {availableAdvanceMonths.map(([mStr, count]) => {
+                  const [y, m] = mStr.split('-');
+                  const isCur = selectedMonth === mStr;
+                  return (
+                    <button
+                      key={mStr}
+                      type="button"
+                      onClick={() => setSelectedMonth(mStr)}
+                      className={`px-2.5 py-1 rounded-xl border font-mono font-semibold transition-colors cursor-pointer ${
+                        isCur
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs font-bold'
+                          : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Tháng {m}/{y} ({count} phiếu)
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Summary KPI Cards for the Selected Month */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1">
+              <div className="p-3.5 rounded-xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/60">
+                <div className="text-[11px] font-bold text-rose-700 dark:text-rose-300 uppercase tracking-wide">
+                  TỔNG ỨNG TRONG THÁNG
+                </div>
+                <div className="mt-1 text-xl sm:text-2xl font-black font-mono text-rose-600 dark:text-rose-400">
+                  -{formatVND(monthlyTotalAdvance)}
+                </div>
+                <div className="text-[11px] text-rose-600/80 mt-0.5">
+                  Tháng {selectedMonth.split('-').reverse().join('/')}
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200/80 dark:border-slate-800">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+                  Tổng số phiếu ứng
+                </div>
+                <div className="mt-1 text-xl sm:text-2xl font-extrabold font-mono text-slate-900 dark:text-white">
+                  {monthlyAdvancesList.length} phiếu
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  Trong tháng đang lọc
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900/60">
+                <div className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wide">
+                  Số nhân viên đã ứng
+                </div>
+                <div className="mt-1 text-xl sm:text-2xl font-extrabold font-mono text-emerald-700 dark:text-emerald-400">
+                  {monthlyEmployeeSummaryList.length} nhân viên
+                </div>
+                <div className="text-[11px] text-emerald-600/80 mt-0.5">
+                  Trên tổng {employees.length} nhân sự
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-teal-50/70 dark:bg-teal-950/30 border border-teal-200/80 dark:border-teal-900/60">
+                <div className="text-[11px] font-bold text-teal-700 dark:text-teal-300 uppercase tracking-wide">
+                  Trạng thái khấu trừ
+                </div>
+                <div className="mt-1 text-base font-extrabold text-teal-800 dark:text-teal-200 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                  <span>100% Khấu Trừ</span>
+                </div>
+                <div className="text-[11px] text-teal-600/80 mt-0.5">
+                  Tự động đồng bộ Khoản trừ
+                </div>
+              </div>
+            </div>
+
+            {/* Filter inputs */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 text-xs">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  Lọc theo nhân viên:
+                </label>
+                <select
+                  value={employeeFilter}
+                  onChange={(e) => setEmployeeFilter(e.target.value)}
+                  className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold"
+                >
+                  <option value="ALL">Tất cả nhân viên ({employees.length})</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.fullName} ({emp.roleOrPosition || 'Nhân viên phục vụ'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  Tìm kiếm nhanh:
+                </label>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchKeyword}
+                    onChange={(e) => setSearchKeyword(e.target.value)}
+                    placeholder="Tìm theo tên nhân viên, ngày ứng (DD/MM), ghi chú..."
+                    className="w-full h-9 pl-8 pr-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* TABLE THEO THÁNG CHÍNH THỨC */}
+            {monthlyAdvancesList.length === 0 ? (
+              <div className="py-14 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-500 space-y-2">
+                <Receipt className="w-8 h-8 text-slate-400 mx-auto" />
+                <div className="font-bold text-sm text-slate-700 dark:text-slate-300">
+                  Không có phiếu ứng lương nào trong Tháng {selectedMonth.split('-').reverse().join('/')}.
+                </div>
+                <p className="text-slate-400">
+                  Chọn tháng khác hoặc bấm "+ Nhập Phiếu Ứng" để ghi nhận phiếu ứng mới.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="border border-slate-200/80 dark:border-slate-800 rounded-2xl overflow-hidden shadow-2xs">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-800/80 text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                          <th className="py-3 px-3 text-center w-12">STT</th>
+                          <th className="py-3 px-4">Tên Nhân Viên</th>
+                          <th className="py-3 px-4">Ngày Ứng</th>
+                          <th className="py-3 px-4 text-right">Tiền Ứng (VNĐ)</th>
+                          <th className="py-3 px-4">Ghi Chú Chi Tiết</th>
+                          <th className="py-3 px-4 text-right">Thao Tác</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {monthlyAdvancesList.map((adv, idx) => (
+                          <tr
+                            key={adv.id}
+                            className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
+                          >
+                            <td className="py-3 px-3 text-center font-mono text-slate-400 font-semibold">
+                              {idx + 1}
+                            </td>
+
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-extrabold text-xs shrink-0">
+                                  {adv.employeeName.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="font-bold text-slate-900 dark:text-white">
+                                    {adv.employeeName}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500">
+                                    {adv.employeeRole || 'Nhân viên phục vụ'}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+
+                            <td className="py-3 px-4 font-mono font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                              <div className="font-bold">{formatDateDMY(adv.advanceDate)}</div>
+                              <div className="text-[10px] text-slate-400">
+                                {adv.createdAtMs
+                                  ? new Date(adv.createdAtMs).toLocaleTimeString('vi-VN', {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })
+                                  : ''}
+                              </div>
+                            </td>
+
+                            <td className="py-3 px-4 text-right font-mono font-black text-rose-600 dark:text-rose-400 whitespace-nowrap text-sm sm:text-base">
+                              -{formatVND(adv.amount)}
+                            </td>
+
+                            <td className="py-3 px-4">
+                              <div className="text-slate-800 dark:text-slate-200 font-medium">
+                                {adv.note || '(Không có ghi chú)'}
+                              </div>
+                              <div className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/50 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
+                                <CheckCircle2 className="w-2.5 h-2.5" />
+                                <span>Đã trừ vào Khoản trừ (Chi trong ngày)</span>
+                              </div>
+                            </td>
+
+                            <td className="py-3 px-4 text-right whitespace-nowrap space-x-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setViewSlipAdvance(adv)}
+                                className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                                title="Xem như ảnh phiếu / in phiếu"
+                              >
+                                <Image className="w-3 h-3 text-emerald-600" />
+                                <span>Xem ảnh</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => downloadAdvanceSlipAsImage(adv)}
+                                className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 text-[11px] text-slate-600 cursor-pointer"
+                                title="Tải ảnh PNG"
+                              >
+                                <Download className="w-3 h-3" />
+                              </button>
+                              {canWrite && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditAdvance(adv)}
+                                  className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 text-[11px] font-semibold text-amber-600 cursor-pointer"
+                                  title="Sửa phiếu"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                </button>
+                              )}
+                              {canDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRequestDeleteSingleAdvance(adv)}
+                                  className="px-2 py-1 rounded-lg border border-rose-200 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                  title="Xóa phiếu"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+
+                      {/* HÀNG TỔNG ỨNG THEO THÁNG */}
+                      <tfoot className="border-t-2 border-slate-300 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800 font-bold">
+                        <tr>
+                          <td colSpan={3} className="py-4 px-4 text-slate-900 dark:text-white">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs uppercase tracking-wider text-slate-500 font-bold">
+                                TỔNG CỘNG ỨNG LƯƠNG THÁNG {selectedMonth.split('-').reverse().join('/')}:
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-[11px] font-extrabold">
+                                {monthlyAdvancesList.length} phiếu ứng · {monthlyEmployeeSummaryList.length} nhân viên
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-4 px-4 text-right font-mono font-black text-rose-600 dark:text-rose-400 text-base sm:text-lg whitespace-nowrap">
+                            -{formatVND(monthlyTotalAdvance)}
+                          </td>
+                          <td colSpan={2} className="py-4 px-4 text-[11px] text-slate-500">
+                            Số tiền đã tự động cấn trừ vào báo cáo doanh thu & chi phí quán
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+
+                {/* BẢNG TỔNG HỢP THEO TỪNG NHÂN VIÊN TRONG THÁNG */}
+                <div className="p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <Users className="w-4 h-4 text-emerald-600" />
+                        <span>Tổng Hợp Tiền Ứng Chi Tiết Theo Từng Nhân Viên Trong Tháng ({monthlyEmployeeSummaryList.length})</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Thống kê tổng tiền mỗi nhân viên đã ứng và số dư lương cơ bản còn lại
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto bg-white dark:bg-slate-900">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-bold text-slate-500">
+                          <th className="py-2.5 px-3 text-center w-10">STT</th>
+                          <th className="py-2.5 px-3">Nhân viên</th>
+                          <th className="py-2.5 px-3">Chức vụ / Bộ phận</th>
+                          <th className="py-2.5 px-3 text-center">Số lần ứng</th>
+                          <th className="py-2.5 px-3 text-right">Tổng tiền đã ứng</th>
+                          <th className="py-2.5 px-3 text-right">Lương cơ bản</th>
+                          <th className="py-2.5 px-3 text-right">Lương còn lại dự kiến</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {monthlyEmployeeSummaryList.map((empSum, sIdx) => {
+                          const remainingSalary = empSum.baseSalary > 0
+                            ? Math.max(0, empSum.baseSalary - empSum.totalAmount)
+                            : null;
+                          return (
+                            <tr key={empSum.employeeId || sIdx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                              <td className="py-2.5 px-3 text-center font-mono text-slate-400">
+                                {sIdx + 1}
+                              </td>
+                              <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white">
+                                {empSum.employeeName}
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                                {empSum.employeeRole}
+                              </td>
+                              <td className="py-2.5 px-3 text-center font-mono font-semibold">
+                                <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800">
+                                  {empSum.count} lần
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono font-extrabold text-rose-600 dark:text-rose-400 whitespace-nowrap">
+                                -{formatVND(empSum.totalAmount)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                                {empSum.baseSalary > 0 ? `${formatNumber(empSum.baseSalary)} ₫` : 'Chưa cài đặt'}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono font-bold whitespace-nowrap">
+                                {remainingSalary !== null ? (
+                                  <span className="text-emerald-600 dark:text-emerald-400">
+                                    {formatNumber(remainingSalary)} ₫
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2683,6 +3634,156 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                   className="w-full h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer"
                 >
                   Đồng ý / Đóng thông báo
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* =====================================================================
+          MODAL POPUP 3: XEM CHI TIẾT PHIẾU ỨNG LƯƠNG DẠNG ẢNH / IN PHIẾU (RECEIPT SLIP)
+         ===================================================================== */}
+      {viewSlipAdvance && (
+        <div className="fixed inset-0 z-[120] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="w-full max-w-lg rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Top Bar */}
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/60">
+              <div className="flex items-center gap-2">
+                <Image className="w-4 h-4 text-emerald-600" />
+                <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
+                  Xem Như Ảnh Phiếu Ứng Lương
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewSlipAdvance(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Printable Receipt Voucher Card */}
+            <div className="p-6 bg-slate-100/60 dark:bg-slate-950/60">
+              <div className="p-6 rounded-2xl bg-white text-slate-900 border-2 border-dashed border-emerald-600/40 shadow-md space-y-4 font-sans select-none relative">
+                {/* Watermark Logo/Text */}
+                <div className="absolute right-4 bottom-14 opacity-5 pointer-events-none text-6xl font-black rotate-[-20deg]">
+                  ĐÃ ỨNG
+                </div>
+
+                {/* Voucher Header */}
+                <div className="text-center border-b border-dashed border-slate-300 pb-3">
+                  <div className="text-[11px] font-bold tracking-widest text-emerald-700 uppercase">
+                    HỆ THỐNG QUẢN LÝ VQ-BILL
+                  </div>
+                  <h3 className="text-lg font-black text-slate-900 uppercase mt-0.5 tracking-wide">
+                    PHIẾU TẠM ỨNG LƯƠNG NHÂN VIÊN
+                  </h3>
+                  <div className="text-[11px] font-mono text-slate-500 mt-1 flex items-center justify-center gap-2">
+                    <span>Mã số: <strong>{viewSlipAdvance.id}</strong></span>
+                    <span>·</span>
+                    <span>Ngày: <strong>{formatDateDMY(viewSlipAdvance.advanceDate)}</strong></span>
+                  </div>
+                </div>
+
+                {/* Employee Info */}
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                    <span className="text-slate-500 font-medium">Họ và tên nhân viên:</span>
+                    <strong className="text-sm font-bold text-slate-900">
+                      {viewSlipAdvance.employeeName}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                    <span className="text-slate-500 font-medium">Bộ phận / Chức vụ:</span>
+                    <span className="font-semibold text-slate-700">
+                      {viewSlipAdvance.employeeRole || 'Nhân viên phục vụ'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                    <span className="text-slate-500 font-medium">Thời gian tạo phiếu:</span>
+                    <span className="font-mono text-slate-600">
+                      {viewSlipAdvance.createdAtMs
+                        ? new Date(viewSlipAdvance.createdAtMs).toLocaleString('vi-VN')
+                        : formatDateDMY(viewSlipAdvance.advanceDate)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Amount Box */}
+                <div className="p-3.5 rounded-xl bg-rose-50 border-2 border-rose-300 text-center space-y-1">
+                  <div className="text-[11px] uppercase tracking-wider font-extrabold text-rose-600">
+                    SỐ TIỀN TẠM ỨNG
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black font-mono text-rose-600">
+                    -{formatVND(viewSlipAdvance.amount)}
+                  </div>
+                  <div className="text-xs italic text-rose-700">
+                    Bằng chữ: <strong>{formatNumberToVietnameseWords(viewSlipAdvance.amount)}</strong>
+                  </div>
+                </div>
+
+                {/* Purpose Note */}
+                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-0.5">
+                  <span className="font-bold text-slate-600">Lý do / Mục đích ứng:</span>
+                  <div className="italic">
+                    "{viewSlipAdvance.note || 'Tạm ứng lương nhân viên'}"
+                  </div>
+                </div>
+
+                {/* Auto synced badge */}
+                <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-800 font-semibold flex items-center justify-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Đã khấu trừ trực tiếp vào Khoản trừ trong ngày</span>
+                </div>
+
+                {/* Signatures */}
+                <div className="grid grid-cols-2 gap-4 pt-4 text-center text-xs">
+                  <div>
+                    <div className="font-bold text-slate-800">Người Lập Phiếu / Thu Ngân</div>
+                    <div className="text-[10px] text-slate-400 italic">(Ký & ghi rõ họ tên)</div>
+                    <div className="h-12 flex items-end justify-center font-cursive text-slate-600 text-sm">
+                      Đã duyệt
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="font-bold text-slate-800">Người Nhận Tiền Ứng</div>
+                    <div className="text-[10px] text-slate-400 italic">(Ký xác nhận đã nhận đủ)</div>
+                    <div className="h-12 flex items-end justify-center font-bold text-slate-900 text-xs">
+                      {viewSlipAdvance.employeeName}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Bottom Actions */}
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => downloadAdvanceSlipAsImage(viewSlipAdvance)}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <Download className="w-4 h-4" />
+                <span>Tải Ảnh Phiếu (PNG)</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs inline-flex items-center gap-1.5 hover:bg-slate-100 cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>In Phiếu</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewSlipAdvance(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 font-semibold text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 cursor-pointer"
+                >
+                  Đóng
                 </button>
               </div>
             </div>

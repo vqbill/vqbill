@@ -298,6 +298,8 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     note,
     editItems,
     initialItems,
+    autoPayCommission,
+    existingCommission,
   ]);
 
   const handleItemChange = (

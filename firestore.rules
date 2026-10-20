@@ -78,7 +78,7 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'ownerId', 'username', 'password', 'displayName',
-          'info', 'role', 'active', 'createdAt', 'updatedAt'
+          'info', 'role', 'active', 'allowedProductCategories', 'createdAt', 'updatedAt'
         ]) &&
         canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
@@ -88,6 +88,7 @@ service cloud.firestore {
         data.info is string && data.info.size() <= 500 &&
         data.role is string && data.role in ['admin', 'manager', 'cashier', 'viewer', 'inventory'] &&
         data.active is bool &&
+        (!('allowedProductCategories' in data) || (data.allowedProductCategories is list && data.allowedProductCategories.size() <= 100)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -121,7 +122,7 @@ service cloud.firestore {
           'note', 'status', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'ownerId', 'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime',
+          'ownerId', 'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime', 'tableName',
           'paymentType', 'debtorName', 'debtStatus', 'settleDate', 'settledMethod',
           'paidCashAmount', 'paidTransferAmount', 'subtotalAmount', 'discountAmount',
           'totalAmount', 'deductedAmount', 'itemsSummary',
@@ -131,22 +132,23 @@ service cloud.firestore {
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&
         data.billDate is string && data.billDate.size() == 10 && data.billDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
-        (!('rawDate' in data) || (data.rawDate is string && data.rawDate.size() <= 20)) &&
-        (!('checkInTime' in data) || (data.checkInTime is string && data.checkInTime.size() <= 20)) &&
-        (!('checkOutTime' in data) || (data.checkOutTime is string && data.checkOutTime.size() <= 20)) &&
+        (!('rawDate' in data) || (data.rawDate is string && data.rawDate.size() <= 100)) &&
+        (!('checkInTime' in data) || (data.checkInTime is string && data.checkInTime.size() <= 50)) &&
+        (!('checkOutTime' in data) || (data.checkOutTime is string && data.checkOutTime.size() <= 50)) &&
+        (!('tableName' in data) || (data.tableName is string && data.tableName.size() <= 100)) &&
         data.paymentType is string && data.paymentType in ['cash', 'transfer', 'debt', 'split'] &&
         data.debtorName is string && data.debtorName.size() <= 120 &&
         data.debtStatus is string && data.debtStatus in ['none', 'unpaid', 'paid'] &&
-        (!('settleDate' in data) || (data.settleDate is string && data.settleDate.size() <= 20)) &&
-        (!('settledMethod' in data) || (data.settledMethod is string && data.settledMethod in ['cash', 'transfer'])) &&
+        (!('settleDate' in data) || (data.settleDate is string && data.settleDate.size() <= 50)) &&
+        (!('settledMethod' in data) || (data.settledMethod is string && data.settledMethod in ['cash', 'transfer', ''])) &&
         (!('paidCashAmount' in data) || (data.paidCashAmount is number && data.paidCashAmount >= 0)) &&
         (!('paidTransferAmount' in data) || (data.paidTransferAmount is number && data.paidTransferAmount >= 0)) &&
         (!('subtotalAmount' in data) || (data.subtotalAmount is number && data.subtotalAmount >= 0)) &&
         (!('discountAmount' in data) || (data.discountAmount is number && data.discountAmount >= 0)) &&
         data.totalAmount is number && data.totalAmount >= 0 &&
         data.deductedAmount is number && data.deductedAmount >= 0 &&
-        data.itemsSummary is string && data.itemsSummary.size() <= 1000 &&
-        data.note is string && data.note.size() <= 500 &&
+        data.itemsSummary is string && data.itemsSummary.size() <= 5000 &&
+        data.note is string && data.note.size() <= 2000 &&
         data.status is string && data.status in ['active', 'locked'] &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -159,7 +161,9 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'ownerId', 'billId', 'billDate', 'productName', 'note', 'category',
-          'quantity', 'returnedQuantity', 'unitPrice', 'subtotal', 'createdAt', 'updatedAt'
+          'quantity', 'returnedQuantity', 'unitPrice', 'subtotal',
+          'originalUnitPrice', 'discountAmount', 'discountPercent', 'isDiscountEligible',
+          'createdAt', 'updatedAt'
         ]) &&
         canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
@@ -172,6 +176,10 @@ service cloud.firestore {
         data.returnedQuantity is number && data.returnedQuantity >= 0 && data.returnedQuantity <= data.quantity &&
         data.unitPrice is number && data.unitPrice >= 0 &&
         data.subtotal is number && data.subtotal >= 0 &&
+        (!('originalUnitPrice' in data) || (data.originalUnitPrice is number && data.originalUnitPrice >= 0)) &&
+        (!('discountAmount' in data) || (data.discountAmount is number && data.discountAmount >= 0)) &&
+        (!('discountPercent' in data) || (data.discountPercent is number && data.discountPercent >= 0)) &&
+        (!('isDiscountEligible' in data) || data.isDiscountEligible is bool) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -313,7 +321,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         canWriteWorkspace(existing().ownerId) &&
         incoming().diff(existing()).affectedKeys().hasOnly([
-          'username', 'password', 'displayName', 'info', 'role', 'active', 'updatedAt'
+          'username', 'password', 'displayName', 'info', 'role', 'active', 'allowedProductCategories', 'updatedAt'
         ]);
       allow delete: if isValidId(accountId) && (resource == null || canWriteWorkspace(existing().ownerId));
     }
@@ -353,7 +361,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['debtStatus', 'paymentType', 'note', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['deductedAmount', 'itemsSummary', 'note', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime',
+            'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime', 'tableName',
             'paymentType', 'debtorName', 'debtStatus', 'settleDate', 'settledMethod',
             'paidCashAmount', 'paidTransferAmount', 'subtotalAmount', 'discountAmount',
             'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'updatedAt'
@@ -377,7 +385,9 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['returnedQuantity', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly([
             'billDate', 'productName', 'note', 'category', 'quantity',
-            'returnedQuantity', 'unitPrice', 'subtotal', 'updatedAt'
+            'returnedQuantity', 'unitPrice', 'subtotal',
+            'originalUnitPrice', 'discountAmount', 'discountPercent', 'isDiscountEligible',
+            'updatedAt'
           ])
         );
       allow delete: if isValidId(itemId) && (resource == null || canWriteWorkspace(existing().ownerId));

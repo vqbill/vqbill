@@ -87,6 +87,13 @@
           "type": "boolean",
           "description": "Whether the account is enabled."
         },
+        "allowedProductCategories": {
+          "type": "array",
+          "description": "List of product category names restricted for this staff account.",
+          "items": {
+            "type": "string"
+          }
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -217,6 +224,10 @@
           "type": "string",
           "description": "Check-out time."
         },
+        "tableName": {
+          "type": "string",
+          "description": "Table or room identifier."
+        },
         "subtotalAmount": {
           "type": "number",
           "description": "Subtotal before discount."
@@ -244,8 +255,8 @@
         },
         "settledMethod": {
           "type": "string",
-          "description": "Method used to settle debt (cash or transfer).",
-          "enum": ["cash", "transfer"]
+          "description": "Method used to settle debt (cash or transfer or empty).",
+          "enum": ["cash", "transfer", ""]
         },
         "debtorName": {
           "type": "string",
@@ -369,6 +380,22 @@
         "subtotal": {
           "type": "number",
           "description": "Line item subtotal (quantity * unitPrice)."
+        },
+        "originalUnitPrice": {
+          "type": "number",
+          "description": "Original default menu price before bill-level adjustment."
+        },
+        "discountAmount": {
+          "type": "number",
+          "description": "Discount applied to this item."
+        },
+        "discountPercent": {
+          "type": "number",
+          "description": "Percentage discount applied to this item."
+        },
+        "isDiscountEligible": {
+          "type": "boolean",
+          "description": "Whether this item is eligible for food discount."
         },
         "createdAt": {
           "type": "string",
