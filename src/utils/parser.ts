@@ -1135,6 +1135,30 @@ export function splitProductNameAndInlineNote(
     .replace(/\s+(?:giá|đơn giá|đg)\s*[:\-=]?\s*$/i, '')
     .trim();
 
+  // Strip attached price book or price tier prefixes (e.g. "GIÁ VIP: Tiger bạc lon nhỏ 250ml", "GIÁ VIP - Tiger bạc")
+  cleaned = cleaned
+    .replace(
+      /^(?:bảng\s*giá(?:\s*[:\-].*)?|chính\s*sách\s*giá|áp\s*dụng\s*giá|giá\s*(?:bán|vip(?:\s*\d+)?|chung|thường|sảnh|phòng\s*(?:vip(?:\s*\d+)?|lạnh)?|mang\s*về|sỉ|buôn|chuẩn|mặc\s*định|niêm\s*yết))\s*[:\-\/]\s*/i,
+      ''
+    )
+    .trim();
+
+  // If text is purely a price book or POS header line (e.g. "GIÁ VIP", "BẢNG GIÁ CHUNG"), it is not a dish
+  if (
+    /^(?:bảng\s*giá(?:\s*[:\-].*)?|chính\s*sách\s*giá(?:\s*[:\-].*)?|áp\s*dụng\s*giá(?:\s*[:\-].*)?|giá\s*(?:bán|vip(?:\s*\d+)?|chung|thường|sảnh|phòng\s*(?:vip(?:\s*\d+)?|lạnh)?|mang\s*về|sỉ|buôn|đêm|lễ(?:\s*[\/\-]?\s*tết)?|cuối\s*tuần|đại\s*lý|đối\s*tác|chuẩn|mặc\s*định|niêm\s*yết)(?:\s*[:\-].*)?)(?:\s*\(f\d+\))?$/i.test(
+      cleaned
+    ) ||
+    /^(?:tìm\s*(?:khách\s*hàng|mặt\s*hàng|sản\s*phẩm|kiếm)|chọn\s*bàn|chuyển\s*bàn|thêm\s*món|trả\s*hàng)(?:\s*\(f\d+\))?$/i.test(
+      cleaned
+    )
+  ) {
+    return {
+      productName: '',
+      note: cleaned,
+      category: 'Khác',
+    };
+  }
+
   const noteParts: string[] = [];
 
   // Build combined lookup catalog (user's products + default catalog fallback)
@@ -1655,6 +1679,146 @@ function isNumericOrPercentPosLine(s: string): boolean {
 }
 
 /**
+ * Detects metadata lines, table headers, POS hotkey buttons, and price tier names
+ * (e.g., "Tìm khách hàng (F4)", "Bảng giá chung", "GIÁ VIP", "GIÁ THƯỜNG", "VIP 2 / PHÒNG VIP", "Thành tiền", etc.)
+ * These lines should NEVER be interpreted as product/dish names or dish notes.
+ */
+export function isPosMetadataOrHeaderLine(line: string): boolean {
+  const cleaned = cleanDecorativeLine(line);
+  if (!cleaned) return false;
+  return (
+    /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+[a-z0-9\(\)]+|vip\s*[a-z0-9\(\)]*(?:\s*\/.*)?$|mang\s*về(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mang\s*đi(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mv\s*\d*(?:\s*\/.*)?$|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|chính\s*sách\s*giá|áp\s*dụng\s*giá|tìm\s*(?:khách\s*hàng|mặt\s*hàng|sản\s*phẩm|kiếm)|chọn\s*bàn|chuyển\s*bàn|thêm\s*món|trả\s*hàng|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|(?:thành\s*)?tiền$|đ\.?\s*giá$|sl$)/i.test(
+      cleaned
+    ) ||
+    /^(?:bảng\s*giá(?:\s*[:\-].*)?|chính\s*sách\s*giá(?:\s*[:\-].*)?|áp\s*dụng\s*giá(?:\s*[:\-].*)?|giá\s*(?:bán|vip(?:\s*\d+)?|chung|thường|sảnh|phòng\s*(?:vip(?:\s*\d+)?|lạnh)?|mang\s*về|sỉ|buôn|đêm|lễ(?:\s*[\/\-]?\s*tết)?|cuối\s*tuần|đại\s*lý|đối\s*tác|chuẩn|mặc\s*định|niêm\s*yết)(?:\s*[:\-].*)?)(?:\s*\(f\d+\))?$/i.test(
+      cleaned
+    ) ||
+    /^(?:tìm\s*(?:khách\s*hàng|mặt\s*hàng|sản\s*phẩm|kiếm)|chọn\s*bàn|chuyển\s*bàn|thêm\s*món|trả\s*hàng|in\s*báo\s*chế\s*biến|thông\s*báo)(?:\s*\(f\d+\))?$/i.test(
+      cleaned
+    ) ||
+    /^\d{2,4}\-\d{1,4}$/.test(cleaned) ||
+    /^HD\d{4,}$/i.test(cleaned)
+  );
+}
+
+/**
+ * Recovers real product name from an item that was mistakenly tagged with a price tier header
+ * (e.g. "GIÁ VIP", "BẢNG GIÁ CHUNG", "GIÁ THƯỜNG", "Tìm khách hàng (F4)"),
+ * where the actual dish name was pushed into the `note` field (e.g. "1. Tiger bạc lon nhỏ 250ml").
+ * Also cleanly splits inline cooking notes and matches against the menu catalog.
+ */
+export function recoverPosDishFromItem(
+  rawItem: {
+    productName: string;
+    note?: string;
+    category?: string;
+  },
+  existingProducts?: ProductRecord[],
+  customCategories?: string[]
+): {
+  productName: string;
+  note: string;
+  category: string;
+} | null {
+  let rawName = (rawItem.productName || '').trim();
+  let rawNote = (rawItem.note || '').trim();
+
+  // If rawName starts with price tier prefix (e.g. "GIÁ VIP: Tiger bạc lon nhỏ 250ml"), strip it
+  rawName = rawName
+    .replace(
+      /^(?:bảng\s*giá(?:\s*[:\-].*)?|chính\s*sách\s*giá|áp\s*dụng\s*giá|giá\s*(?:bán|vip(?:\s*\d+)?|chung|thường|sảnh|phòng\s*(?:vip(?:\s*\d+)?|lạnh)?|mang\s*về|sỉ|buôn|chuẩn|mặc\s*định|niêm\s*yết))\s*[:\-\/]\s*/i,
+      ''
+    )
+    .trim();
+
+  const isMetadataHeader =
+    !rawName ||
+    isPosMetadataOrHeaderLine(rawName) ||
+    /^(?:bảng\s*giá(?:\s*[:\-].*)?|chính\s*sách\s*giá(?:\s*[:\-].*)?|áp\s*dụng\s*giá(?:\s*[:\-].*)?|giá\s*(?:bán|vip(?:\s*\d+)?|chung|thường|sảnh|phòng\s*(?:vip(?:\s*\d+)?|lạnh)?|mang\s*về|sỉ|buôn|đêm|lễ(?:\s*[\/\-]?\s*tết)?|cuối\s*tuần|đại\s*lý|đối\s*tác|chuẩn|mặc\s*định|niêm\s*yết)(?:\s*[:\-].*)?)(?:\s*\(f\d+\))?$/i.test(
+      rawName
+    ) ||
+    /^(?:tìm\s*(?:khách\s*hàng|mặt\s*hàng|sản\s*phẩm|kiếm)|chọn\s*bàn|chuyển\s*bàn|thêm\s*món|trả\s*hàng)(?:\s*\(f\d+\))?$/i.test(
+      rawName
+    );
+
+  if (isMetadataHeader) {
+    // rawName is a POS price tier or header ("GIÁ VIP", "BẢNG GIÁ CHUNG", etc.)
+    // Check if rawNote contains the real dish name (e.g. "1. Tiger bạc lon nhỏ 250ml" or "Tiger bạc lon nhỏ 250ml")
+    const candidateDish = rawNote.replace(/^(?:\d+[\.\)]\s*)/, '').trim();
+    if (
+      candidateDish &&
+      /[a-zA-ZÀ-ỹ]/.test(candidateDish) &&
+      !isPosMetadataOrHeaderLine(candidateDish)
+    ) {
+      const recoveredSplit = splitProductNameAndInlineNote(
+        candidateDish,
+        existingProducts,
+        customCategories
+      );
+      if (recoveredSplit.productName) {
+        return {
+          productName: recoveredSplit.productName,
+          note: recoveredSplit.note || '',
+          category:
+            recoveredSplit.category ||
+            inferCategory(recoveredSplit.productName, customCategories),
+        };
+      }
+    }
+    // If no candidate dish in note, this is a pure metadata line; discard!
+    return null;
+  }
+
+  const split = splitProductNameAndInlineNote(
+    rawName,
+    existingProducts,
+    customCategories
+  );
+
+  if (!split.productName) {
+    const candidateDish = rawNote.replace(/^(?:\d+[\.\)]\s*)/, '').trim();
+    if (
+      candidateDish &&
+      /[a-zA-ZÀ-ỹ]/.test(candidateDish) &&
+      !isPosMetadataOrHeaderLine(candidateDish)
+    ) {
+      const recoveredSplit = splitProductNameAndInlineNote(
+        candidateDish,
+        existingProducts,
+        customCategories
+      );
+      if (recoveredSplit.productName) {
+        return {
+          productName: recoveredSplit.productName,
+          note: recoveredSplit.note || '',
+          category:
+            recoveredSplit.category ||
+            inferCategory(recoveredSplit.productName, customCategories),
+        };
+      }
+    }
+    return null;
+  }
+
+  const mergedNote = [split.note, rawNote]
+    .filter(Boolean)
+    .filter(
+      (v, idx, arr) =>
+        arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === idx
+    )
+    .join(', ');
+
+  return {
+    productName: split.productName,
+    note: mergedNote,
+    category:
+      split.category ||
+      rawItem.category ||
+      inferCategory(split.productName, customCategories),
+  };
+}
+
+/**
  * Parses a multi-line POS item block (with or without SPxxxxxx code):
  * Supports:
  * - 6 numeric/percent lines: [qty, originalPrice, discountAmt, discountPct%, sellPrice, subtotal]
@@ -1678,6 +1842,25 @@ function parseMultiLinePosItemBlock(
   if (blockLines.length < 2) return null;
   const rawDishName = blockLines[0].trim();
   const rest = blockLines.slice(1);
+
+  // Safety check: If rawDishName is a price tier header (e.g. "GIÁ VIP", "BẢNG GIÁ CHUNG"),
+  // find the real dish name in rest lines and recover it!
+  if (isPosMetadataOrHeaderLine(rawDishName)) {
+    const candidateDish = rest.find(
+      (n) => /[a-zA-ZÀ-ỹ]/.test(n) && !isPosMetadataOrHeaderLine(n) && !isNumericOrPercentPosLine(n)
+    );
+    if (candidateDish) {
+      const realDishIndex = rest.indexOf(candidateDish);
+      const nextRest = [...rest];
+      nextRest.splice(realDishIndex, 1);
+      return parseMultiLinePosItemBlock(
+        [candidateDish, ...nextRest],
+        existingProducts,
+        customCategories
+      );
+    }
+    return null;
+  }
 
   let numericTailCount = 0;
   for (let r = rest.length - 1; r >= 0; r--) {
@@ -2318,14 +2501,8 @@ export function parseRawTextToBillJSON(
       continue;
     }
 
-    // Skip metadata / header lines (including store name, address ĐC:, phone ĐT:, order code 110-88, BÀN 24 PHIẾU TÍNH TIỀN, KiotViet POS UI headers like "Mang về (02) / Mang đi (Takeaway)", "Tìm khách hàng (F4)", or wrapped "tiền" / "Thành tiền")
-    if (
-      /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+[a-z0-9\(\)]+|vip\s*[a-z0-9\(\)]*(?:\s*\/.*)?$|mang\s*về(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mang\s*đi(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mv\s*\d*(?:\s*\/.*)?$|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|tìm\s*khách\s*hàng|tìm\s*mặt\s*hàng|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|(?:thành\s*)?tiền$|đ\.?\s*giá$|sl$)/i.test(
-        cleanedLine
-      ) ||
-      /^\d{2,4}\-\d{1,4}$/.test(cleanedLine) ||
-      /^HD\d{4,}$/i.test(cleanedLine)
-    ) {
+    // Skip metadata / header lines (including store name, address ĐC:, phone ĐT:, order code 110-88, BÀN 24 PHIẾU TÍNH TIỀN, KiotViet POS UI headers like "Mang về (02) / Mang đi (Takeaway)", "Tìm khách hàng (F4)", "GIÁ VIP", "Bảng giá chung", or wrapped "tiền" / "Thành tiền")
+    if (isPosMetadataOrHeaderLine(cleanedLine)) {
       continue;
     }
 
@@ -2472,7 +2649,11 @@ export function parseRawTextToBillJSON(
     // 43.89%
     // 179,000
     // 179,000
-    if (!isNumericOrPercentPosLine(cleanedLine) && /[a-zA-ZÀ-ỹ]/.test(cleanedLine)) {
+    if (
+      !isNumericOrPercentPosLine(cleanedLine) &&
+      !isPosMetadataOrHeaderLine(cleanedLine) &&
+      /[a-zA-ZÀ-ỹ]/.test(cleanedLine)
+    ) {
       let scanIdx = i + 1;
       const optionalNotes: string[] = [];
       // Allow up to 1 non-numeric note line before the numeric tail if that line is followed by >= 3 numeric/percent lines
@@ -2480,6 +2661,8 @@ export function parseRawTextToBillJSON(
         scanIdx < rawLines.length &&
         !isNumericOrPercentPosLine(rawLines[scanIdx]) &&
         !parseFullItemLine(rawLines[scanIdx], existingProducts, customCategories) &&
+        !isPosMetadataOrHeaderLine(rawLines[scanIdx]) &&
+        !/^\d+[\.\)]\s+[a-zA-ZÀ-ỹ]/.test(rawLines[scanIdx].trim()) &&
         scanIdx + 1 < rawLines.length &&
         isNumericOrPercentPosLine(rawLines[scanIdx + 1])
       ) {
@@ -2537,7 +2720,20 @@ export function parseRawTextToBillJSON(
     flushBufferToLastItemAsNote();
   }
 
-  const subtotalAmount = items.reduce((acc, it) => acc + it.subtotal, 0);
+  const cleanedItems: ExtractedBillItem[] = [];
+  for (const it of items) {
+    const recovered = recoverPosDishFromItem(it, existingProducts, customCategories);
+    if (recovered && recovered.productName) {
+      cleanedItems.push({
+        ...it,
+        productName: recovered.productName,
+        note: recovered.note,
+        category: recovered.category || it.category,
+      });
+    }
+  }
+
+  const subtotalAmount = cleanedItems.reduce((acc, it) => acc + it.subtotal, 0);
   let discountAmount = explicitDiscountAmount;
   if (discountAmount === 0 && explicitDiscountPercent > 0 && subtotalAmount > 0) {
     discountAmount = Math.round((subtotalAmount * explicitDiscountPercent) / 100);
@@ -2571,7 +2767,7 @@ export function parseRawTextToBillJSON(
       discountAmount,
       totalAmount,
     },
-    items,
+    items: cleanedItems,
   };
 }
 

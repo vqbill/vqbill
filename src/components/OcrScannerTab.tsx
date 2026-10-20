@@ -68,6 +68,7 @@ import {
   resolveBusinessBillDate,
   SAMPLE_BILL_TEMPLATES,
   splitProductNameAndInlineNote,
+  recoverPosDishFromItem,
   extractBillTableName,
   isFoodDiscountEligible,
   calculateItemsDiscountSummary,
@@ -510,37 +511,25 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       result.billInfo.paymentType === 'debt' ? result.billInfo.debtorName || '' : ''
     );
 
-    const mappedItems: ExtractedBillItem[] = result.items.map((it) => {
-      const split = splitProductNameAndInlineNote(
-        it.productName,
-        products,
-        categories
-      );
-      const mergedNote = [split.note, it.note]
-        .filter(Boolean)
-        .filter(
-          (v, i, arr) =>
-            arr.findIndex((x) => x!.toLowerCase() === v!.toLowerCase()) === i
-        )
-        .join(', ');
+    const mappedItems: ExtractedBillItem[] = [];
+    for (const it of result.items || []) {
+      const recovered = recoverPosDishFromItem(it, products, categories);
+      if (!recovered || !recovered.productName) continue;
+      const cleanName = recovered.productName;
+      const cleanCat = recovered.category || inferCategory(cleanName, categories);
       const qty = Math.max(1, Math.round(it.quantity || 1));
       const uPrice = Math.max(
         0,
-        Math.round(it.unitPrice || split.catalogUnitPrice || 0)
+        Math.round(it.unitPrice || 0)
       );
-      const cleanName = split.productName || it.productName;
-      const cleanCat =
-        it.category ||
-        split.category ||
-        inferCategory(cleanName, categories);
       const eligible =
         it.isDiscountEligible !== undefined
           ? it.isDiscountEligible
           : isFoodDiscountEligible({ productName: cleanName, category: cleanCat });
 
-      return {
+      mappedItems.push({
         productName: cleanName,
-        note: mergedNote || '',
+        note: recovered.note || '',
         category: cleanCat,
         quantity: qty,
         unitPrice: uPrice,
@@ -549,8 +538,8 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         discountAmount: it.discountAmount,
         discountPercent: it.discountPercent,
         isDiscountEligible: eligible,
-      };
-    });
+      });
+    }
 
     setItems(mappedItems);
 
@@ -633,42 +622,35 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
       if (data && Array.isArray(data.items) && data.items.length > 0) {
         if (payload.appendMode) {
-          const newItems = data.items.map((it: any) => {
-            const split = splitProductNameAndInlineNote(
-              it.productName,
-              products,
-              categories
-            );
-            const mergedNote = [split.note, it.note]
-              .filter(Boolean)
-              .filter(
-                (v, i, arr) =>
-                  arr.findIndex((x) => x!.toLowerCase() === v!.toLowerCase()) === i
-              )
-              .join(', ');
+          const newItems: ExtractedBillItem[] = [];
+          for (const it of data.items || []) {
+            const recovered = recoverPosDishFromItem(it, products, categories);
+            if (!recovered || !recovered.productName) continue;
+            const cleanName = recovered.productName;
+            const cleanCat = recovered.category || inferCategory(cleanName, categories);
             const qty = Math.max(1, Math.round(it.quantity || 1));
-            const uPrice = Math.max(
-              0,
-              Math.round(it.unitPrice || split.catalogUnitPrice || 0)
-            );
-            return {
-              productName: split.productName || it.productName,
-              note: mergedNote || '',
-              category:
-                it.category ||
-                split.category ||
-                inferCategory(split.productName || it.productName, categories),
+            const uPrice = Math.max(0, Math.round(it.unitPrice || 0));
+            const eligible =
+              it.isDiscountEligible !== undefined
+                ? it.isDiscountEligible
+                : isFoodDiscountEligible({ productName: cleanName, category: cleanCat });
+
+            newItems.push({
+              productName: cleanName,
+              note: recovered.note || '',
+              category: cleanCat,
               quantity: qty,
               unitPrice: uPrice,
               subtotal: qty * uPrice,
               originalUnitPrice: it.originalUnitPrice,
               discountAmount: it.discountAmount,
               discountPercent: it.discountPercent,
-            };
-          });
+              isDiscountEligible: eligible,
+            });
+          }
           setItems((prev) => [...prev, ...newItems]);
           setSuccessMsg(
-            `Gemini đã nhận diện và thêm ${newItems.length} món mới vào hóa đơn hiện tại!`
+            `Đã nhận diện và thêm ${newItems.length} món mới vào hóa đơn hiện tại!`
           );
           setQuickAiItemPrompt('');
         } else {

@@ -15,6 +15,7 @@ import {
   normalizeTableName,
   parseBulkProductsInput,
   parseInvoiceText,
+  recoverPosDishFromItem,
   resolveBusinessBillDate,
   splitProductNameAndInlineNote,
 } from '../utils/parser';
@@ -425,7 +426,20 @@ QUY TẮC QUAN TRỌNG:
         250ml 21,000 x 24 504,000
         -> Chữ "tiền" là phần rớt dòng của tiêu đề "Thành tiền", TUYỆT ĐỐI KHÔNG ghép chữ "tiền" vào tên món đầu tiên. Các dòng tên món bị ngắt đôi phải nối lại thành tên món hoàn chỉnh: "Bạch tuộc rang mắm ớt" (119,000 x 1 = 119,000) và "Tiger bạc lon nhỏ 250ml" (21,000 x 24 = 504,000).
 3. PHÂN LOẠI DANH MỤC (category):
-   - Xếp vào một trong các danh mục: [${catList}].`;
+   - Xếp vào một trong các danh mục: [${catList}].
+4. TUYỆT ĐỐI KHÔNG ĐƯỢC NHẬN NHẦM TÊN BẢNG GIÁ HOẶC NÚT GIAO DIỆN POS LÀM TÊN MÓN ĂN:
+   - Các dòng chữ như "GIÁ VIP", "GIÁ THƯỜNG", "GIÁ SẢNH", "BẢNG GIÁ CHUNG", "BẢNG GIÁ PHÒNG VIP", "ÁP DỤNG GIÁ", "CHÍNH SÁCH GIÁ", "Tìm khách hàng (F4)", "VIP 2 / PHÒNG VIP", v.v. là TIÊU ĐỀ BẢNG GIÁ VÀ NÚT TÍNH NĂNG GIAO DIỆN POS (KiotViet, CukCuk...), HOÀN TOÀN KHÔNG PHẢI TÊN MÓN ĂN.
+   - Khi gặp cấu trúc dạng:
+     VIP 2 / PHÒNG VIP
+     Tìm khách hàng (F4)
+     GIÁ VIP
+     1. Tiger bạc lon nhỏ 250ml
+     10
+     21,000
+     210,000
+     -> tableName: "VIP 2"
+     -> Tên món (productName) PHẢI LÀ: "Tiger bạc lon nhỏ 250ml" (bỏ số thứ tự 1.), số lượng = 10, đơn giá = 21000, thành tiền = 210000, note: "".
+     -> TUYỆT ĐỐI KHÔNG ĐƯỢC lấy "GIÁ VIP" làm tên món và TUYỆT ĐỐI KHÔNG ĐƯỢC đưa tên món vào trường note!`;
 }
 
 export function normalizeAndSanitizeExtractedBill(
@@ -475,26 +489,16 @@ export function normalizeAndSanitizeExtractedBill(
   const rawItems = Array.isArray(raw?.items) ? raw.items : [];
   const items: ExtractedBillItem[] = rawItems
     .map((item: any) => {
-      const rawName =
-        typeof item?.productName === 'string' ? item.productName.trim() : '';
-      if (!rawName) return null;
-
-      // Always run splitProductNameAndInlineNote so catalog matches & inline notes are cleanly separated
-      const split = splitProductNameAndInlineNote(
-        rawName,
+      const recovered = recoverPosDishFromItem(
+        {
+          productName: typeof item?.productName === 'string' ? item.productName : '',
+          note: typeof item?.note === 'string' ? item.note : '',
+          category: typeof item?.category === 'string' ? item.category : '',
+        },
         existingProducts,
         customCategories
       );
-      const explicitNote =
-        typeof item?.note === 'string'
-          ? item.note
-              .replace(/^[=\-*_~><\s]+|[=\-*_~><\s]+$/g, '')
-              .trim()
-          : '';
-      const combinedNote = [split.note, explicitNote]
-        .filter(Boolean)
-        .filter((v, idx, arr) => arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === idx)
-        .join(', ');
+      if (!recovered || !recovered.productName) return null;
 
       const quantity = Math.max(1, normalizeMoneyNumber(item?.quantity) || 1);
       let unitPrice = normalizeMoneyNumber(item?.unitPrice);
@@ -503,9 +507,12 @@ export function normalizeAndSanitizeExtractedBill(
       if (unitPrice > 0 && unitPrice < 1000) unitPrice *= 1000;
       if (subtotal > 0 && subtotal < 1000) subtotal *= 1000;
 
-      if (unitPrice === 0 && subtotal === 0 && split.catalogUnitPrice) {
-        unitPrice = split.catalogUnitPrice;
-        subtotal = quantity * unitPrice;
+      if (unitPrice === 0 && subtotal === 0) {
+        const split = splitProductNameAndInlineNote(recovered.productName, existingProducts, customCategories);
+        if (split.catalogUnitPrice) {
+          unitPrice = split.catalogUnitPrice;
+          subtotal = quantity * unitPrice;
+        }
       } else if (subtotal === 0 && unitPrice > 0) {
         subtotal = quantity * unitPrice;
       } else if (unitPrice === 0 && subtotal > 0) {
@@ -514,15 +521,10 @@ export function normalizeAndSanitizeExtractedBill(
         subtotal = quantity * unitPrice;
       }
 
-      const category =
-        typeof item?.category === 'string' && item.category.trim()
-          ? item.category.trim()
-          : split.category || inferCategory(split.productName, customCategories);
-
       return {
-        productName: split.productName || rawName,
-        note: combinedNote || '',
-        category,
+        productName: recovered.productName,
+        note: recovered.note || '',
+        category: recovered.category,
         quantity,
         unitPrice,
         subtotal,
