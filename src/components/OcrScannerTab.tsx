@@ -214,6 +214,64 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [quickAiItemPrompt, setQuickAiItemPrompt] = useState<string>('');
   const [showJsonPreview, setShowJsonPreview] = useState<boolean>(false);
 
+  // Text Mode layout & font size controls (Mặc định tỉ lệ 50:50 chia đều rộng rãi)
+  const [textPaneLayout, setTextPaneLayout] = useState<'balanced' | 'expanded' | 'split50' | 'full'>('split50');
+  const [textAreaFontSize, setTextAreaFontSize] = useState<'xs' | 'sm' | 'base'>('sm');
+
+  const rawTextStats = useMemo(() => {
+    if (!rawText) return { lines: 0, chars: 0 };
+    const lines = rawText.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
+    return { lines, chars: rawText.length };
+  }, [rawText]);
+
+  const handlePasteFromClipboard = async () => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          setRawText(text);
+          setSuccessMsg(`Đã dán ${text.split(/\r?\n/).length} dòng từ Clipboard!`);
+          setTimeout(() => setSuccessMsg(null), 2500);
+          return;
+        }
+      }
+    } catch {
+      // Permission denied or browser blocked clipboard reading
+    }
+  };
+
+  const leftColSpanClass = useMemo(() => {
+    if (inputMode === 'image') {
+      return 'lg:col-span-5 xl:col-span-4 2xl:col-span-4';
+    }
+    if (textPaneLayout === 'full') {
+      return 'lg:col-span-12';
+    }
+    if (textPaneLayout === 'split50') {
+      return 'lg:col-span-6 xl:col-span-6 2xl:col-span-6';
+    }
+    if (textPaneLayout === 'expanded') {
+      return 'lg:col-span-7 xl:col-span-7 2xl:col-span-7';
+    }
+    return 'lg:col-span-5 xl:col-span-5 2xl:col-span-5';
+  }, [inputMode, textPaneLayout]);
+
+  const rightColSpanClass = useMemo(() => {
+    if (inputMode === 'image') {
+      return 'lg:col-span-7 xl:col-span-8 2xl:col-span-8';
+    }
+    if (textPaneLayout === 'full') {
+      return 'lg:col-span-12';
+    }
+    if (textPaneLayout === 'split50') {
+      return 'lg:col-span-6 xl:col-span-6 2xl:col-span-6';
+    }
+    if (textPaneLayout === 'expanded') {
+      return 'lg:col-span-5 xl:col-span-5 2xl:col-span-5';
+    }
+    return 'lg:col-span-7 xl:col-span-7 2xl:col-span-7';
+  }, [inputMode, textPaneLayout]);
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -248,7 +306,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>('percent');
   const [discountPercent, setDiscountPercent] = useState<number>(0);
-  const [autoPayCommission, setAutoPayCommission] = useState<boolean>(false);
+  const [autoPayCommission, setAutoPayCommission] = useState<boolean>(true);
   const [commissionRecipient, setCommissionRecipient] = useState<string>('');
   const [commissionPaymentMethod, setCommissionPaymentMethod] = useState<'cash' | 'transfer'>('cash');
   const [paymentType, setPaymentType] = useState<PaymentType>('cash');
@@ -1369,7 +1427,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* Left Column: Image Inspector or Text Input Area */}
         <div
-          className={`lg:col-span-4 xl:col-span-3.5 2xl:col-span-3 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 ${
+          className={`${leftColSpanClass} p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 transition-all duration-200 ${
             imagePreview && mobileViewTab === 'editor' ? 'hidden lg:block' : ''
           } ${isReceiptSticky && imagePreview ? 'lg:sticky lg:top-4' : ''}`}
         >
@@ -1622,32 +1680,164 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               )}
             </div>
           ) : (
-            /* Text Mode */
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  Dán nội dung hóa đơn (Tự tách ghi chú & Combo):
-                </label>
-                {rawText && (
+            /* Text Mode (Dán Nội Dung Hóa Đơn) */
+            <div className="space-y-3.5">
+              {/* Header Bar of Text Mode */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <label className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                    Dán nội dung hóa đơn
+                  </label>
+                  {rawTextStats.lines > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                      {rawTextStats.lines} dòng
+                    </span>
+                  )}
+                </div>
+
+                {/* Toolbar: Font Size + Layout toggle + Paste + Clear */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Font Size Selector */}
+                  <div className="inline-flex items-center rounded-lg border border-slate-200 dark:border-slate-700 p-0.5 bg-slate-50 dark:bg-slate-800 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setTextAreaFontSize('xs')}
+                      className={`px-1.5 py-0.5 rounded cursor-pointer font-bold ${
+                        textAreaFontSize === 'xs'
+                          ? 'bg-white dark:bg-slate-700 text-emerald-600 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                      title="Cỡ chữ nhỏ (12px)"
+                    >
+                      A-
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTextAreaFontSize('sm')}
+                      className={`px-1.5 py-0.5 rounded cursor-pointer font-bold ${
+                        textAreaFontSize === 'sm'
+                          ? 'bg-white dark:bg-slate-700 text-emerald-600 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                      title="Cỡ chữ chuẩn vừa (14px)"
+                    >
+                      A
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTextAreaFontSize('base')}
+                      className={`px-1.5 py-0.5 rounded cursor-pointer font-bold ${
+                        textAreaFontSize === 'base'
+                          ? 'bg-white dark:bg-slate-700 text-emerald-600 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                      title="Cỡ chữ to rõ (16px)"
+                    >
+                      A+
+                    </button>
+                  </div>
+
+                  {/* Width Layout Selector */}
+                  <div className="inline-flex items-center rounded-lg border border-slate-200 dark:border-slate-700 p-0.5 bg-slate-50 dark:bg-slate-800 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setTextPaneLayout('split50')}
+                      className={`px-2 py-0.5 rounded cursor-pointer font-medium ${
+                        textPaneLayout === 'split50'
+                          ? 'bg-white dark:bg-slate-700 text-emerald-600 shadow-2xs font-bold'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                      title="Chia đều 50% : 50% (Rộng rãi, dễ đối chiếu)"
+                    >
+                      50:50 (Chuẩn)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTextPaneLayout('expanded')}
+                      className={`px-2 py-0.5 rounded cursor-pointer font-medium ${
+                        textPaneLayout === 'expanded'
+                          ? 'bg-white dark:bg-slate-700 text-emerald-600 shadow-2xs font-bold'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                      title="Mở rộng ô dán hóa đơn (65% : 35%)"
+                    >
+                      Mở rộng 65%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTextPaneLayout('full')}
+                      className={`px-2 py-0.5 rounded cursor-pointer font-medium ${
+                        textPaneLayout === 'full'
+                          ? 'bg-white dark:bg-slate-700 text-emerald-600 shadow-2xs font-bold'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                      title="Toàn chiều ngang (100% màn hình)"
+                    >
+                      Toàn màn hình
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTextPaneLayout('balanced')}
+                      className={`px-2 py-0.5 rounded cursor-pointer font-medium ${
+                        textPaneLayout === 'balanced'
+                          ? 'bg-white dark:bg-slate-700 text-emerald-600 shadow-2xs font-bold'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                      title="Thu gọn ô dán (40% : 60%)"
+                    >
+                      Thu gọn 40%
+                    </button>
+                  </div>
+
+                  {/* Quick Paste from clipboard */}
                   <button
                     type="button"
-                    onClick={() => setRawText('')}
-                    className="text-[11px] text-rose-500 hover:text-rose-700 cursor-pointer font-medium"
+                    onClick={handlePasteFromClipboard}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 transition-colors cursor-pointer"
+                    title="Dán nhanh nội dung vừa copy từ Clipboard"
                   >
-                    Xóa văn bản
+                    <Copy className="w-3 h-3" />
+                    <span>Dán nhanh</span>
                   </button>
-                )}
+
+                  {/* Clear text */}
+                  {rawText && (
+                    <button
+                      type="button"
+                      onClick={() => setRawText('')}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                      title="Xóa toàn bộ văn bản đang nhập"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Xóa</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
+              {/* Sub-hint */}
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                Hỗ trợ copy/dán từ KiotViet, CukCuk, bill in nhiệt, Zalo... Tự động nhận diện bàn, giờ vào/ra, chiết khấu đặt bàn và tự loại bỏ tiêu đề bảng giá (GIÁ VIP).
+              </div>
+
+              {/* Textarea */}
               <textarea
-                rows={12}
+                rows={16}
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
-                placeholder={`Ví dụ định dạng bill:\nNgày: ${billDate}\nBàn 24 - Giờ vào: 19:30 - Giờ ra: 22:30\n1. Bia Tiger Lùn x10 lon 22000 220000\n2. Gà biển kho nghệ (làm cay) x1 phần 129000\n3. Combo lẩu hải sản ======================\n>>> Cơm chiên hải sản <<<\n====================== giá 459000\nTổng cộng: 808.000đ`}
-                className="w-full p-3.5 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 leading-relaxed"
+                placeholder={`Ví dụ định dạng bill POS KiotViet / CukCuk:\nVIP 2 / PHÒNG VIP\nTìm khách hàng (F4)\nGIÁ VIP\n1. Tiger bạc lon nhỏ 250ml\n10\n21,000\n210,000\nTổng cộng: 210.000đ`}
+                className={`w-full p-4 sm:p-5 font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white dark:focus:bg-slate-900 leading-relaxed shadow-inner transition-all min-h-[380px] sm:min-h-[460px] resize-y ${
+                  textAreaFontSize === 'xs'
+                    ? 'text-xs'
+                    : textAreaFontSize === 'base'
+                    ? 'text-base'
+                    : 'text-sm'
+                }`}
               />
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row items-stretch gap-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -1668,15 +1858,15 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                       )}, Bàn: ${parsed.billInfo.tableName || 'Chưa rõ'}).`
                     );
                   }}
-                  className="h-10 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="flex-1 min-h-[44px] px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white text-xs sm:text-sm font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <Zap className="w-4 h-4" />
-                  <span>Quét Tức Thì (0s - Chuẩn xác)</span>
+                  <Zap className="w-4 h-4 text-emerald-200" />
+                  <span>⚡ Quét Tức Thì (0s - Chuẩn xác)</span>
                 </button>
 
                 <button
                   type="button"
-                  disabled={isProcessing}
+                  disabled={isProcessing || !rawText.trim()}
                   onClick={() => {
                     const syncedText = normalizeSynchronizedReceiptText(rawText);
                     if (syncedText && syncedText !== rawText) {
@@ -1693,10 +1883,11 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     }
                     runAiExtraction({ text: syncedText || rawText, forceGemini: true });
                   }}
-                  className="h-10 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer shadow-xs"
+                  className="sm:w-auto px-4 min-h-[44px] rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer shadow-sm shrink-0"
+                  title="Dùng Gemini AI quét sâu văn bản nếu hóa đơn có định dạng phức tạp"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
-                  <span>{isProcessing ? 'Gemini đang phân tích...' : 'Quét sâu bằng Gemini AI'}</span>
+                  <RefreshCw className={`w-4 h-4 ${isProcessing ? 'animate-spin text-emerald-400 dark:text-emerald-600' : ''}`} />
+                  <span>{isProcessing ? 'Gemini đang quét...' : '✨ Quét sâu bằng Gemini AI'}</span>
                 </button>
               </div>
             </div>
@@ -1734,7 +1925,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
         {/* Right Area: Interactive Bill Review, Items Table & Fast Entry */}
         <div
-          className={`lg:col-span-8 xl:col-span-8.5 2xl:col-span-9 p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 ${
+          className={`${rightColSpanClass} p-4 sm:p-5 border border-slate-200/90 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-2xs space-y-4 transition-all duration-200 ${
             imagePreview && mobileViewTab === 'image' ? 'hidden lg:block' : ''
           }`}
         >
@@ -2084,21 +2275,27 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 {/* Commission Payout / Gửi tiền chiết khấu cho người đặt bàn */}
                 {safeDiscount > 0 && (
                   <div className="pt-2.5 border-t border-emerald-200/60 dark:border-emerald-900/40 space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={autoPayCommission}
-                        onChange={(e) => setAutoPayCommission(e.target.checked)}
-                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
-                      />
-                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                        Ghi nhận khoản chi gửi tiền chiết khấu cho người đặt bàn vào Sổ quỹ
-                      </span>
-                    </label>
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-100/70 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                          Tự động tính vào Khoản trừ: -{formatVND(safeDiscount)}
+                        </span>
+                      </div>
+                      <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
+                        <input
+                          type="checkbox"
+                          checked={autoPayCommission}
+                          onChange={(e) => setAutoPayCommission(e.target.checked)}
+                          className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
+                        />
+                        <span>Đồng bộ Khoản trừ</span>
+                      </label>
+                    </div>
 
                     {autoPayCommission && (
-                      <div className="p-2.5 rounded-xl bg-white/90 dark:bg-slate-900/90 border border-emerald-300 dark:border-emerald-800 space-y-2 text-xs">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="p-3 rounded-xl bg-white/95 dark:bg-slate-900/90 border border-emerald-300 dark:border-emerald-800 space-y-2.5 text-xs shadow-xs">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                           <div>
                             <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 block mb-0.5">
                               Người nhận (Tên / SĐT người đặt bàn):
@@ -2119,10 +2316,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               <button
                                 type="button"
                                 onClick={() => setCommissionPaymentMethod('cash')}
-                                className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer ${
+                                className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-colors ${
                                   commissionPaymentMethod === 'cash'
                                     ? 'bg-amber-500 text-white border-amber-500 shadow-2xs'
-                                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
                                 }`}
                               >
                                 Tiền mặt
@@ -2130,10 +2327,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                               <button
                                 type="button"
                                 onClick={() => setCommissionPaymentMethod('transfer')}
-                                className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer ${
+                                className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-colors ${
                                   commissionPaymentMethod === 'transfer'
                                     ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
-                                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
                                 }`}
                               >
                                 Chuyển khoản
@@ -2141,10 +2338,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                             </div>
                           </div>
                         </div>
-                        <p className="text-[11px] text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
-                          <Check className="w-3.5 h-3.5 shrink-0" />
+                        <p className="text-[11px] text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                          <Check className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                           <span>
-                            Sau khi lưu bill, hệ thống sẽ tự động tạo khoản chi <strong>-{formatVND(safeDiscount)}</strong> (Nhóm: Hoa hồng / Chiết khấu đặt bàn) vào Sổ quỹ ngày.
+                            Sau khi lưu bill, khoản chiết khấu đặt bàn <strong>-{formatVND(safeDiscount)}</strong> sẽ tự động tính vào <strong>Khoản trừ (Chi trong ngày)</strong> và trừ khỏi quỹ tiền mặt.
                           </span>
                         </p>
                       </div>

@@ -1400,15 +1400,26 @@ function parsePriceOnlyLine(
     }
   }
 
-  // Pattern 1: "giá 459000" / "Đơn giá: 459.000đ" / "459000đ"
+  // Pattern 1: "giá 459000" / "Đơn giá: 459.000đ" / "459000đ" / "539,000"
   const mSinglePrice = cleaned.match(
-    /^(?:giá(?:\s*bán)?|đơn\s*giá|thành\s*tiền|đg|tt)?\s*[:=\-]?\s*(\d[\d.,]*)\s*(k|đ|vnđ|d)?$/i
+    /^(?:(giá(?:\s*bán)?|đơn\s*giá|thành\s*tiền|đg|tt)\s*[:=\-]?\s*)?(\d[\d.,]*)\s*(k|đ|vnđ|d)?$/i
   );
   if (mSinglePrice) {
-    let price = normalizeMoneyNumber(mSinglePrice[1] + (mSinglePrice[2] || ''));
-    if (price > 0 && price < 1000) price *= 1000;
-    if (price >= 1000) {
-      return { quantity: 1, unitPrice: price, subtotal: price };
+    const hasPricePrefix = Boolean(mSinglePrice[1]);
+    const numStr = mSinglePrice[2];
+    const currencySuffix = mSinglePrice[3];
+    const hasThousandsSeparator = /[\.,]\d{3}\b/.test(numStr);
+    let price = normalizeMoneyNumber(numStr + (currencySuffix || ''));
+
+    // A bare small integer like "1", "2", "10" without prefix, without currency, without thousands separator
+    // is a QUANTITY, NOT a price!
+    if (!hasPricePrefix && !currencySuffix && !hasThousandsSeparator && price < 1000) {
+      // Do nothing, not a price line
+    } else {
+      if (price > 0 && price < 1000 && (hasPricePrefix || currencySuffix)) price *= 1000;
+      if (price >= 1000) {
+        return { quantity: 1, unitPrice: price, subtotal: price };
+      }
     }
   }
 
@@ -1637,7 +1648,7 @@ function parseFullItemLine(
 
   // 3. Single-line Name + Price (Quantity = 1 implicitly):
   const regexNameAndSinglePrice =
-    /^(.+?)\s+(?:giá(?:\s*bán)?\s*[:\-=]?\s*|[\-|:=]\s*)?(\d[\d.,]*)\s*(k|đ|vnđ|d)?$/i;
+    /^(.+?)\s+(?:(giá(?:\s*bán)?\s*[:\-=]?\s*|[\-|:=]\s*))?(\d[\d.,]*)\s*(k|đ|vnđ|d)?$/i;
   const m3 = cleaned.match(regexNameAndSinglePrice);
   if (m3 && !wasChevronWrapped) {
     const rawNamePart = m3[1]
@@ -1645,8 +1656,33 @@ function parseFullItemLine(
       .replace(/\s+(?:giá|đơn giá|thành tiền)\s*[:\-=]?\s*$/i, '')
       .replace(/[\-|:=]$/, '')
       .trim();
-    let uPrice = normalizeMoneyNumber(m3[2] + (m3[3] || ''));
-    if (uPrice > 0 && uPrice < 1000) uPrice *= 1000;
+    const hasPricePrefixOrDelim = Boolean(m3[2] && m3[2].trim());
+    const rawNumStr = m3[3];
+    const currencySuffix = m3[4];
+    const hasCurrency = Boolean(currencySuffix && currencySuffix.trim());
+    const hasThousandsSeparator = /[\.,]\d{3}\b/.test(rawNumStr);
+
+    let uPrice = normalizeMoneyNumber(rawNumStr + (currencySuffix || ''));
+
+    // If there is NO price prefix/delimiter (like "giá", ":", "-"), NO currency ("k", "đ"),
+    // and NO thousands separator ("539,000" or "539.000"):
+    // A trailing number (especially < 1000, like "3" in "COMBO 3" or "2" in "SET 2" or "333" in "BIA 333")
+    // is part of the product name or dish variant, NOT a single-line price!
+    const isComboOrNumberedDish =
+      /(?:^|\s)(?:combo|set|mẫu|bàn|bia|lẩu|phần|dĩa|đĩa|suất|món|số|gói|loại|tầng|bếp|bát|tô|ly|chai|lon)\s*$/i.test(
+        rawNamePart
+      );
+
+    if (!hasPricePrefixOrDelim && !hasCurrency && !hasThousandsSeparator) {
+      if (isComboOrNumberedDish || uPrice < 1000) {
+        // This is part of the dish name (e.g. "COMBO 3", "SET 2", "BIA 333"), not a single-line price!
+        return null;
+      }
+    }
+
+    if (uPrice > 0 && uPrice < 1000 && (hasPricePrefixOrDelim || hasCurrency)) {
+      uPrice *= 1000;
+    }
 
     if (rawNamePart && /[a-zA-ZÀ-ỹ]/.test(rawNamePart) && uPrice >= 1000) {
       const split = splitProductNameAndInlineNote(
@@ -1675,7 +1711,11 @@ function parseFullItemLine(
 function isNumericOrPercentPosLine(s: string): boolean {
   const t = (s || '').trim();
   if (!t) return false;
-  return /^\d[\d.,]*$/.test(t) || /^\-?\d+(?:[.,]\d+)?\s*%$/.test(t);
+  return (
+    /^\d[\d.,]*$/.test(t) ||
+    /^\-?\d+(?:[.,]\d+)?\s*%$/.test(t) ||
+    /^(?:giá(?:\s*bán)?\s*[:\-=]?\s*)?\d[\d.,]*\s*(?:k|đ|vnđ|d)?$/i.test(t)
+  );
 }
 
 /**
@@ -1949,13 +1989,24 @@ function parseMultiLinePosItemBlock(
     existingProducts,
     customCategories
   );
+
+  const cleanedNotes = noteLines
+    .map((n) =>
+      n
+        .replace(/^>{2,}\s*/, '')
+        .replace(/\s*<{2,}$/, '')
+        .replace(/^[=\-_*#]{2,}\s*$/, '')
+        .trim()
+    )
+    .filter((n) => Boolean(n) && !isPureDecorativeLine(n));
+
   const combinedNote = [
     split.note,
-    ...noteLines.map((n) => n.trim()),
+    ...cleanedNotes,
     discInfo?.discountNote,
   ]
     .filter(Boolean)
-    .join(' · ');
+    .join(', ');
 
   if (!split.productName) return null;
 
@@ -2642,6 +2693,24 @@ export function parseRawTextToBillJSON(
 
     // Check if this line is the start of a multi-line POS block WITHOUT SPxxxxxx code:
     // e.g.
+    // 1. COMBO 3
+    // ======================
+    // >>> Salad hải sản <<<
+    // ======================
+    // >>> Ếch cháy sả lá nghệ <<<
+    // ======================
+    // 1
+    // 539,000
+    // 539,000
+    //
+    // OR:
+    // 6. Cá dìa nấu khế
+    // 4,5 lạng
+    // 1
+    // 252,000
+    // 252,000
+    //
+    // OR:
     // Gà hấp hành nửa con
     // 1
     // 319,000
@@ -2656,31 +2725,79 @@ export function parseRawTextToBillJSON(
     ) {
       let scanIdx = i + 1;
       const optionalNotes: string[] = [];
-      // Allow up to 1 non-numeric note line before the numeric tail if that line is followed by >= 3 numeric/percent lines
-      if (
-        scanIdx < rawLines.length &&
-        !isNumericOrPercentPosLine(rawLines[scanIdx]) &&
-        !parseFullItemLine(rawLines[scanIdx], existingProducts, customCategories) &&
-        !isPosMetadataOrHeaderLine(rawLines[scanIdx]) &&
-        !/^\d+[\.\)]\s+[a-zA-ZÀ-ỹ]/.test(rawLines[scanIdx].trim()) &&
-        scanIdx + 1 < rawLines.length &&
-        isNumericOrPercentPosLine(rawLines[scanIdx + 1])
-      ) {
-        optionalNotes.push(rawLines[scanIdx]);
+
+      // Scan forward through optional note lines, chevrons, modifiers, or dividers before the numeric tail
+      while (scanIdx < rawLines.length && optionalNotes.length < 25) {
+        const nextRaw = (rawLines[scanIdx] || '').trim();
+        if (!nextRaw || isPureDecorativeLine(nextRaw)) {
+          scanIdx++;
+          continue;
+        }
+
+        // If next line is already numeric or percent, we have reached the numeric tail!
+        if (isNumericOrPercentPosLine(nextRaw)) {
+          break;
+        }
+
+        // Stop conditions: next item, metadata header, total, discount, or SP code
+        const isNextNumberedItem = /^\d+[\.\)]\s+[a-zA-ZÀ-ỹ]/.test(nextRaw);
+        const isNextHeaderOrTotal =
+          isPosMetadataOrHeaderLine(nextRaw) ||
+          /^(?:tổng\s*cộng|tổng\s*tiền|tổng\s*thanh\s*toán|khách\s*phải\s*trả|khách\s*cần\s*trả|thực\s*thu|tổng\s*bill|total|tạm\s*tính|chiết\s*khấu|giảm\s*giá)\b/i.test(
+            nextRaw
+          );
+        const isNextFullItem = parseFullItemLine(
+          nextRaw,
+          existingProducts,
+          customCategories
+        );
+        const isNextSpCode = /^SP\d{6}/i.test(nextRaw);
+
+        if (isNextNumberedItem || isNextHeaderOrTotal || isNextFullItem || isNextSpCode) {
+          break;
+        }
+
+        // Otherwise, this line is a dish note line (e.g. ">>> Salad hải sản <<<", "4,5 lạng", "làm cay")
+        optionalNotes.push(nextRaw);
         scanIdx++;
       }
 
+      // Now collect the numeric tail (up to 6 lines of numbers/percentages)
       const numTail: string[] = [];
-      while (
-        scanIdx < rawLines.length &&
-        numTail.length < 6 &&
-        isNumericOrPercentPosLine(rawLines[scanIdx])
-      ) {
-        numTail.push(rawLines[scanIdx]);
-        scanIdx++;
+      while (scanIdx < rawLines.length && numTail.length < 6) {
+        const numCandidate = (rawLines[scanIdx] || '').trim();
+        if (!numCandidate || isPureDecorativeLine(numCandidate)) {
+          scanIdx++;
+          continue;
+        }
+        if (isNumericOrPercentPosLine(numCandidate)) {
+          numTail.push(numCandidate);
+          scanIdx++;
+        } else {
+          break;
+        }
       }
 
-      if (numTail.length >= 3 && /^\d{1,4}$/.test(numTail[0].trim())) {
+      // Validate numeric tail:
+      // Case A: >= 2 numeric lines: first is quantity, at least one is a valid price (>= 1000 or has thousands separator)
+      // Case B: 1 numeric line: must be a price >= 1000
+      let isValidTail = false;
+      if (numTail.length >= 2 && /^\d{1,4}(?:[.,]\d+)?$/.test(numTail[0].trim())) {
+        const hasValidPriceInTail = numTail.slice(1).some((s) => {
+          const money = normalizeMoneyNumber(s);
+          return money >= 1000 || /[\.,]\d{3}\b/.test(s) || /k\b/i.test(s);
+        });
+        if (hasValidPriceInTail) {
+          isValidTail = true;
+        }
+      } else if (numTail.length === 1) {
+        const money = normalizeMoneyNumber(numTail[0]);
+        if (money >= 1000 || /[\.,]\d{3}\b/.test(numTail[0])) {
+          isValidTail = true;
+        }
+      }
+
+      if (isValidTail) {
         const blockCandidate = [cleanedLine, ...optionalNotes, ...numTail];
         const multiItem = parseMultiLinePosItemBlock(
           blockCandidate,

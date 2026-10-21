@@ -59,6 +59,7 @@ interface BillEditModalProps {
     note: string;
     existingDeductionId?: string;
   }) => Promise<void>;
+  onDeleteDeduction?: (deductionId: string) => Promise<void>;
   onDeleteBill?: (bill: BillRecord) => void;
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
@@ -73,6 +74,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
   onClose,
   onSaveEdit,
   onSaveCommissionPayout,
+  onDeleteDeduction,
   onDeleteBill,
   requestConfirm,
 }) => {
@@ -196,9 +198,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     );
   }, [billDeductions, bill.id]);
 
-  const [autoPayCommission, setAutoPayCommission] = useState<boolean>(() => {
-    return Boolean(existingCommission);
-  });
+  const [autoPayCommission, setAutoPayCommission] = useState<boolean>(true);
   const [commissionRecipient, setCommissionRecipient] = useState<string>(() => {
     if (existingCommission) {
       const match = (existingCommission.productName || '').match(/Chi hoa hồng.*?:\s*(.+)$/i);
@@ -566,7 +566,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
           }));
 
           await onSaveEdit(updatedBill, normalizedItems);
-          if (autoPayCommission && safeDiscount > 0 && onSaveCommissionPayout) {
+          if (safeDiscount > 0 && onSaveCommissionPayout) {
             await onSaveCommissionPayout({
               bill: updatedBill,
               deductionDate: billDate,
@@ -576,6 +576,8 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               note: `Chiết khấu / Hoa hồng gửi người đặt bàn (${extractBillTableName(updatedBill) || updatedBill.tableName || 'Bàn'}) · Hóa đơn ${updatedBill.billCode}`,
               existingDeductionId: existingCommission?.id,
             });
+          } else if (safeDiscount === 0 && existingCommission && onDeleteDeduction) {
+            await onDeleteDeduction(existingCommission.id);
           }
           onClose();
         } finally {
@@ -874,30 +876,34 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
               {/* Commission / Gửi tiền chiết khấu cho người đặt bàn */}
               {safeDiscount > 0 && (
                 <div className="pt-2.5 border-t border-emerald-200/60 dark:border-emerald-900/40 space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-1.5">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={autoPayCommission}
-                        onChange={(e) => setAutoPayCommission(e.target.checked)}
-                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
-                      />
-                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                        {existingCommission
-                          ? 'Đồng bộ khoản chi hoa hồng/chiết khấu vào Sổ quỹ ngày'
-                          : 'Ghi nhận khoản chi gửi tiền chiết khấu cho người đặt bàn vào Sổ quỹ'}
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 p-2.5 rounded-xl bg-emerald-100/70 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                        Tự động tính vào Khoản trừ: -{formatVND(safeDiscount)}
                       </span>
-                    </label>
-                    {existingCommission && (
-                      <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md">
-                        Đã có khoản chi: {formatVND(existingCommission.amount)}
-                      </span>
-                    )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {existingCommission && (
+                        <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-white/80 dark:bg-slate-900/80 px-2 py-0.5 rounded-md border border-emerald-300 dark:border-emerald-700">
+                          Đã có khoản chi: {formatVND(existingCommission.amount)}
+                        </span>
+                      )}
+                      <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
+                        <input
+                          type="checkbox"
+                          checked={autoPayCommission}
+                          onChange={(e) => setAutoPayCommission(e.target.checked)}
+                          className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
+                        />
+                        <span>Đồng bộ Khoản trừ</span>
+                      </label>
+                    </div>
                   </div>
 
                   {autoPayCommission && (
-                    <div className="p-2.5 rounded-xl bg-white/90 dark:bg-slate-900/90 border border-emerald-300 dark:border-emerald-800 space-y-2 text-xs">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="p-3 rounded-xl bg-white/95 dark:bg-slate-900/90 border border-emerald-300 dark:border-emerald-800 space-y-2.5 text-xs shadow-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         <div>
                           <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 block mb-0.5">
                             Người nhận (Tên / SĐT người đặt bàn):
@@ -918,10 +924,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                             <button
                               type="button"
                               onClick={() => setCommissionPaymentMethod('cash')}
-                              className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer ${
+                              className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-colors ${
                                 commissionPaymentMethod === 'cash'
                                   ? 'bg-amber-500 text-white border-amber-500 shadow-2xs'
-                                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
                               }`}
                             >
                               Tiền mặt
@@ -929,10 +935,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                             <button
                               type="button"
                               onClick={() => setCommissionPaymentMethod('transfer')}
-                              className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer ${
+                              className={`px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-colors ${
                                 commissionPaymentMethod === 'transfer'
                                   ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
-                                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
                               }`}
                             >
                               Chuyển khoản
@@ -940,10 +946,10 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                           </div>
                         </div>
                       </div>
-                      <p className="text-[11px] text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
-                        <Check className="w-3.5 h-3.5 shrink-0" />
+                      <p className="text-[11px] text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                        <Check className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                         <span>
-                          Sẽ tự động {existingCommission ? 'cập nhật' : 'tạo'} khoản chi <strong>-{formatVND(safeDiscount)}</strong> (Nhóm: Hoa hồng / Chiết khấu đặt bàn) vào ngày {billDate}.
+                          Sẽ tự động {existingCommission ? 'cập nhật' : 'tạo'} khoản chiết khấu đặt bàn <strong>-{formatVND(safeDiscount)}</strong> (Nhóm: Hoa hồng / Chiết khấu đặt bàn) tính vào <strong>Khoản trừ ngày {billDate}</strong>.
                         </span>
                       </p>
                     </div>

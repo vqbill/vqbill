@@ -3176,11 +3176,15 @@ export default function App() {
     );
     setProducts(dedupeRecordsById(res.updatedProducts));
 
-    if (params.commissionPayout?.enabled && (params.discountAmount || 0) > 0) {
+    if ((params.discountAmount || 0) > 0) {
       const catName = 'Hoa hồng / Chiết khấu đặt bàn';
       const tableLabel = extractBillTableName(res.bill) || res.bill.tableName || 'Bàn';
-      const expenseTitle = `Chi hoa hồng đặt bàn: ${params.commissionPayout.recipientName || tableLabel}`;
-      const noteStr = `[Gửi tiền chiết khấu đặt bàn] ${params.commissionPayout.recipientName || ''} · ${tableLabel} (${res.bill.billCode}) - ${params.commissionPayout.paymentMethod === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'}`;
+      const recipient = (params.commissionPayout?.recipientName || '').trim() || tableLabel || 'Người đặt bàn';
+      const expenseTitle = `Chi hoa hồng đặt bàn: ${recipient}`;
+      const method = params.commissionPayout?.paymentMethod || 'cash';
+      const noteStr = `[Chiết khấu đặt bàn] ${recipient} · ${tableLabel} (${res.bill.billCode}) - ${
+        method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'
+      }`;
       saveExpenseDeductionToCloud({
         ownerId,
         deductionDate: res.bill.billDate,
@@ -3190,12 +3194,14 @@ export default function App() {
         expenseTitle,
         category: catName,
         quantity: 1,
-        unitPrice: params.commissionPayout.amount,
-        amount: params.commissionPayout.amount,
+        unitPrice: params.discountAmount!,
+        amount: params.discountAmount!,
         note: noteStr,
-      }).then((ded) => {
-        setDeductions((prev) => dedupeRecordsById([ded, ...prev.filter((d) => d.id !== ded.id)]));
-      }).catch(() => {});
+      })
+        .then((ded) => {
+          setDeductions((prev) => dedupeRecordsById([ded, ...prev.filter((d) => d.id !== ded.id)]));
+        })
+        .catch(() => {});
     }
 
     try {
@@ -9218,6 +9224,7 @@ export default function App() {
           onClose={() => setEditingBill(null)}
           onSaveEdit={handleSaveEditedBill}
           onSaveCommissionPayout={handleSaveCommissionPayout}
+          onDeleteDeduction={(dedId) => handleDeleteDeductionsBatch([dedId])}
           onDeleteBill={
             canDelete
               ? (b) => {
@@ -9540,7 +9547,7 @@ export default function App() {
           onClick={() => setShowQuickBillModal(false)}
         >
           <div
-            className="w-full max-w-6xl max-h-[94vh] flex flex-col rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            className="w-full max-w-[96vw] xl:max-w-[1540px] 2xl:max-w-[1680px] max-h-[95vh] flex flex-col rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}

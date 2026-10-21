@@ -733,7 +733,30 @@ Nhiệm vụ của bạn là tiếp nhận dữ liệu đầu vào (HÌNH ẢNH 
      210,000
      -> tableName: "VIP 2"
      -> Tên món (productName) PHẢI LÀ: "Tiger bạc lon nhỏ 250ml" (bỏ số thứ tự 1.), số lượng = 10, đơn giá = 21000, thành tiền = 210000, note: "".
-     -> TUYỆT ĐỐI KHÔNG ĐƯỢC lấy "GIÁ VIP" làm tên món và TUYỆT ĐỐI KHÔNG ĐƯỢC đưa tên món vào trường note!`;
+     -> TUYỆT ĐỐI KHÔNG ĐƯỢC lấy "GIÁ VIP" làm tên món và TUYỆT ĐỐI KHÔNG ĐƯỢC đưa tên món vào trường note!
+
+8. CÁC MÓN COMBO NHIỀU MÓN VÀ CẤU TRÚC POS NHIỀU DÒNG (RẤT QUAN TRỌNG):
+   - Khi hóa đơn có cấu trúc:
+     1. COMBO 3
+     ======================
+     >>> Salad hải sản <<<
+     ======================
+     >>> Ếch cháy sả lá nghệ <<<
+     ======================
+     >>> Cơm chiên cá mặn <<<
+     ======================
+     >>> Bò sốt tiêu xanh <<<
+     ======================
+     >>> 1 dĩa trái cây <<<
+     ======================
+     1
+     539,000
+     539,000
+   - Tên món (productName) PHẢI LÀ "COMBO 3" (giữ nguyên số 3 là tên combo, không lấy số 3 làm giá tiền!).
+   - Toàn bộ các dòng món bên dưới dấu >>> ... <<< là GHI CHÚ (note) của combo: "Salad hải sản, Ếch cháy sả lá nghệ, Cơm chiên cá mặn, Bò sốt tiêu xanh, 1 dĩa trái cây".
+   - Số lượng (quantity) = 1, đơn giá (unitPrice) = 539,000, thành tiền (subtotal) = 539,000.
+   - Tuyệt đối KHÔNG tách thành "COMBO" và "Salad hải sản", không đặt giá 3.000đ hay 1.000đ!
+   - Tương tự, nếu món có dòng mô tả định lượng như "4,5 lạng" bên dưới tên món (ví dụ: "6. Cá dìa nấu khế \n 4,5 lạng \n 1 \n 252,000 \n 252,000") thì "4,5 lạng" là note của món "Cá dìa nấu khế", số lượng = 1, đơn giá = 252000, thành tiền = 252000.`;
 }
 
 function sanitizeExtractedBill(
