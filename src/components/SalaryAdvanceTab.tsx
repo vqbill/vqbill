@@ -392,6 +392,606 @@ export function downloadAdvanceSlipAsImage(adv: SalaryAdvanceRecord) {
   }
 }
 
+export function downloadAdvanceSlipK80AsImage(
+  adv: SalaryAdvanceRecord,
+  customStoreHeader?: string
+) {
+  try {
+    const storeHeader =
+      customStoreHeader ||
+      localStorage.getItem('vq_printer_header') ||
+      'VỊNH QUÁN F&B';
+    const canvas = document.createElement('canvas');
+    canvas.width = 440;
+    canvas.height = 760;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Thermal paper border
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+
+    // Header
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 20px system-ui, sans-serif';
+    ctx.fillText(storeHeader, canvas.width / 2, 48);
+
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = '#333333';
+    ctx.fillText('ĐC: 131 Chu Huy Mân, Đà Nẵng', canvas.width / 2, 70);
+    ctx.fillText('ĐT: 0702.444.449', canvas.width / 2, 88);
+
+    // Double line
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#000000';
+    ctx.beginPath();
+    ctx.moveTo(24, 104);
+    ctx.lineTo(canvas.width - 24, 104);
+    ctx.stroke();
+
+    // Title
+    ctx.font = 'bold 18px system-ui, sans-serif';
+    ctx.fillStyle = '#000000';
+    ctx.fillText('PHIẾU TẠM ỨNG LƯƠNG', canvas.width / 2, 132);
+
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('(MÁY IN NHIỆT KHỔ K80)', canvas.width / 2, 152);
+
+    const createdAtDate = adv.createdAtMs
+      ? new Date(adv.createdAtMs)
+      : new Date();
+    const timeStr = createdAtDate.toLocaleTimeString('vi-VN');
+    const dateStr = formatDateDMY(adv.advanceDate);
+
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#444444';
+    ctx.fillText(`Mã số: ${adv.id}`, canvas.width / 2, 174);
+    ctx.fillText(`Ngày: ${dateStr} · Giờ: ${timeStr}`, canvas.width / 2, 192);
+
+    // Dashed divider
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = '#000000';
+    ctx.beginPath();
+    ctx.moveTo(24, 206);
+    ctx.lineTo(canvas.width - 24, 206);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Info rows
+    ctx.textAlign = 'left';
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillStyle = '#333333';
+    ctx.fillText('Nhân viên:', 26, 234);
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'right';
+    ctx.fillText(adv.employeeName, canvas.width - 26, 234);
+
+    ctx.textAlign = 'left';
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillStyle = '#333333';
+    ctx.fillText('Bộ phận:', 26, 260);
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'right';
+    ctx.fillText(adv.employeeRole || 'Nhân viên phục vụ', canvas.width - 26, 260);
+
+    ctx.textAlign = 'left';
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillStyle = '#333333';
+    ctx.fillText('Ngày hạch toán:', 26, 286);
+    ctx.font = '13px monospace';
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'right';
+    ctx.fillText(dateStr, canvas.width - 26, 286);
+
+    // Amount box
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(24, 304, canvas.width - 48, 88);
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(24, 304, canvas.width - 48, 88);
+
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('SỐ TIỀN TẠM ỨNG', canvas.width / 2, 326);
+
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText(`-${formatVND(adv.amount)}`, canvas.width / 2, 356);
+
+    ctx.font = 'italic 12px system-ui, sans-serif';
+    ctx.fillText(`(${formatNumberToVietnameseWords(adv.amount)})`, canvas.width / 2, 378);
+
+    // Note
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillStyle = '#000000';
+    ctx.fillText('Lý do ứng:', 26, 412);
+    ctx.font = 'italic 12px system-ui, sans-serif';
+    ctx.fillStyle = '#333333';
+    ctx.fillText(`"${adv.note || 'Tạm ứng lương nhân viên'}"`, 26, 432);
+
+    // Badge
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillStyle = '#000000';
+    ctx.fillText('[✓] Đã trừ vào Khoản trừ trong ngày', canvas.width / 2, 466);
+
+    // Dashed divider
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = '#000000';
+    ctx.beginPath();
+    ctx.moveTo(24, 484);
+    ctx.lineTo(canvas.width - 24, 484);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Signatures
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillStyle = '#000000';
+    ctx.fillText('Người Lập Phiếu', 110, 514);
+    ctx.fillText('Người Nhận Tiền', canvas.width - 110, 514);
+
+    ctx.font = 'italic 11px system-ui, sans-serif';
+    ctx.fillStyle = '#555555';
+    ctx.fillText('(Ký họ tên)', 110, 532);
+    ctx.fillText('(Ký nhận đủ)', canvas.width - 110, 532);
+
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillStyle = '#000000';
+    ctx.fillText('Đã duyệt', 110, 600);
+    ctx.fillText(adv.employeeName, canvas.width - 110, 600);
+
+    // Dashed divider
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(24, 626);
+    ctx.lineTo(canvas.width - 24, 626);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Footer
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillStyle = '#555555';
+    ctx.fillText('Cảm ơn & chúc bạn một ca làm việc tốt!', canvas.width / 2, 654);
+    ctx.fillText('Hệ thống Quản lý VQ-Bill · In nhiệt K80', canvas.width / 2, 674);
+
+    const dataUrl = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `Phieu_Ung_Luong_K80_${adv.employeeName.replace(
+      /\s+/g,
+      '_'
+    )}_${adv.advanceDate}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (e) {
+    console.error('Failed to export K80 advance slip image', e);
+  }
+}
+
+export function printSalaryAdvanceThermalK80(
+  adv: SalaryAdvanceRecord,
+  customStoreHeader?: string
+) {
+  try {
+    const storeHeader =
+      customStoreHeader ||
+      localStorage.getItem('vq_printer_header') ||
+      'VỊNH QUÁN F&B';
+    const createdAtDate = adv.createdAtMs
+      ? new Date(adv.createdAtMs)
+      : new Date();
+    const timeStr = createdAtDate.toLocaleTimeString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const dateStr = formatDateDMY(adv.advanceDate);
+    const amountStr = formatVND(adv.amount);
+    const wordsStr = formatNumberToVietnameseWords(adv.amount);
+    const noteStr = adv.note || 'Tạm ứng lương nhân viên';
+
+    const html = `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Phiếu Tạm Ứng - ${adv.employeeName} (K80)</title>
+  <style>
+    @page {
+      size: 80mm auto;
+      margin: 0mm;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    body {
+      margin: 0;
+      padding: 3mm 4mm;
+      width: 80mm;
+      max-width: 80mm;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Courier New", monospace, sans-serif;
+      font-size: 13px;
+      color: #000000;
+      background: #ffffff;
+      line-height: 1.35;
+    }
+    .text-center { text-align: center; }
+    .text-right { text-align: right; }
+    .font-bold { font-weight: 700; }
+    .font-black { font-weight: 900; }
+    .uppercase { text-transform: uppercase; }
+    .dashed-divider {
+      border-top: 1px dashed #000000;
+      margin: 6px 0;
+    }
+    .double-divider {
+      border-top: 2px solid #000000;
+      margin: 6px 0;
+    }
+    .amount-box {
+      border: 2px solid #000000;
+      padding: 6px 4px;
+      margin: 6px 0;
+      text-align: center;
+      background: #ffffff;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 2px 0;
+      font-size: 13px;
+    }
+    .info-label {
+      color: #000000;
+      font-size: 12px;
+    }
+    .info-value {
+      font-weight: 700;
+      text-align: right;
+    }
+    .signatures {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+      padding-top: 4px;
+      text-align: center;
+    }
+    .sig-col {
+      width: 48%;
+    }
+  </style>
+</head>
+<body>
+  <div class="text-center">
+    <div style="font-size: 16px; font-weight: 900; text-transform: uppercase;">${storeHeader}</div>
+    <div style="font-size: 11px;">ĐC: 131 Chu Huy Mân, Đà Nẵng</div>
+    <div style="font-size: 11px;">ĐT: 0702.444.449</div>
+    <div class="double-divider"></div>
+    <div style="font-size: 15px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px;">PHIẾU TẠM ỨNG LƯƠNG</div>
+    <div style="font-size: 11px; font-weight: 700; margin-top: 1px;">(MÁY IN NHIỆT KHỔ K80)</div>
+    <div style="font-size: 11px; margin-top: 3px;">Mã số: <strong>${adv.id}</strong></div>
+    <div style="font-size: 11px;">Ngày: <strong>${dateStr}</strong> · Giờ: <strong>${timeStr}</strong></div>
+  </div>
+
+  <div class="dashed-divider"></div>
+
+  <div class="info-row">
+    <span class="info-label">Họ tên nhân viên:</span>
+    <span class="info-value" style="font-size: 14px;">${adv.employeeName}</span>
+  </div>
+  <div class="info-row">
+    <span class="info-label">Bộ phận / Chức vụ:</span>
+    <span class="info-value">${adv.employeeRole || 'Nhân viên phục vụ'}</span>
+  </div>
+  <div class="info-row">
+    <span class="info-label">Ngày tạo phiếu:</span>
+    <span class="info-value">${dateStr}</span>
+  </div>
+
+  <div class="amount-box">
+    <div style="font-size: 11px; font-weight: 800; text-transform: uppercase;">SỐ TIỀN TẠM ỨNG</div>
+    <div style="font-size: 24px; font-weight: 900; font-family: monospace; margin: 2px 0;">-${amountStr}</div>
+    <div style="font-size: 11.5px; font-style: italic;">(${wordsStr})</div>
+  </div>
+
+  <div style="font-size: 12px; margin-top: 4px;">
+    <strong>Lý do:</strong> <em>${noteStr}</em>
+  </div>
+  <div style="font-size: 11px; margin-top: 3px; font-weight: 600;">
+    [✓] Đã trừ vào Khoản trừ trong ngày
+  </div>
+
+  <div class="dashed-divider"></div>
+
+  <div class="signatures">
+    <div class="sig-col">
+      <div style="font-weight: 700; font-size: 12px;">Người Lập Phiếu</div>
+      <div style="font-size: 10px; font-style: italic;">(Ký họ tên)</div>
+      <div style="height: 38px; display: flex; align-items: flex-end; justify-content: center; font-size: 12px; font-weight: 600;">Đã duyệt</div>
+    </div>
+    <div class="sig-col">
+      <div style="font-weight: 700; font-size: 12px;">Người Nhận Tiền</div>
+      <div style="font-size: 10px; font-style: italic;">(Ký nhận đủ)</div>
+      <div style="height: 38px; display: flex; align-items: flex-end; justify-content: center; font-size: 12px; font-weight: 700;">${adv.employeeName}</div>
+    </div>
+  </div>
+
+  <div class="dashed-divider" style="margin-top: 10px;"></div>
+  <div class="text-center" style="font-size: 10.5px; color: #222; margin-top: 4px;">
+    Cảm ơn & chúc bạn một ca làm việc tốt!<br />
+    <em>Hệ thống Quản lý VQ-Bill</em>
+  </div>
+  <div style="height: 10mm;"></div>
+</body>
+</html>`;
+
+    let iframe = document.getElementById('vq-advance-print-iframe') as HTMLIFrameElement;
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      iframe.id = 'vq-advance-print-iframe';
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      document.body.appendChild(iframe);
+    }
+
+    const doc = iframe.contentWindow?.document;
+    if (doc) {
+      doc.open();
+      doc.write(html);
+      doc.close();
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      }, 150);
+    }
+  } catch (err) {
+    console.error('Lỗi khi in phiếu K80', err);
+    window.print();
+  }
+}
+
+export function printSalaryAdvanceStandard(
+  adv: SalaryAdvanceRecord,
+  customStoreHeader?: string
+) {
+  try {
+    const storeHeader =
+      customStoreHeader ||
+      localStorage.getItem('vq_printer_header') ||
+      'HỆ THỐNG QUẢN LÝ VQ-BILL';
+    const createdAtDate = adv.createdAtMs
+      ? new Date(adv.createdAtMs)
+      : new Date();
+    const timeStr = createdAtDate.toLocaleTimeString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const dateStr = formatDateDMY(adv.advanceDate);
+    const amountStr = formatVND(adv.amount);
+    const wordsStr = formatNumberToVietnameseWords(adv.amount);
+    const noteStr = adv.note || 'Tạm ứng lương nhân viên';
+
+    const html = `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Phiếu Tạm Ứng - ${adv.employeeName}</title>
+  <style>
+    @page {
+      size: A5 landscape;
+      margin: 8mm;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    body {
+      margin: 0;
+      padding: 8mm;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #ffffff;
+      color: #0f172a;
+    }
+    .voucher {
+      border: 2px dashed #059669;
+      border-radius: 12px;
+      padding: 16px 20px;
+      position: relative;
+    }
+    .header {
+      text-align: center;
+      border-bottom: 1px dashed #cbd5e1;
+      padding-bottom: 10px;
+    }
+    .store-name {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      color: #047857;
+      text-transform: uppercase;
+    }
+    .title {
+      font-size: 19px;
+      font-weight: 900;
+      color: #0f172a;
+      text-transform: uppercase;
+      margin: 3px 0 2px 0;
+    }
+    .meta {
+      font-size: 12px;
+      color: #64748b;
+      font-family: monospace;
+    }
+    .info-list {
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    .info-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .amount-box {
+      background: #fff1f2;
+      border: 2px solid #fda4af;
+      border-radius: 10px;
+      padding: 10px;
+      text-align: center;
+      margin: 12px 0;
+    }
+    .amount-label {
+      font-size: 11px;
+      font-weight: 800;
+      color: #e11d48;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .amount-val {
+      font-size: 26px;
+      font-weight: 900;
+      font-family: monospace;
+      color: #e11d48;
+      margin: 2px 0;
+    }
+    .amount-words {
+      font-size: 12px;
+      font-style: italic;
+      color: #be123c;
+    }
+    .note-box {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12.5px;
+      margin-bottom: 8px;
+    }
+    .status-badge {
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 11.5px;
+      color: #047857;
+      font-weight: 600;
+      text-align: center;
+    }
+    .signatures {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 14px;
+      padding-top: 6px;
+      text-align: center;
+      font-size: 12.5px;
+    }
+    .sig-col {
+      width: 45%;
+    }
+  </style>
+</head>
+<body>
+  <div class="voucher">
+    <div class="header">
+      <div class="store-name">${storeHeader}</div>
+      <div class="title">PHIẾU TẠM ỨNG LƯƠNG NHÂN VIÊN</div>
+      <div class="meta">Mã số: <strong>${adv.id}</strong> · Ngày: <strong>${dateStr}</strong></div>
+    </div>
+
+    <div class="info-list">
+      <div class="info-item">
+        <span style="color:#64748b;">Họ và tên nhân viên:</span>
+        <strong style="font-size:14.5px; color:#0f172a;">${adv.employeeName}</strong>
+      </div>
+      <div class="info-item">
+        <span style="color:#64748b;">Bộ phận / Chức vụ:</span>
+        <strong>${adv.employeeRole || 'Nhân viên phục vụ'}</strong>
+      </div>
+      <div class="info-item">
+        <span style="color:#64748b;">Thời gian tạo phiếu:</span>
+        <span style="font-family:monospace;">${timeStr} ${dateStr}</span>
+      </div>
+    </div>
+
+    <div class="amount-box">
+      <div class="amount-label">SỐ TIỀN TẠM ỨNG</div>
+      <div class="amount-val">-${amountStr}</div>
+      <div class="amount-words">Bằng chữ: <strong>${wordsStr}</strong></div>
+    </div>
+
+    <div class="note-box">
+      <strong>Lý do / Mục đích ứng:</strong> "${noteStr}"
+    </div>
+
+    <div class="status-badge">
+      ✓ Đã khấu trừ trực tiếp vào Khoản trừ trong ngày
+    </div>
+
+    <div class="signatures">
+      <div class="sig-col">
+        <div style="font-weight:700;">Người Lập Phiếu / Thu Ngân</div>
+        <div style="font-size:11px; color:#64748b; font-style:italic;">(Ký & ghi rõ họ tên)</div>
+        <div style="height:40px; display:flex; align-items:flex-end; justify-content:center; font-style:italic; color:#475569;">Đã duyệt</div>
+      </div>
+      <div class="sig-col">
+        <div style="font-weight:700;">Người Nhận Tiền Ứng</div>
+        <div style="font-size:11px; color:#64748b; font-style:italic;">(Ký xác nhận đã nhận đủ)</div>
+        <div style="height:40px; display:flex; align-items:flex-end; justify-content:center; font-weight:700; color:#0f172a;">${adv.employeeName}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    let iframe = document.getElementById('vq-advance-print-iframe') as HTMLIFrameElement;
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      iframe.id = 'vq-advance-print-iframe';
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      document.body.appendChild(iframe);
+    }
+
+    const doc = iframe.contentWindow?.document;
+    if (doc) {
+      doc.open();
+      doc.write(html);
+      doc.close();
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      }, 150);
+    }
+  } catch (err) {
+    console.error('Lỗi khi in phiếu chuẩn', err);
+    window.print();
+  }
+}
+
 export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
   employees,
   salaryAdvances,
@@ -422,6 +1022,8 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
 
   // Modal xem chi tiết phiếu ứng dạng ảnh phiếu in / voucher
   const [viewSlipAdvance, setViewSlipAdvance] = useState<SalaryAdvanceRecord | null>(null);
+  // Định dạng hiển thị phiếu: 'standard' (Khổ A5 / Màu) | 'k80' (Máy in nhiệt khổ K80)
+  const [slipFormat, setSlipFormat] = useState<'standard' | 'k80'>('k80');
 
   // Status banner
   const [statusMsg, setStatusMsg] = useState<{
@@ -2215,12 +2817,27 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                           <td className="py-3 px-3 text-right whitespace-nowrap space-x-1">
                             <button
                               type="button"
-                              onClick={() => setViewSlipAdvance(adv)}
+                              onClick={() => {
+                                setViewSlipAdvance(adv);
+                                setSlipFormat('k80');
+                              }}
+                              className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-black dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer shadow-2xs"
+                              title="In / Xem phiếu máy in nhiệt khổ K80"
+                            >
+                              <Printer className="w-3 h-3 text-amber-400" />
+                              <span>In K80</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setViewSlipAdvance(adv);
+                                setSlipFormat('standard');
+                              }}
                               className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
-                              title="Xem như ảnh phiếu / in phiếu"
+                              title="Xem như ảnh phiếu A5"
                             >
                               <Image className="w-3 h-3 text-emerald-600" />
-                              <span>Ảnh</span>
+                              <span>Ảnh A5</span>
                             </button>
                             {canWrite && (
                               <button
@@ -2341,12 +2958,27 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                         <div className="flex items-center gap-1">
                           <button
                             type="button"
-                            onClick={() => setViewSlipAdvance(adv)}
+                            onClick={() => {
+                              setViewSlipAdvance(adv);
+                              setSlipFormat('k80');
+                            }}
+                            className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-black dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer shadow-2xs"
+                            title="In / Xem phiếu máy in nhiệt khổ K80"
+                          >
+                            <Printer className="w-3 h-3 text-amber-400" />
+                            <span>In K80</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setViewSlipAdvance(adv);
+                              setSlipFormat('standard');
+                            }}
                             className="px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer hover:bg-emerald-100"
-                            title="Xem như ảnh phiếu / in phiếu"
+                            title="Xem như ảnh phiếu chuẩn A5"
                           >
                             <Image className="w-3 h-3" />
-                            <span>Xem ảnh</span>
+                            <span>Ảnh A5</span>
                           </button>
                           <button
                             type="button"
@@ -2679,12 +3311,27 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                             <td className="py-3 px-4 text-right whitespace-nowrap space-x-1.5">
                               <button
                                 type="button"
-                                onClick={() => setViewSlipAdvance(adv)}
+                                onClick={() => {
+                                  setViewSlipAdvance(adv);
+                                  setSlipFormat('k80');
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-black dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer shadow-2xs"
+                                title="In / Xem phiếu máy in nhiệt khổ K80"
+                              >
+                                <Printer className="w-3 h-3 text-amber-400" />
+                                <span>In K80</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setViewSlipAdvance(adv);
+                                  setSlipFormat('standard');
+                                }}
                                 className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
-                                title="Xem như ảnh phiếu / in phiếu"
+                                title="Xem như ảnh phiếu chuẩn A5"
                               >
                                 <Image className="w-3 h-3 text-emerald-600" />
-                                <span>Xem ảnh</span>
+                                <span>Ảnh A5</span>
                               </button>
                               <button
                                 type="button"
@@ -3641,7 +4288,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
         </div>
       )}
       {/* =====================================================================
-          MODAL POPUP 3: XEM CHI TIẾT PHIẾU ỨNG LƯƠNG DẠNG ẢNH / IN PHIẾU (RECEIPT SLIP)
+          MODAL POPUP 3: XEM CHI TIẾT PHIẾU ỨNG LƯƠNG (PHIẾU CHUẨN A5 & KHỔ K80 MÁY IN NHIỆT)
          ===================================================================== */}
       {viewSlipAdvance && (
         <div className="fixed inset-0 z-[120] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
@@ -3649,9 +4296,15 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
             {/* Modal Top Bar */}
             <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/60">
               <div className="flex items-center gap-2">
-                <Image className="w-4 h-4 text-emerald-600" />
+                {slipFormat === 'k80' ? (
+                  <Printer className="w-4 h-4 text-amber-500" />
+                ) : (
+                  <FileText className="w-4 h-4 text-emerald-600" />
+                )}
                 <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
-                  Xem Như Ảnh Phiếu Ứng Lương
+                  {slipFormat === 'k80'
+                    ? 'Phiếu Tạm Ứng - Máy In Nhiệt Khổ K80'
+                    : 'Phiếu Tạm Ứng - Khổ Chuẩn A5 (Thẻ Màu)'}
                 </span>
               </div>
               <button
@@ -3663,125 +4316,285 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
               </button>
             </div>
 
-            {/* Printable Receipt Voucher Card */}
-            <div className="p-6 bg-slate-100/60 dark:bg-slate-950/60">
-              <div className="p-6 rounded-2xl bg-white text-slate-900 border-2 border-dashed border-emerald-600/40 shadow-md space-y-4 font-sans select-none relative">
-                {/* Watermark Logo/Text */}
-                <div className="absolute right-4 bottom-14 opacity-5 pointer-events-none text-6xl font-black rotate-[-20deg]">
-                  ĐÃ ỨNG
-                </div>
+            {/* Version Switcher Tabs */}
+            <div className="px-4 py-2 bg-slate-100 dark:bg-slate-800/90 border-b border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSlipFormat('k80')}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer ${
+                  slipFormat === 'k80'
+                    ? 'bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 shadow-xs'
+                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200/80 dark:border-slate-700'
+                }`}
+              >
+                <Printer className="w-3.5 h-3.5 text-amber-400 dark:text-slate-950" />
+                <span>Máy In Nhiệt (Khổ K80)</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 font-black">
+                  MỚI
+                </span>
+              </button>
 
-                {/* Voucher Header */}
-                <div className="text-center border-b border-dashed border-slate-300 pb-3">
-                  <div className="text-[11px] font-bold tracking-widest text-emerald-700 uppercase">
-                    HỆ THỐNG QUẢN LÝ VQ-BILL
-                  </div>
-                  <h3 className="text-lg font-black text-slate-900 uppercase mt-0.5 tracking-wide">
-                    PHIẾU TẠM ỨNG LƯƠNG NHÂN VIÊN
-                  </h3>
-                  <div className="text-[11px] font-mono text-slate-500 mt-1 flex items-center justify-center gap-2">
-                    <span>Mã số: <strong>{viewSlipAdvance.id}</strong></span>
-                    <span>·</span>
-                    <span>Ngày: <strong>{formatDateDMY(viewSlipAdvance.advanceDate)}</strong></span>
-                  </div>
-                </div>
+              <button
+                type="button"
+                onClick={() => setSlipFormat('standard')}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer ${
+                  slipFormat === 'standard'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200/80 dark:border-slate-700'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Phiếu Chuẩn (A5 / Màu)</span>
+              </button>
+            </div>
 
-                {/* Employee Info */}
-                <div className="space-y-2 text-xs">
-                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Họ và tên nhân viên:</span>
-                    <strong className="text-sm font-bold text-slate-900">
-                      {viewSlipAdvance.employeeName}
-                    </strong>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Bộ phận / Chức vụ:</span>
-                    <span className="font-semibold text-slate-700">
-                      {viewSlipAdvance.employeeRole || 'Nhân viên phục vụ'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Thời gian tạo phiếu:</span>
-                    <span className="font-mono text-slate-600">
-                      {viewSlipAdvance.createdAtMs
-                        ? new Date(viewSlipAdvance.createdAtMs).toLocaleString('vi-VN')
-                        : formatDateDMY(viewSlipAdvance.advanceDate)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Amount Box */}
-                <div className="p-3.5 rounded-xl bg-rose-50 border-2 border-rose-300 text-center space-y-1">
-                  <div className="text-[11px] uppercase tracking-wider font-extrabold text-rose-600">
-                    SỐ TIỀN TẠM ỨNG
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black font-mono text-rose-600">
-                    -{formatVND(viewSlipAdvance.amount)}
-                  </div>
-                  <div className="text-xs italic text-rose-700">
-                    Bằng chữ: <strong>{formatNumberToVietnameseWords(viewSlipAdvance.amount)}</strong>
-                  </div>
-                </div>
-
-                {/* Purpose Note */}
-                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-0.5">
-                  <span className="font-bold text-slate-600">Lý do / Mục đích ứng:</span>
-                  <div className="italic">
-                    "{viewSlipAdvance.note || 'Tạm ứng lương nhân viên'}"
-                  </div>
-                </div>
-
-                {/* Auto synced badge */}
-                <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-800 font-semibold flex items-center justify-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Đã khấu trừ trực tiếp vào Khoản trừ trong ngày</span>
-                </div>
-
-                {/* Signatures */}
-                <div className="grid grid-cols-2 gap-4 pt-4 text-center text-xs">
-                  <div>
-                    <div className="font-bold text-slate-800">Người Lập Phiếu / Thu Ngân</div>
-                    <div className="text-[10px] text-slate-400 italic">(Ký & ghi rõ họ tên)</div>
-                    <div className="h-12 flex items-end justify-center font-cursive text-slate-600 text-sm">
-                      Đã duyệt
+            {/* Slip Preview Area */}
+            <div className="p-4 sm:p-6 bg-slate-100/70 dark:bg-slate-950/70 max-h-[70vh] overflow-y-auto">
+              {slipFormat === 'k80' ? (
+                /* PHIÊN BẢN MÁY IN NHIỆT KHỔ K80 (80mm) */
+                <div className="max-w-[320px] mx-auto p-4 sm:p-5 bg-white text-black shadow-xl font-mono text-xs border border-slate-300 relative select-none rounded-xs">
+                  {/* Store Header */}
+                  <div className="text-center space-y-0.5 pb-2">
+                    <div className="text-sm font-black uppercase tracking-wider text-black">
+                      VỊNH QUÁN F&B
+                    </div>
+                    <div className="text-[11px] text-slate-700">ĐC: 131 Chu Huy Mân, Đà Nẵng</div>
+                    <div className="text-[11px] text-slate-700">ĐT: 0702.444.449</div>
+                    <div className="border-t-2 border-black my-2" />
+                    <div className="text-sm sm:text-base font-black uppercase tracking-wide text-black">
+                      PHIẾU TẠM ỨNG LƯƠNG
+                    </div>
+                    <div className="text-[10px] font-bold text-slate-700">
+                      (MÁY IN NHIỆT KHỔ K80)
+                    </div>
+                    <div className="text-[11px] text-slate-700 pt-1">
+                      Mã số: <strong>{viewSlipAdvance.id}</strong>
+                    </div>
+                    <div className="text-[11px] text-slate-700">
+                      Ngày: <strong>{formatDateDMY(viewSlipAdvance.advanceDate)}</strong> · Giờ:{' '}
+                      <strong>
+                        {viewSlipAdvance.createdAtMs
+                          ? new Date(viewSlipAdvance.createdAtMs).toLocaleTimeString('vi-VN')
+                          : '23:13:26'}
+                      </strong>
                     </div>
                   </div>
 
-                  <div>
-                    <div className="font-bold text-slate-800">Người Nhận Tiền Ứng</div>
-                    <div className="text-[10px] text-slate-400 italic">(Ký xác nhận đã nhận đủ)</div>
-                    <div className="h-12 flex items-end justify-center font-bold text-slate-900 text-xs">
-                      {viewSlipAdvance.employeeName}
+                  <div className="border-t border-dashed border-black my-2" />
+
+                  {/* Employee Info */}
+                  <div className="space-y-1.5 text-xs py-1">
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-slate-600">Họ tên nhân viên:</span>
+                      <strong className="text-sm font-bold text-black">
+                        {viewSlipAdvance.employeeName}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-slate-600">Bộ phận / Chức vụ:</span>
+                      <span className="font-semibold text-slate-900">
+                        {viewSlipAdvance.employeeRole || 'Nhân viên phục vụ'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-slate-600">Ngày hạch toán:</span>
+                      <span className="font-semibold text-slate-900">
+                        {formatDateDMY(viewSlipAdvance.advanceDate)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Amount Box K80 */}
+                  <div className="my-2.5 p-2.5 border-2 border-black text-center space-y-0.5 bg-slate-50">
+                    <div className="text-[10px] font-black uppercase tracking-wider text-black">
+                      SỐ TIỀN TẠM ỨNG
+                    </div>
+                    <div className="text-2xl font-black text-black">
+                      -{formatVND(viewSlipAdvance.amount)}
+                    </div>
+                    <div className="text-[10.5px] italic text-slate-800">
+                      ({formatNumberToVietnameseWords(viewSlipAdvance.amount)})
+                    </div>
+                  </div>
+
+                  {/* Purpose Note */}
+                  <div className="text-xs space-y-0.5 my-2">
+                    <div className="font-bold text-slate-800">Lý do ứng:</div>
+                    <div className="italic text-slate-900 pl-1">
+                      "{viewSlipAdvance.note || 'Tạm ứng lương nhân viên'}"
+                    </div>
+                  </div>
+
+                  <div className="text-[10.5px] font-bold text-emerald-900 bg-emerald-50 p-1.5 rounded border border-emerald-300 text-center">
+                    [✓] Đã trừ vào Khoản trừ trong ngày
+                  </div>
+
+                  <div className="border-t border-dashed border-black my-3" />
+
+                  {/* Signatures */}
+                  <div className="grid grid-cols-2 gap-2 text-center text-xs pt-1">
+                    <div>
+                      <div className="font-bold text-black">Người Lập Phiếu</div>
+                      <div className="text-[9.5px] text-slate-500 italic">(Ký & ghi họ tên)</div>
+                      <div className="h-10 flex items-end justify-center font-bold text-slate-700">
+                        Đã duyệt
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-bold text-black">Người Nhận Tiền</div>
+                      <div className="text-[9.5px] text-slate-500 italic">(Ký nhận đủ)</div>
+                      <div className="h-10 flex items-end justify-center font-bold text-black">
+                        {viewSlipAdvance.employeeName}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-dashed border-black mt-3 mb-2" />
+                  <div className="text-center text-[10px] text-slate-500 leading-tight">
+                    Cảm ơn & chúc bạn một ca làm việc tốt!<br />
+                    <em>Hệ thống Quản lý VQ-Bill · In nhiệt K80</em>
+                  </div>
+                </div>
+              ) : (
+                /* PHIÊN BẢN TIÊU CHUẨN A5 (THẺ MÀU / VOUCHER) */
+                <div className="p-6 rounded-2xl bg-white text-slate-900 border-2 border-dashed border-emerald-600/40 shadow-md space-y-4 font-sans select-none relative">
+                  {/* Watermark Logo/Text */}
+                  <div className="absolute right-4 bottom-14 opacity-5 pointer-events-none text-6xl font-black rotate-[-20deg]">
+                    ĐÃ ỨNG
+                  </div>
+
+                  {/* Voucher Header */}
+                  <div className="text-center border-b border-dashed border-slate-300 pb-3">
+                    <div className="text-[11px] font-bold tracking-widest text-emerald-700 uppercase">
+                      HỆ THỐNG QUẢN LÝ VQ-BILL
+                    </div>
+                    <h3 className="text-lg font-black text-slate-900 uppercase mt-0.5 tracking-wide">
+                      PHIẾU TẠM ỨNG LƯƠNG NHÂN VIÊN
+                    </h3>
+                    <div className="text-[11px] font-mono text-slate-500 mt-1 flex items-center justify-center gap-2">
+                      <span>Mã số: <strong>{viewSlipAdvance.id}</strong></span>
+                      <span>·</span>
+                      <span>Ngày: <strong>{formatDateDMY(viewSlipAdvance.advanceDate)}</strong></span>
+                    </div>
+                  </div>
+
+                  {/* Employee Info */}
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                      <span className="text-slate-500 font-medium">Họ và tên nhân viên:</span>
+                      <strong className="text-sm font-bold text-slate-900">
+                        {viewSlipAdvance.employeeName}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                      <span className="text-slate-500 font-medium">Bộ phận / Chức vụ:</span>
+                      <span className="font-semibold text-slate-700">
+                        {viewSlipAdvance.employeeRole || 'Nhân viên phục vụ'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                      <span className="text-slate-500 font-medium">Thời gian tạo phiếu:</span>
+                      <span className="font-mono text-slate-600">
+                        {viewSlipAdvance.createdAtMs
+                          ? new Date(viewSlipAdvance.createdAtMs).toLocaleString('vi-VN')
+                          : formatDateDMY(viewSlipAdvance.advanceDate)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Amount Box */}
+                  <div className="p-3.5 rounded-xl bg-rose-50 border-2 border-rose-300 text-center space-y-1">
+                    <div className="text-[11px] uppercase tracking-wider font-extrabold text-rose-600">
+                      SỐ TIỀN TẠM ỨNG
+                    </div>
+                    <div className="text-2xl sm:text-3xl font-black font-mono text-rose-600">
+                      -{formatVND(viewSlipAdvance.amount)}
+                    </div>
+                    <div className="text-xs italic text-rose-700">
+                      Bằng chữ: <strong>{formatNumberToVietnameseWords(viewSlipAdvance.amount)}</strong>
+                    </div>
+                  </div>
+
+                  {/* Purpose Note */}
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-0.5">
+                    <span className="font-bold text-slate-600">Lý do / Mục đích ứng:</span>
+                    <div className="italic">
+                      "{viewSlipAdvance.note || 'Tạm ứng lương nhân viên'}"
+                    </div>
+                  </div>
+
+                  {/* Auto synced badge */}
+                  <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-800 font-semibold flex items-center justify-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Đã khấu trừ trực tiếp vào Khoản trừ trong ngày</span>
+                  </div>
+
+                  {/* Signatures */}
+                  <div className="grid grid-cols-2 gap-4 pt-4 text-center text-xs">
+                    <div>
+                      <div className="font-bold text-slate-800">Người Lập Phiếu / Thu Ngân</div>
+                      <div className="text-[10px] text-slate-400 italic">(Ký & ghi rõ họ tên)</div>
+                      <div className="h-12 flex items-end justify-center font-cursive text-slate-600 text-sm">
+                        Đã duyệt
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="font-bold text-slate-800">Người Nhận Tiền Ứng</div>
+                      <div className="text-[10px] text-slate-400 italic">(Ký xác nhận đã nhận đủ)</div>
+                      <div className="h-12 flex items-end justify-center font-bold text-slate-900 text-xs">
+                        {viewSlipAdvance.employeeName}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Modal Bottom Actions */}
             <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-wrap items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => downloadAdvanceSlipAsImage(viewSlipAdvance)}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-              >
-                <Download className="w-4 h-4" />
-                <span>Tải Ảnh Phiếu (PNG)</span>
-              </button>
-
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => window.print()}
-                  className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs inline-flex items-center gap-1.5 hover:bg-slate-100 cursor-pointer"
+                  onClick={() => {
+                    if (slipFormat === 'k80') {
+                      downloadAdvanceSlipK80AsImage(viewSlipAdvance);
+                    } else {
+                      downloadAdvanceSlipAsImage(viewSlipAdvance);
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  <Printer className="w-4 h-4" />
-                  <span>In Phiếu</span>
+                  <Download className="w-4 h-4" />
+                  <span>{slipFormat === 'k80' ? 'Tải Ảnh K80 (PNG)' : 'Tải Ảnh Phiếu (PNG)'}</span>
                 </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => printSalaryAdvanceThermalK80(viewSlipAdvance)}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-black dark:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs border border-slate-700"
+                  title="In trực tiếp máy in nhiệt bill khổ K80 (80mm)"
+                >
+                  <Printer className="w-4 h-4 text-amber-400" />
+                  <span>In Khổ K80</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => printSalaryAdvanceStandard(viewSlipAdvance)}
+                  className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                  title="In phiếu khổ A4/A5 máy in văn phòng"
+                >
+                  <FileText className="w-4 h-4 text-emerald-600" />
+                  <span>In Khổ A5</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setViewSlipAdvance(null)}
-                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 font-semibold text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 cursor-pointer"
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 font-semibold text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
                 >
                   Đóng
                 </button>

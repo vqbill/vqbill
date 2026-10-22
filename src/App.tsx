@@ -2276,18 +2276,41 @@ export default function App() {
     const periodSettledDebtTotal = periodDebtCashCollected + periodDebtTransferCollected;
 
     // Doanh thu tiền mặt từ hóa đơn phát sinh trong kỳ (chưa tính khoản thu nợ)
+    // Lưu ý: Đối với hóa đơn có hoa hồng đặt bàn được ghi nhận trong Khoản trừ (periodDeductions),
+    // cộng lại phần hoa hồng vào doanh thu tiền mặt gộp (grossCashFromBills) để khi trừ tổng chi (totalDeductions),
+    // tiền mặt thực nhận ca ngày (netCashRevenue) chính xác bằng tiền bán thực thu sau hoa hồng!
     const grossCashFromBills = periodBills
       .filter((b) => !isOwnerUseBill(b))
       .reduce((s, b) => {
         const bd = getBillPaymentBreakdown(b);
-        return s + bd.cash;
+        const billDisc = Math.max(0, Number(b.discountAmount) || 0);
+        let addGrossCash = 0;
+        if (billDisc > 0) {
+          if (b.paymentType === 'cash') {
+            addGrossCash = billDisc;
+          } else if (b.paymentType === 'split') {
+            const ratio = b.totalAmount > 0 ? bd.cash / b.totalAmount : 0.5;
+            addGrossCash = Math.round(billDisc * ratio);
+          }
+        }
+        return s + bd.cash + addGrossCash;
       }, 0);
 
     // Doanh thu chuyển khoản từ hóa đơn phát sinh trong kỳ
     const grossTransferFromBills = periodBills
       .reduce((s, b) => {
         const bd = getBillPaymentBreakdown(b);
-        return s + bd.transfer;
+        const billDisc = Math.max(0, Number(b.discountAmount) || 0);
+        let addGrossTransfer = 0;
+        if (billDisc > 0) {
+          if (b.paymentType === 'transfer') {
+            addGrossTransfer = billDisc;
+          } else if (b.paymentType === 'split') {
+            const ratio = b.totalAmount > 0 ? bd.transfer / b.totalAmount : 0.5;
+            addGrossTransfer = Math.round(billDisc * ratio);
+          }
+        }
+        return s + bd.transfer + addGrossTransfer;
       }, 0);
 
     // Tổng khoản trừ (chi tiêu ngày)
@@ -3179,8 +3202,10 @@ export default function App() {
     if ((params.discountAmount || 0) > 0) {
       const catName = 'Hoa hồng / Chiết khấu đặt bàn';
       const tableLabel = extractBillTableName(res.bill) || res.bill.tableName || 'Bàn';
-      const recipient = (params.commissionPayout?.recipientName || '').trim() || tableLabel || 'Người đặt bàn';
-      const expenseTitle = `Chi hoa hồng đặt bàn: ${recipient}`;
+      const recipient = (params.commissionPayout?.recipientName || '').trim();
+      const expenseTitle = recipient && recipient !== 'Người đặt bàn' && recipient !== tableLabel
+        ? `Chi hoa hồng ${tableLabel}: ${recipient}`
+        : `Chi hoa hồng ${tableLabel}`;
       const method = params.commissionPayout?.paymentMethod || 'cash';
       const noteStr = `[Chiết khấu đặt bàn] ${recipient} · ${tableLabel} (${res.bill.billCode}) - ${
         method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'
@@ -4345,11 +4370,14 @@ export default function App() {
     setWorkspaceInitialized(true);
     const catName = 'Hoa hồng / Chiết khấu đặt bàn';
     const tableLabel = extractBillTableName(params.bill) || params.bill.tableName || 'Bàn';
-    const recipient = params.recipientName.trim() || 'Người đặt bàn';
-    const expenseTitle = `Chi hoa hồng đặt bàn: ${recipient}`;
+    const recipient = params.recipientName.trim();
+    const expenseTitle =
+      recipient && recipient !== 'Người đặt bàn' && recipient !== tableLabel
+        ? `Chi hoa hồng ${tableLabel}: ${recipient}`
+        : `Chi hoa hồng ${tableLabel}`;
     const cleanNote =
       params.note.trim() ||
-      `[Chiết khấu đặt bàn] ${recipient} · ${tableLabel} (${params.bill.billCode}) - ${
+      `[Chiết khấu đặt bàn] ${recipient || tableLabel} · ${tableLabel} (${params.bill.billCode}) - ${
         params.paymentMethod === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'
       }`;
 
@@ -4366,27 +4394,104 @@ export default function App() {
           amount: params.amount,
           note: cleanNote,
         });
-        showToast(
-          `Đã cập nhật khoản chi hoa hồng đặt bàn -${formatVND(
-            params.amount
-          )} cho ${recipient}!`
-        );
-        return;
+      }
+    } else {
+      await handleAddExpenseDeduction({
+        deductionDate: params.deductionDate,
+        billDate: params.bill.billDate,
+        billCode: params.bill.billCode,
+        customBillId: params.bill.id,
+        expenseTitle,
+        category: catName,
+        quantity: 1,
+        unitPrice: params.amount,
+        amount: params.amount,
+        note: cleanNote,
+      });
+    }
+
+    // TỰ ĐỘNG CẬP NHẬT TRỰC TIẾP VÀO HÓA ĐƠN TRÊN TAB TỔNG QUAN
+    // Tổng gốc = subtotalAmount (ví dụ 3.000.000đ)
+    // Khoản trừ hoa hồng = discountAmount (ví dụ 200.000đ)
+    // Thực thu (sau trừ) = totalAmount (ví dụ 2.800.000đ)
+    const originalSubtotal =
+      params.bill.subtotalAmount && params.bill.subtotalAmount > 0
+        ? params.bill.subtotalAmount
+        : (params.bill.totalAmount + (params.bill.discountAmount || 0));
+    const newDiscount = Math.max(0, Math.round(Number(params.amount) || 0));
+    const newTotal = Math.max(0, originalSubtotal - newDiscount);
+
+    let paidCash = params.bill.paidCashAmount;
+    let paidTransfer = params.bill.paidTransferAmount;
+    if (params.bill.paymentType === 'cash') {
+      paidCash = newTotal;
+      paidTransfer = 0;
+    } else if (params.bill.paymentType === 'transfer') {
+      paidCash = 0;
+      paidTransfer = newTotal;
+    } else if (params.bill.paymentType === 'split') {
+      if (params.paymentMethod === 'cash') {
+        const curCash =
+          paidCash !== undefined && !isNaN(paidCash) ? paidCash : Math.round(newTotal / 2);
+        paidCash = Math.max(0, Math.min(newTotal, curCash - newDiscount));
+        paidTransfer = Math.max(0, newTotal - paidCash);
+      } else {
+        const curTrans =
+          paidTransfer !== undefined && !isNaN(paidTransfer) ? paidTransfer : Math.round(newTotal / 2);
+        paidTransfer = Math.max(0, Math.min(newTotal, curTrans - newDiscount));
+        paidCash = Math.max(0, newTotal - paidTransfer);
       }
     }
 
-    await handleAddExpenseDeduction({
-      deductionDate: params.deductionDate,
-      billDate: params.bill.billDate,
-      billCode: params.bill.billCode,
-      customBillId: params.bill.id,
-      expenseTitle,
-      category: catName,
-      quantity: 1,
-      unitPrice: params.amount,
-      amount: params.amount,
-      note: cleanNote,
+    const updatedBill: BillRecord = {
+      ...params.bill,
+      subtotalAmount: originalSubtotal,
+      discountAmount: newDiscount,
+      totalAmount: newTotal,
+      paidCashAmount: paidCash,
+      paidTransferAmount: paidTransfer,
+      updatedAtMs: Date.now(),
+    };
+
+    const currentItems = effectiveBillItems.filter((it) => it.billId === updatedBill.id);
+    await updateBillAndItemsInCloud({
+      ownerId,
+      bill: updatedBill,
+      oldItems: currentItems,
+      newItems: currentItems,
     });
+
+    setBills((prev) => prev.map((b) => (b.id === updatedBill.id ? updatedBill : b)));
+    if (inspectingBill && inspectingBill.id === updatedBill.id) {
+      setInspectingBill(updatedBill);
+    }
+    if (editingBill && editingBill.id === updatedBill.id) {
+      setEditingBill(updatedBill);
+    }
+
+    try {
+      const localSnap = loadLocalMirror(ownerId);
+      if (localSnap) {
+        const nextBills = bills.map((b) => (b.id === updatedBill.id ? updatedBill : b));
+        const updatedSnap: WorkspaceCacheSnapshot = {
+          ...localSnap,
+          bills: nextBills,
+          updatedAtMs: Date.now(),
+        };
+        saveLocalMirror(ownerId, updatedSnap);
+        pushWorkspaceToServer(
+          updatedSnap,
+          'replace',
+          currentStaffAccount?.username || 'commission_payout'
+        ).catch(() => {});
+      }
+    } catch {
+      // Ignore local mirror sync errors
+    }
+
+    showToast(
+      `Đã chi hoa hồng ${tableLabel} -${formatVND(newDiscount)}. Hóa đơn sau trừ: ${formatVND(newTotal)}!`
+    );
   };
 
   const handleRecordReturn = async (params: {
@@ -4511,6 +4616,41 @@ export default function App() {
       };
       setInventoryData(nextInv);
       saveInventoryDataToCloud(ownerId, nextInv, rolePermissions).catch(() => {});
+    }
+
+    // Check if any deleted deduction is linked to bill commission
+    const commissionDeductions = deductions.filter(
+      (d) =>
+        idSet.has(d.id) &&
+        (d.category === 'Hoa hồng / Chiết khấu đặt bàn' ||
+          d.category.includes('Hoa hồng') ||
+          (d.productName || '').includes('Chi hoa hồng'))
+    );
+    if (commissionDeductions.length > 0) {
+      const billIdsToRestore = new Set(
+        commissionDeductions
+          .map((d) => ((d as any).customBillId || d.billId) as string)
+          .filter(Boolean)
+      );
+      if (billIdsToRestore.size > 0) {
+        setBills((prev) =>
+          prev.map((b) => {
+            if (!billIdsToRestore.has(b.id)) return b;
+            const origSub =
+              b.subtotalAmount && b.subtotalAmount > 0
+                ? b.subtotalAmount
+                : (b.totalAmount + (b.discountAmount || 0));
+            return {
+              ...b,
+              discountAmount: 0,
+              totalAmount: origSub,
+              paidCashAmount: b.paymentType === 'cash' ? origSub : b.paidCashAmount,
+              paidTransferAmount: b.paymentType === 'transfer' ? origSub : b.paidTransferAmount,
+              updatedAtMs: Date.now(),
+            };
+          })
+        );
+      }
     }
 
     setDeductions((prev) => prev.filter((d) => !idSet.has(d.id)));
@@ -7869,10 +8009,19 @@ export default function App() {
                         const isDebt = bill.paymentType === 'debt';
                         const isOwner = isOwnerUseBill(bill);
 
+                        const origSubtotal =
+                          bill.subtotalAmount && bill.subtotalAmount > 0
+                            ? bill.subtotalAmount
+                            : (bill.totalAmount + (bill.discountAmount || 0));
+                        const billDiscount = Math.max(0, Number(bill.discountAmount) || 0);
+                        const billReturnDed = Math.max(0, Number(bill.deductedAmount) || 0);
+                        const totalDed = billDiscount + billReturnDed;
+                        const netAfterDed = Math.max(0, bill.totalAmount - billReturnDed);
+
                         // Calculate amounts based on current paymentFilter
-                        let displayGross = bill.totalAmount;
-                        let displayDeduction = bill.deductedAmount || 0;
-                        let displayNet = Math.max(0, bill.totalAmount - (bill.deductedAmount || 0));
+                        let displayGross = origSubtotal;
+                        let displayDeduction = totalDed;
+                        let displayNet = netAfterDed;
                         let displayAmountBadge: React.ReactNode = null;
 
                         if (isOwner) {
@@ -7880,26 +8029,24 @@ export default function App() {
                           displayDeduction = 0;
                           displayNet = 0;
                         } else if (isSplit) {
+                          const cashRatio = bill.totalAmount > 0 ? bd.cash / bill.totalAmount : 0.5;
                           if (paymentFilter === 'cash') {
-                            displayGross = bd.cash;
-                            const ratio = bill.totalAmount > 0 ? bd.cash / bill.totalAmount : 0.5;
-                            const splitDed = Math.round((bill.deductedAmount || 0) * ratio);
-                            displayDeduction = splitDed;
-                            displayNet = Math.max(0, bd.cash - splitDed);
+                            displayGross = Math.round(origSubtotal * cashRatio);
+                            displayDeduction = Math.round(totalDed * cashRatio);
+                            displayNet = Math.max(0, bd.cash - Math.round(billReturnDed * cashRatio));
                             displayAmountBadge = (
                               <div className="text-[10px] font-sans font-semibold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                                Phần TM (Bill {formatVND(bill.totalAmount)})
+                                Phần TM (Bill sau trừ {formatVND(bill.totalAmount)})
                               </div>
                             );
                           } else if (paymentFilter === 'transfer') {
-                            displayGross = bd.transfer;
-                            const ratio = bill.totalAmount > 0 ? bd.transfer / bill.totalAmount : 0.5;
-                            const splitDed = Math.round((bill.deductedAmount || 0) * ratio);
-                            displayDeduction = splitDed;
-                            displayNet = Math.max(0, bd.transfer - splitDed);
+                            const transRatio = 1 - cashRatio;
+                            displayGross = Math.round(origSubtotal * transRatio);
+                            displayDeduction = Math.round(totalDed * transRatio);
+                            displayNet = Math.max(0, bd.transfer - Math.round(billReturnDed * transRatio));
                             displayAmountBadge = (
                               <div className="text-[10px] font-sans font-semibold text-blue-700 dark:text-blue-300 mt-0.5">
-                                Phần CK (Bill {formatVND(bill.totalAmount)})
+                                Phần CK (Bill sau trừ {formatVND(bill.totalAmount)})
                               </div>
                             );
                           } else {
@@ -8042,6 +8189,9 @@ export default function App() {
                               </div>
 
                               <div className="text-right font-mono">
+                                <div className="text-[10px] text-slate-400 font-sans">
+                                  Gốc: {formatVND(displayGross)}
+                                </div>
                                 <div
                                   className={`text-sm font-bold tabular-nums ${
                                     isDebt
@@ -8060,6 +8210,16 @@ export default function App() {
                                 {displayDeduction > 0 && (
                                   <div className="text-[10px] text-rose-500 font-mono">
                                     Trừ: -{formatVND(displayDeduction)}
+                                    {billDiscount > 0 && (
+                                      <span className="text-amber-600 dark:text-amber-400 ml-1 font-sans">
+                                        (HH: -{formatVND(billDiscount)})
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                                {totalDed > 0 && !isOwner && (
+                                  <div className="text-[9px] text-slate-400 font-sans">
+                                    (Sau trừ)
                                   </div>
                                 )}
                                 {displayAmountBadge}
@@ -8086,6 +8246,14 @@ export default function App() {
                               <div className="flex items-center gap-1.5">
                                 {canWrite && (
                                   <>
+                                    <button
+                                      type="button"
+                                      onClick={() => setCommissionBill(bill)}
+                                      className="px-2.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-[11px] font-semibold text-amber-800 dark:text-amber-300 cursor-pointer"
+                                      title="Chi hoa hồng / Chiết khấu đặt bàn cho hóa đơn này"
+                                    >
+                                      Hoa hồng
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => setSplitMergeBill(bill)}
@@ -8162,10 +8330,19 @@ export default function App() {
                             const isDebt = bill.paymentType === 'debt';
                             const isOwner = isOwnerUseBill(bill);
 
+                            const origSubtotal =
+                              bill.subtotalAmount && bill.subtotalAmount > 0
+                                ? bill.subtotalAmount
+                                : (bill.totalAmount + (bill.discountAmount || 0));
+                            const billDiscount = Math.max(0, Number(bill.discountAmount) || 0);
+                            const billReturnDed = Math.max(0, Number(bill.deductedAmount) || 0);
+                            const totalDed = billDiscount + billReturnDed;
+                            const netAfterDed = Math.max(0, bill.totalAmount - billReturnDed);
+
                             // Calculate amounts based on current paymentFilter
-                            let displayGross = bill.totalAmount;
-                            let displayDeduction = bill.deductedAmount || 0;
-                            let displayNet = Math.max(0, bill.totalAmount - (bill.deductedAmount || 0));
+                            let displayGross = origSubtotal;
+                            let displayDeduction = totalDed;
+                            let displayNet = netAfterDed;
                             let displayAmountBadge: React.ReactNode = null;
 
                             if (isOwner) {
@@ -8173,26 +8350,24 @@ export default function App() {
                               displayDeduction = 0;
                               displayNet = 0;
                             } else if (isSplit) {
+                              const cashRatio = bill.totalAmount > 0 ? bd.cash / bill.totalAmount : 0.5;
                               if (paymentFilter === 'cash') {
-                                displayGross = bd.cash;
-                                const ratio = bill.totalAmount > 0 ? bd.cash / bill.totalAmount : 0.5;
-                                const splitDed = Math.round((bill.deductedAmount || 0) * ratio);
-                                displayDeduction = splitDed;
-                                displayNet = Math.max(0, bd.cash - splitDed);
+                                displayGross = Math.round(origSubtotal * cashRatio);
+                                displayDeduction = Math.round(totalDed * cashRatio);
+                                displayNet = Math.max(0, bd.cash - Math.round(billReturnDed * cashRatio));
                                 displayAmountBadge = (
                                   <span className="text-[10px] font-sans font-semibold text-emerald-700 dark:text-emerald-300">
-                                    Phần TM (Bill {formatVND(bill.totalAmount)})
+                                    Phần TM (Bill sau trừ {formatVND(bill.totalAmount)})
                                   </span>
                                 );
                               } else if (paymentFilter === 'transfer') {
-                                displayGross = bd.transfer;
-                                const ratio = bill.totalAmount > 0 ? bd.transfer / bill.totalAmount : 0.5;
-                                const splitDed = Math.round((bill.deductedAmount || 0) * ratio);
-                                displayDeduction = splitDed;
-                                displayNet = Math.max(0, bd.transfer - splitDed);
+                                const transRatio = 1 - cashRatio;
+                                displayGross = Math.round(origSubtotal * transRatio);
+                                displayDeduction = Math.round(totalDed * transRatio);
+                                displayNet = Math.max(0, bd.transfer - Math.round(billReturnDed * transRatio));
                                 displayAmountBadge = (
                                   <span className="text-[10px] font-sans font-semibold text-blue-700 dark:text-blue-300">
-                                    Phần CK (Bill {formatVND(bill.totalAmount)})
+                                    Phần CK (Bill sau trừ {formatVND(bill.totalAmount)})
                                   </span>
                                 );
                               } else {
@@ -8334,15 +8509,29 @@ export default function App() {
                                   <div>{formatVND(displayGross)}</div>
                                   {isSplit && (paymentFilter === 'cash' || paymentFilter === 'transfer') && (
                                     <div className="text-[10px] text-slate-400 font-sans font-normal">
-                                      (Tổng bill: {formatVND(bill.totalAmount)})
+                                      (Tổng bill sau trừ: {formatVND(bill.totalAmount)})
                                     </div>
                                   )}
                                 </td>
 
                                 <td className="py-3 px-3 text-right font-mono text-rose-600 dark:text-rose-400">
-                                  {displayDeduction > 0
-                                    ? `-${formatVND(displayDeduction)}`
-                                    : '0 ₫'}
+                                  {displayDeduction > 0 ? (
+                                    <div>
+                                      <div className="font-semibold">-{formatVND(displayDeduction)}</div>
+                                      {billDiscount > 0 && (
+                                        <div className="text-[10px] text-amber-600 dark:text-amber-400 font-sans font-medium whitespace-nowrap">
+                                          Hoa hồng: -{formatVND(billDiscount)}
+                                        </div>
+                                      )}
+                                      {billReturnDed > 0 && (
+                                        <div className="text-[10px] text-rose-500 font-sans font-medium whitespace-nowrap">
+                                          Trả món: -{formatVND(billReturnDed)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 font-normal">0 ₫</span>
+                                  )}
                                 </td>
 
                                 <td className="py-3 px-3 text-right font-mono">
@@ -8361,6 +8550,11 @@ export default function App() {
                                   >
                                     {isOwner ? '0 ₫' : formatVND(displayNet)}
                                   </div>
+                                  {totalDed > 0 && !isOwner && (
+                                    <div className="text-[10px] text-slate-400 font-sans font-normal">
+                                      (Sau trừ)
+                                    </div>
+                                  )}
                                   {displayAmountBadge}
                                 </td>
 
@@ -8378,6 +8572,14 @@ export default function App() {
                                   </button>
                                   {canWrite && (
                                     <>
+                                      <button
+                                        type="button"
+                                        onClick={() => setCommissionBill(bill)}
+                                        className="px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-[11px] font-semibold text-amber-800 dark:text-amber-200 cursor-pointer align-middle"
+                                        title="Chi hoa hồng / Chiết khấu đặt bàn cho hóa đơn này"
+                                      >
+                                        Hoa hồng
+                                      </button>
                                       <button
                                         type="button"
                                         onClick={() => setSplitMergeBill(bill)}

@@ -889,7 +889,7 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
               <span>In Bill {paperSize} / PDF</span>
             </button>
 
-            {canWrite && discountAmount > 0 && onQuickPayCommission && (() => {
+            {canWrite && onQuickPayCommission && (() => {
               const commDed = billDeductions.find(
                 (d) =>
                   d.category.includes('đặt bàn') ||
@@ -925,7 +925,11 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
                   title="Ghi nhận khoản chi gửi tiền hoa hồng/chiết khấu cho người đặt bàn vào sổ quỹ ngày"
                 >
                   <MinusCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                  <span>Chi hoa hồng đặt bàn (-{formatVND(discountAmount)})</span>
+                  <span>
+                    {discountAmount > 0
+                      ? `Chi hoa hồng đặt bàn (-${formatVND(discountAmount)})`
+                      : 'Chi hoa hồng đặt bàn'}
+                  </span>
                 </button>
               );
             })()}

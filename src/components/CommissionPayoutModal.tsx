@@ -166,10 +166,21 @@ export const CommissionPayoutModal: React.FC<CommissionPayoutModalProps> = ({
               </strong>
             </div>
             <div>
-              <span className="text-slate-500">Mức CK trên bill: </span>
+              <span className="text-slate-500">Chi hoa hồng / CK: </span>
               <strong className="font-mono text-rose-600 dark:text-rose-400">
-                -{formatVND(bill.discountAmount || 0)}
+                {currentAmount > 0 ? `-${formatVND(currentAmount)}` : '0 ₫'}
               </strong>
+            </div>
+            <div className="w-full text-xs text-emerald-700 dark:text-emerald-400 flex items-center justify-between mt-1 pt-1.5 border-t border-slate-200 dark:border-slate-700 font-bold">
+              <span>Hóa đơn sau trừ ({tableLabel}):</span>
+              <span className="font-mono text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
+                {formatVND(
+                  Math.max(
+                    0,
+                    (bill.subtotalAmount || (bill.totalAmount + (bill.discountAmount || 0))) - currentAmount
+                  )
+                )}
+              </span>
             </div>
             {existingDeduction && (
               <div className="w-full text-[11px] text-amber-700 dark:text-amber-400 flex items-center gap-1 mt-1 pt-1 border-t border-slate-200 dark:border-slate-700">
@@ -207,7 +218,7 @@ export const CommissionPayoutModal: React.FC<CommissionPayoutModalProps> = ({
                   required
                   value={amountInput}
                   onChange={(e) => setAmountInput(e.target.value)}
-                  placeholder="VD: 100000"
+                  placeholder="VD: 200000"
                   className="w-full h-10 pl-3 pr-8 text-xs font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-none"
                 />
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
@@ -218,18 +229,32 @@ export const CommissionPayoutModal: React.FC<CommissionPayoutModalProps> = ({
           </div>
 
           {/* Quick preset amounts */}
-          {bill.discountAmount && bill.discountAmount > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
-              <span className="text-slate-500">Mức gợi ý:</span>
+          <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+            <span className="text-slate-500 font-medium">Chọn nhanh:</span>
+            {bill.discountAmount && bill.discountAmount > 0 && (
               <button
                 type="button"
                 onClick={() => setAmountInput(String(bill.discountAmount))}
                 className="px-2 py-0.5 rounded-lg bg-amber-100 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 font-bold font-mono hover:bg-amber-200 cursor-pointer"
               >
-                Theo đúng CK Bill ({formatVND(bill.discountAmount)})
+                CK Bill ({formatVND(bill.discountAmount)})
               </button>
-            </div>
-          )}
+            )}
+            {[100000, 200000, 300000, 500000].map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => setAmountInput(String(preset))}
+                className={`px-2 py-0.5 rounded-lg border font-mono font-semibold cursor-pointer transition-colors ${
+                  currentAmount === preset
+                    ? 'bg-amber-500 text-white border-amber-600'
+                    : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200'
+                }`}
+              >
+                {formatVND(preset)}
+              </button>
+            ))}
+          </div>
 
           {/* Người nhận tiền chiết khấu */}
           <div>
