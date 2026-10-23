@@ -17,6 +17,7 @@ import {
   Check,
   Banknote,
   CreditCard,
+  Package,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -168,6 +169,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     return bill.settleDate || (bill.debtStatus === 'paid' ? bill.billDate : '');
   });
   const [note, setNote] = useState(bill.note);
+  const [isArchived, setIsArchived] = useState<boolean>(Boolean(bill.isArchived));
   const [isSaving, setIsSaving] = useState(false);
 
   const discountItemsSummary = React.useMemo(() => {
@@ -267,6 +269,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     if (debtStatus !== bill.debtStatus) return true;
     if ((settleDate || '').trim() !== (bill.settleDate || '').trim()) return true;
     if ((note || '').trim() !== (bill.note || '').trim()) return true;
+    if (isArchived !== Boolean(bill.isArchived)) return true;
 
     if (editItems.length !== initialItems.length) return true;
     for (let i = 0; i < editItems.length; i++) {
@@ -296,6 +299,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     debtStatus,
     settleDate,
     note,
+    isArchived,
     editItems,
     initialItems,
     autoPayCommission,
@@ -553,6 +557,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             totalAmount: computedTotal,
             itemsSummary: summaryStr,
             note: finalNote,
+            isArchived: Boolean(isArchived),
             updatedAtMs: now,
           };
 
@@ -1225,6 +1230,52 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                 placeholder="Ghi chú bàn, khách hàng, yêu cầu..."
                 className="w-full h-10 px-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
               />
+            </div>
+
+            {/* Chế độ Bill Lưu Trữ (Chỉ ghi nhớ) */}
+            <div className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 ${
+              isArchived
+                ? 'border-amber-400 dark:border-amber-700 bg-amber-50/90 dark:bg-amber-950/40'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40'
+            }`}>
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                  isArchived
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-slate-200 dark:bg-slate-800 text-slate-500'
+                }`}>
+                  <Package className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-900 dark:text-white">
+                      Chế độ "Bill Lưu Trữ" (Ghi Nhớ)
+                    </span>
+                    {isArchived ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-200">
+                        📦 Đang BẬT
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                        Tính doanh thu chuẩn
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight mt-0.5">
+                    Lưu trữ vào hệ thống ghi nhớ, hiển thị ở Tổng quan nhưng <strong>không tính doanh thu, không tính công nợ, không tính số lượng bán ra</strong>.
+                  </p>
+                </div>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={isArchived}
+                  onChange={(e) => setIsArchived(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-amber-600"></div>
+              </label>
             </div>
           </div>
 

@@ -14,6 +14,7 @@ import {
   Scissors,
   MinusCircle,
   Check,
+  Package,
 } from 'lucide-react';
 import {
   BillRecord,
@@ -52,6 +53,7 @@ interface BillCheckModalProps {
   onDeleteBill: (bill: BillRecord) => void;
   onOpenSplitMerge?: (bill: BillRecord) => void;
   onQuickPayCommission?: (bill: BillRecord) => void;
+  onToggleArchiveBill?: (bill: BillRecord) => Promise<void> | void;
 }
 
 function extractReceiptTableLabel(note?: string): {
@@ -205,6 +207,7 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
   onDeleteBill,
   onQuickPayCommission,
   onOpenSplitMerge,
+  onToggleArchiveBill,
 }) => {
   const receiptPrintRef = useRef<HTMLDivElement | null>(null);
   const [paperSize, setPaperSize] = useState<'K80' | 'K58'>('K80');
@@ -257,9 +260,33 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
   const totalNetQty = Math.max(0, totalOrderedQty - totalReturnedQty);
 
   const discountAmount = bill.discountAmount || 0;
+
+  const nonReturnDeductions = billDeductions.filter(
+    (d) =>
+      d.billCode !== 'HOAN-TRA' &&
+      !billReturns.some(
+        (r) =>
+          d.id === `ded_${r.id}` ||
+          (d.amount === r.amount &&
+            d.productName
+              .toLowerCase()
+              .includes(r.productName.toLowerCase()))
+      )
+  );
+
+  const totalReturnDeducted = Math.max(
+    bill.deductedAmount || 0,
+    billReturns.reduce((s, r) => s + (r.amount || 0), 0)
+  );
+  const totalOtherDeducted = nonReturnDeductions.reduce(
+    (s, d) => s + (d.amount || 0),
+    0
+  );
+  const totalDeductedAll = totalReturnDeducted + totalOtherDeducted;
+
   const netBillAmount = Math.max(
     0,
-    bill.totalAmount - (bill.deductedAmount || 0)
+    bill.totalAmount - totalDeductedAll
   );
 
   const { tableLabel, extraNote } = extractReceiptTableLabel(bill.note);
@@ -277,6 +304,8 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
           0,
           (item.quantity || 0) - (item.returnedQuantity || 0)
         );
+        const grossItemSubtotal =
+          item.subtotal || Math.round((item.quantity || 0) * item.unitPrice);
         const netItemSubtotal = Math.round(netItemQty * item.unitPrice);
         const { parentLine, mainLine, subNotes, originalUnitPrice } =
           formatReceiptItemDisplay(item);
@@ -293,7 +322,7 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
               }
               ${
                 hasReturn
-                  ? `<div style="font-size: 10px; color: #b91c1c;">(Đặt ${item.quantity} · Trả ${item.returnedQuantity})</div>`
+                  ? `<div style="font-size: 10px; color: #e11d48; font-weight: 500;">(Đặt ${item.quantity} - Trả ${item.returnedQuantity})</div>`
                   : ''
               }
             </td>
@@ -308,8 +337,13 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
             <td style="padding: 4px 2px; text-align: center; vertical-align: bottom; white-space: nowrap;">
               x ${formatNumber(netItemQty)}
             </td>
-            <td style="padding: 4px 0 4px 2px; text-align: right; vertical-align: bottom; white-space: nowrap; font-weight: 600;">
-              ${formatReceiptMoney(netItemSubtotal)}
+            <td style="padding: 4px 0 4px 2px; text-align: right; vertical-align: bottom; white-space: nowrap; font-weight: 700;">
+              <div>${formatReceiptMoney(netItemSubtotal)}</div>
+              ${
+                hasReturn
+                  ? `<div style="font-size: 10px; color: #94a3b8; text-decoration: line-through; font-weight: normal;">${formatReceiptMoney(grossItemSubtotal)}</div>`
+                  : ''
+              }
             </td>
           </tr>
         `;
@@ -390,12 +424,12 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
     ${
       discountAmount > 0
         ? `
-      <div style="display: flex; justify-content: space-between; font-weight: 600;">
+      <div style="display: flex; justify-content: space-between; font-weight: 600; color: #555; font-size: ${targetSize === 'K58' ? '10px' : '11.5px'};">
         <span>Tổng gốc món ăn:</span>
         <span>${formatReceiptMoney(bill.subtotalAmount || (bill.totalAmount + discountAmount))}</span>
       </div>
-      <div style="display: flex; justify-content: space-between; font-weight: 600; color: #047857;">
-        <span>Chiết khấu (Đặt bàn):</span>
+      <div style="display: flex; justify-content: space-between; font-weight: 600; color: #e11d48;">
+        <span>Chiết khấu:</span>
         <span>-${formatReceiptMoney(discountAmount)}</span>
       </div>
     `
@@ -407,19 +441,45 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
     `
     }
     <div style="display: flex; justify-content: space-between; font-size: ${targetSize === 'K58' ? '14px' : '16px'}; font-weight: 800; padding-top: 2px;">
-      <span>Tổng Cộng:</span>
+      <span>Tổng Cộng Khách Trả:</span>
       <span>${formatReceiptMoney(bill.totalAmount)}</span>
     </div>
     ${
-      bill.deductedAmount > 0
+      totalDeductedAll > 0
         ? `
-      <div style="display: flex; justify-content: space-between; font-weight: 600; border-top: 1px dashed #999; margin-top: 4px; padding-top: 4px;">
-        <span>Trừ hoàn trả:</span>
-        <span>-${formatReceiptMoney(bill.deductedAmount)}</span>
+      <div style="display: flex; justify-content: space-between; font-weight: 600; color: #e11d48; border-top: 1px dashed #999; margin-top: 5px; padding-top: 4px;">
+        <span>Trừ hoàn trả / Khoản trừ:</span>
+        <span>-${formatReceiptMoney(totalDeductedAll)}</span>
       </div>
-      <div style="display: flex; justify-content: space-between; font-weight: 800; font-size: ${targetSize === 'K58' ? '13px' : '15px'};">
-        <span>Thực thu:</span>
+      <div style="display: flex; justify-content: space-between; font-weight: 800; font-size: ${targetSize === 'K58' ? '13px' : '15px'}; color: #065f46;">
+        <span>Thực thu sau hoàn trả:</span>
         <span>${formatReceiptMoney(netBillAmount)}</span>
+      </div>
+      <div style="border-top: 1px dashed #999; margin-top: 5px; padding-top: 4px; font-size: 10px; color: #e11d48;">
+        ${billReturns
+          .map(
+            (r) => `
+          <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+            <span>• Hoàn trả (tính chung 1 dòng Khoản trừ ngày): ${r.productName} (x${r.quantity})</span>
+            <span style="font-weight: 600; margin-left: 6px;">-${formatReceiptMoney(r.amount)}</span>
+          </div>
+        `
+          )
+          .join('')}
+        ${nonReturnDeductions
+          .map(
+            (d) => `
+          <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+            <span>• ${
+              d.category.includes('đặt bàn') || d.productName.includes('đặt bàn') || (d.note || '').includes('đặt bàn')
+                ? 'Chiết khấu đặt bàn'
+                : 'Khoản trừ'
+            } (tính chung 1 dòng Khoản trừ ngày): ${d.productName} (x${d.quantity || 1})</span>
+            <span style="font-weight: 600; margin-left: 6px;">-${formatReceiptMoney(d.amount)}</span>
+          </div>
+        `
+          )
+          .join('')}
       </div>
     `
         : ''
@@ -475,9 +535,16 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
         <div className="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 flex items-center justify-between gap-2 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
             <Receipt className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
-              Xem & Kiểm Tra Phiếu Tính Tiền ({bill.billCode})
-            </h3>
+            <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+              <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
+                Xem & Kiểm Tra Phiếu Tính Tiền ({bill.billCode})
+              </h3>
+              {bill.isArchived && (
+                <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200 border border-amber-300 text-[10px] font-bold">
+                  📦 Bill Lưu Trữ
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
@@ -549,6 +616,14 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
             <span className="font-mono text-slate-600 dark:text-slate-400">
               {effectiveItems.length} món ({formatNumber(totalNetQty)} ĐV)
             </span>
+            {bill.isArchived && (
+              <>
+                <span className="text-slate-300 dark:text-slate-700">·</span>
+                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200 font-bold text-[10px]">
+                  0đ vào DT & Công nợ
+                </span>
+              </>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -716,7 +791,7 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
                         )}
                         {hasReturn && (
                           <div className="text-[11px] text-rose-600 font-medium mt-0.5">
-                            (Đặt {item.quantity} · Trả {item.returnedQuantity})
+                            (Đặt {item.quantity} - Trả {item.returnedQuantity})
                           </div>
                         )}
                       </td>
@@ -761,23 +836,18 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
 
             {/* Receipt Totals Section (Chiết khấu & Tổng Cộng) */}
             <div className="pt-2.5 space-y-1 text-xs sm:text-[13px] text-slate-950 tabular-nums">
-              {discountAmount > 0 ? (
-                <>
-                  <div className="flex items-center justify-between font-semibold">
-                    <span>Tổng tiền gốc món ăn:</span>
-                    <span>{formatReceiptMoney(bill.subtotalAmount || (bill.totalAmount + discountAmount))}</span>
-                  </div>
-                  <div className="flex items-center justify-between font-semibold text-emerald-700">
-                    <span>Chiết khấu (Cho người đặt bàn):</span>
-                    <span>-{formatReceiptMoney(discountAmount)}</span>
-                  </div>
-                </>
-              ) : (
-                <div className="flex items-center justify-between font-semibold">
-                  <span>Chiết khấu:</span>
-                  <span>0</span>
+              {discountAmount > 0 && (
+                <div className="flex items-center justify-between font-semibold text-slate-700">
+                  <span>Tổng tiền gốc món ăn:</span>
+                  <span>{formatReceiptMoney(bill.subtotalAmount || (bill.totalAmount + discountAmount))}</span>
                 </div>
               )}
+              <div className="flex items-center justify-between font-semibold">
+                <span>Chiết khấu:</span>
+                <span className={discountAmount > 0 ? 'text-rose-600 font-bold' : ''}>
+                  {discountAmount > 0 ? `-${formatReceiptMoney(discountAmount)}` : '0'}
+                </span>
+              </div>
 
               <div className="flex items-center justify-between text-base sm:text-lg font-extrabold text-black pt-0.5">
                 <span>Tổng Cộng Khách Trả:</span>
@@ -800,13 +870,13 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
                 );
               })()}
 
-              {bill.deductedAmount > 0 && (
+              {totalDeductedAll > 0 && (
                 <>
-                  <div className="flex items-center justify-between text-rose-700 font-semibold pt-1 border-t border-dashed border-slate-300">
+                  <div className="flex items-center justify-between text-rose-600 font-semibold pt-1 border-t border-dashed border-slate-300">
                     <span>Trừ hoàn trả / Khoản trừ:</span>
-                    <span>-{formatReceiptMoney(bill.deductedAmount)}</span>
+                    <span>-{formatReceiptMoney(totalDeductedAll)}</span>
                   </div>
-                  <div className="flex items-center justify-between text-sm sm:text-base font-extrabold text-emerald-800">
+                  <div className="flex items-center justify-between text-base sm:text-lg font-extrabold text-emerald-800">
                     <span>Thực thu sau hoàn trả:</span>
                     <span>{formatReceiptMoney(netBillAmount)}</span>
                   </div>
@@ -814,31 +884,17 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
               )}
             </div>
 
-            {/* Extra note or Return details if any */}
+            {/* Extra note or Return/Deduction details if any */}
             {(() => {
-              const nonReturnDeductions = billDeductions.filter(
-                (d) =>
-                  d.billCode !== 'HOAN-TRA' &&
-                  !billReturns.some(
-                    (r) =>
-                      d.id === `ded_${r.id}` ||
-                      (d.amount === r.amount &&
-                        d.productName
-                          .toLowerCase()
-                          .includes(r.productName.toLowerCase()))
-                  )
-              );
-              if (
-                !extraNote &&
-                billReturns.length === 0 &&
-                nonReturnDeductions.length === 0
-              ) {
+              const hasBreakdownItems =
+                billReturns.length > 0 || nonReturnDeductions.length > 0;
+              if (!extraNote && !hasBreakdownItems) {
                 return null;
               }
               return (
-                <div className="mt-3 pt-2.5 border-t border-dashed border-slate-300 text-[11px] text-slate-700 space-y-1">
+                <div className="mt-2.5 pt-2 border-t border-dashed border-slate-300 text-xs text-rose-600 space-y-1">
                   {extraNote && (
-                    <div>
+                    <div className="text-slate-700 text-[11px] pb-0.5">
                       <span className="font-bold">Ghi chú: </span>
                       <span>{extraNote}</span>
                     </div>
@@ -846,30 +902,42 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
                   {billReturns.map((r) => (
                     <div
                       key={r.id}
-                      className="flex items-center justify-between text-rose-700"
+                      className="flex items-center justify-between text-rose-600"
                     >
                       <span>
                         • Hoàn trả (tính chung 1 dòng Khoản trừ ngày): {r.productName} (x
                         {r.quantity})
                       </span>
-                      <span className="font-semibold">
+                      <span className="font-semibold whitespace-nowrap ml-2">
                         -{formatReceiptMoney(r.amount)}
                       </span>
                     </div>
                   ))}
-                  {nonReturnDeductions.map((d) => (
-                    <div
-                      key={d.id}
-                      className="flex items-center justify-between text-rose-700"
-                    >
-                      <span>
-                        • Khoản trừ: {d.productName} (x{d.quantity})
-                      </span>
-                      <span className="font-semibold">
-                        -{formatReceiptMoney(d.amount)}
-                      </span>
-                    </div>
-                  ))}
+                  {nonReturnDeductions.map((d) => {
+                    const isComm =
+                      d.category.includes('đặt bàn') ||
+                      d.category.includes('Hoa hồng') ||
+                      d.productName.includes('đặt bàn') ||
+                      d.productName.includes('hoa hồng') ||
+                      (d.note || '').includes('đặt bàn') ||
+                      (d.note || '').includes('Chiết khấu');
+                    const prefix = isComm
+                      ? '• Chiết khấu đặt bàn (tính chung 1 dòng Khoản trừ ngày):'
+                      : '• Khoản trừ (tính chung 1 dòng Khoản trừ ngày):';
+                    return (
+                      <div
+                        key={d.id}
+                        className="flex items-center justify-between text-rose-600"
+                      >
+                        <span>
+                          {prefix} {d.productName} (x{d.quantity || 1})
+                        </span>
+                        <span className="font-semibold whitespace-nowrap ml-2">
+                          -{formatReceiptMoney(d.amount)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })()}
@@ -945,6 +1013,24 @@ export const BillCheckModal: React.FC<BillCheckModalProps> = ({
               >
                 <Scissors className="w-3.5 h-3.5" />
                 <span>Chia / Gộp / Chuyển Bàn</span>
+              </button>
+            )}
+
+            {canWrite && onToggleArchiveBill && (
+              <button
+                type="button"
+                onClick={async () => {
+                  await onToggleArchiveBill(bill);
+                }}
+                className={`px-3 py-2 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+                  bill.isArchived
+                    ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100'
+                    : 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100'
+                }`}
+                title={bill.isArchived ? 'Khôi phục thành bill tính doanh thu' : 'Chuyển thành Bill lưu trữ (chỉ ghi nhớ)'}
+              >
+                <Package className="w-3.5 h-3.5" />
+                <span>{bill.isArchived ? 'Bỏ lưu trữ (Tính DT)' : 'Lưu trữ (Không tính DT)'}</span>
               </button>
             )}
 

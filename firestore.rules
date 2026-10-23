@@ -126,7 +126,7 @@ service cloud.firestore {
           'paymentType', 'debtorName', 'debtStatus', 'settleDate', 'settledMethod',
           'paidCashAmount', 'paidTransferAmount', 'subtotalAmount', 'discountAmount',
           'totalAmount', 'deductedAmount', 'itemsSummary',
-          'note', 'status', 'createdAt', 'updatedAt'
+          'note', 'status', 'isArchived', 'createdAt', 'updatedAt'
         ]) &&
         canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
@@ -150,6 +150,7 @@ service cloud.firestore {
         data.itemsSummary is string && data.itemsSummary.size() <= 5000 &&
         data.note is string && data.note.size() <= 2000 &&
         data.status is string && data.status in ['active', 'locked'] &&
+        (!('isArchived' in data) || data.isArchived is bool) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -360,11 +361,12 @@ service cloud.firestore {
         canWriteWorkspace(existing().ownerId) && (
           incoming().diff(existing()).affectedKeys().hasOnly(['debtStatus', 'paymentType', 'note', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['deductedAmount', 'itemsSummary', 'note', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['isArchived', 'note', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly([
             'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime', 'tableName',
             'paymentType', 'debtorName', 'debtStatus', 'settleDate', 'settledMethod',
             'paidCashAmount', 'paidTransferAmount', 'subtotalAmount', 'discountAmount',
-            'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'updatedAt'
+            'totalAmount', 'deductedAmount', 'itemsSummary', 'note', 'status', 'isArchived', 'updatedAt'
           ])
         );
       allow delete: if isValidId(billId) && (resource == null || canWriteWorkspace(existing().ownerId));

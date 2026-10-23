@@ -430,6 +430,22 @@ export function formatReturnDeductionTitle(
   return `${cleanTable} - ${cleanProd} - SL hoàn trả: ${safeQty}`;
 }
 
+/**
+ * Tự động tạo ghi chú hoàn trả: Tên sản phẩm hoàn trả kèm ghi chú của sản phẩm đó
+ */
+export function buildDefaultReturnNote(
+  item?: { productName?: string; note?: string } | null
+): string {
+  if (!item) return '';
+  const cleanName = (item.productName || '').trim();
+  const cleanNote = (item.note || '').trim();
+  if (!cleanNote) return cleanName;
+  if (cleanName.toLowerCase().includes(cleanNote.toLowerCase())) {
+    return cleanName;
+  }
+  return `${cleanName} (${cleanNote})`;
+}
+
 export function isOwnerUseBill(bill?: Partial<BillRecord> | null): boolean {
   if (!bill) return false;
   const code = (bill.billCode || '').toUpperCase();
@@ -1737,7 +1753,10 @@ export function isPosMetadataOrHeaderLine(line: string): boolean {
       cleaned
     ) ||
     /^\d{2,4}\-\d{1,4}$/.test(cleaned) ||
-    /^HD\d{4,}$/i.test(cleaned)
+    /^HD\d+[A-Za-z0-9._\-]*$/i.test(cleaned) ||
+    /^(?:thông\s*tin\s*xuất\s*hóa\s*đơn|chưa\s*phát\s*hành|người\s*mua|bán\s*cho\s*người\s*tiêu\s*dùng(?:\s*\/.*)?|mã\s*(?:hóa\s*đơn|hđ|đặt\s*hàng)|chưa\s*có)$/i.test(
+      cleaned
+    )
   );
 }
 
@@ -2218,8 +2237,74 @@ export function parseRawTextToBillJSON(
   let explicitDiscountAmount = 0;
   let explicitDiscountPercent = 0;
   let explicitTotalAmount = 0;
+  let billCode = 'UNKNOW';
 
   const fullText = synchronizedText;
+
+  // Extract Bill Code (Mã hóa đơn, ví dụ: "HD005114.U01", "HD005114", "HD-261016-001")
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    // Pattern 1: Explicit keyword on same line: "Mã hóa đơn: HD005114.U01"
+    const labelMatch = line.match(
+      /^(?:mã\s*(?:hóa\s*đơn|hđ|phiếu|bill|ct|chứng\s*từ)|số\s*(?:hóa\s*đơn|hđ|phiếu|bill|ct|chứng\s*từ)|hóa\s*đơn\s*(?:số|mã)?|bill\s*(?:code|no|number|#)?)\s*[:\-#]?\s*([A-Za-z0-9][A-Za-z0-9._\-\/]*)$/i
+    );
+    if (labelMatch && labelMatch[1]) {
+      const codeCandidate = labelMatch[1].trim();
+      if (!/^(?:chưa\s*có|none|null|undefined)$/i.test(codeCandidate)) {
+        billCode = codeCandidate;
+        break;
+      }
+    }
+
+    // Pattern 2: Two-line keyword (Line i: "Mã hóa đơn:", Line i+1: the code)
+    if (
+      /^(?:mã\s*(?:hóa\s*đơn|hđ|phiếu|bill|ct|chứng\s*từ)|số\s*(?:hóa\s*đơn|hđ|phiếu|bill|ct|chứng\s*từ)|hóa\s*đơn\s*(?:số|mã)?|bill\s*(?:code|no|number|#)?)\s*[:\-#]?$/i.test(
+        line
+      ) &&
+      rawLines[i + 1]
+    ) {
+      const nextLine = rawLines[i + 1].trim();
+      if (
+        !/^(?:chưa\s*có|none|null|undefined)$/i.test(nextLine) &&
+        /^[A-Za-z0-9][A-Za-z0-9._\-\/]{2,30}$/.test(nextLine)
+      ) {
+        billCode = nextLine;
+        break;
+      }
+    }
+
+    // Pattern 3: Standalone POS invoice code line (e.g. "HD005114.U01", "HD005114")
+    if (
+      /^HD\d+[A-Za-z0-9._\-]*$/i.test(line) ||
+      /^HD[\-_][A-Za-z0-9._\-]+$/i.test(line)
+    ) {
+      billCode = line;
+      break;
+    }
+
+    // Pattern 4: Standalone line immediately following "Khách lẻ" / "Khách hàng"
+    if (/^(?:khách\s*lẻ|khách\s*hàng|customer)$/i.test(line) && rawLines[i + 1]) {
+      const nextLine = rawLines[i + 1].trim();
+      if (
+        !/^(?:hoàn\s*thành|đang\s*phục\s*vụ|đã\s*hủy|chưa\s*thanh\s*toán|chi\s*nhánh|người\s*tạo)/i.test(
+          nextLine
+        ) &&
+        /^[A-Za-z0-9._\-]{4,30}$/.test(nextLine) &&
+        !/^\d+$/.test(nextLine)
+      ) {
+        billCode = nextLine;
+        break;
+      }
+    }
+  }
+
+  // Fallback search across full text if still 'UNKNOW'
+  if (billCode === 'UNKNOW') {
+    const fullMatch = fullText.match(/\b(HD\d{4,}[A-Za-z0-9._\-]*)\b/i);
+    if (fullMatch && fullMatch[1]) {
+      billCode = fullMatch[1].trim();
+    }
+  }
 
   // 1. Extract Table Name (e.g., "BÀN 24 PHIẾU TÍNH TIỀN" -> "Bàn 24", "VIP 1" -> "VIP 1", "Mang về (02) / Mang đi (Takeaway)" -> "MV02", "Mang về 01" -> "MV01", "Mang về" -> "MV")
   for (let i = 0; i < rawLines.length; i++) {
@@ -2453,6 +2538,7 @@ export function parseRawTextToBillJSON(
       const totalAmount = Math.max(0, subtotalAmount - discountAmount);
       return {
         billInfo: {
+          billCode,
           billDate,
           rawDate: calendarDate !== billDate ? calendarDate : undefined,
           checkInTime: checkInTime || undefined,
@@ -2871,6 +2957,7 @@ export function parseRawTextToBillJSON(
 
   return {
     billInfo: {
+      billCode,
       billDate,
       rawDate: calendarDate !== billDate ? calendarDate : undefined,
       checkInTime: checkInTime || undefined,

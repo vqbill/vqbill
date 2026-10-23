@@ -347,6 +347,7 @@ export interface ExtractedBillItem {
 
 export interface ExtractedBillJSON {
   billInfo: {
+    billCode?: string;
     billDate: string;
     rawDate?: string;
     checkInTime?: string;
@@ -359,6 +360,7 @@ export interface ExtractedBillJSON {
     subtotalAmount?: number;
     discountAmount?: number;
     totalAmount: number;
+    isArchived?: boolean;
   };
   items: ExtractedBillItem[];
 }
@@ -386,6 +388,7 @@ export interface BillRecord {
   itemsSummary: string;
   note: string;
   status: 'active' | 'locked';
+  isArchived?: boolean; // Bill lưu trữ: chỉ lưu trữ ghi nhớ, không tính doanh thu, công nợ, số lượng món
   createdAtMs: number;
   updatedAtMs: number;
 }

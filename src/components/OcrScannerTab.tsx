@@ -21,6 +21,7 @@ import {
   Percent,
   Zap,
   MinusCircle,
+  Printer,
   Tag,
   X,
   ZoomIn,
@@ -46,6 +47,8 @@ import {
   CheckSquare,
   Square,
   UserCheck,
+  Package,
+  Archive,
 } from 'lucide-react';
 import {
   ExtractedBillItem,
@@ -91,6 +94,7 @@ interface OcrScannerTabProps {
   autoAddProducts: boolean;
   onToggleAutoAddProducts: (val: boolean) => void;
   onSaveExtractedBill: (params: {
+    billCode?: string;
     billDate: string;
     rawDate?: string;
     checkInTime?: string;
@@ -102,6 +106,7 @@ interface OcrScannerTabProps {
     paidCashAmount?: number;
     paidTransferAmount?: number;
     note: string;
+    isArchived?: boolean;
     items: ExtractedBillItem[];
     commissionPayout?: {
       enabled: boolean;
@@ -123,6 +128,7 @@ interface OcrScannerTabProps {
     note: string;
   }) => Promise<void>;
   onQuickPayCommission?: (bill: BillRecord) => void;
+  onInspectBill?: (bill: BillRecord) => void;
   isModal?: boolean;
   onCloseModal?: () => void;
   onOpenKiotVietSync?: () => void;
@@ -146,6 +152,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   autoAddProducts,
   onToggleAutoAddProducts,
   onQuickPayCommission,
+  onInspectBill,
   onSaveExtractedBill,
   onDeleteAllMenuProducts,
   menuProductsCount,
@@ -295,7 +302,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     paidCashAmount?: number;
     paidTransferAmount?: number;
     commissionPaid?: boolean;
+    isArchived?: boolean;
+    savedBill?: BillRecord;
   } | null>(null);
+  const [billCode, setBillCode] = useState<string>('UNKNOW');
   const [billDate, setBillDate] = useState<string>(todayBusinessStr);
   const [rawCalendarDate, setRawCalendarDate] = useState<string | undefined>(
     undefined
@@ -315,6 +325,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [debtorName, setDebtorName] = useState<string>('');
   const [debtorSelectMode, setDebtorSelectMode] = useState<'existing' | 'new'>('new');
   const [note, setNote] = useState<string>('');
+  const [isArchived, setIsArchived] = useState<boolean>(false);
   const [items, setItems] = useState<ExtractedBillItem[]>([]);
 
   // Smart Recent Tables computed from past bills + common presets
@@ -370,6 +381,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+    setBillCode('UNKNOW');
     setBillDate(freshToday);
     setRawCalendarDate(undefined);
     setCheckInTime('');
@@ -387,6 +399,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
     setDebtorName('');
     setDebtorSelectMode('new');
     setNote('');
+    setIsArchived(false);
     setQuickAiItemPrompt('');
     setItems([]);
     setImageZoom(1);
@@ -506,6 +519,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   // Strict JSON output structure including all requested fields
   const strictJsonOutput: ExtractedBillJSON = {
     billInfo: {
+      billCode: billCode || 'UNKNOW',
       billDate,
       ...(rawCalendarDate && rawCalendarDate !== billDate
         ? { rawDate: rawCalendarDate }
@@ -518,6 +532,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       subtotalAmount,
       discountAmount: safeDiscount,
       totalAmount,
+      ...(isArchived ? { isArchived: true } : {}),
     },
     items: items.map((it) => ({
       productName: it.productName,
@@ -545,11 +560,13 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   };
 
   const applyExtractedResult = (result: ExtractedBillJSON) => {
+    setBillCode(result.billInfo.billCode || 'UNKNOW');
     setBillDate(result.billInfo.billDate || todayBusinessStr);
     setRawCalendarDate(result.billInfo.rawDate);
     setCheckInTime(result.billInfo.checkInTime || '');
     setCheckOutTime(result.billInfo.checkOutTime || '');
     setTableName(normalizeTableName(result.billInfo.tableName || ''));
+    setIsArchived(Boolean(result.billInfo.isArchived));
     
     const parsedDisc = Math.max(0, Math.round(result.billInfo.discountAmount || 0));
     setDiscountAmount(parsedDisc);
@@ -1068,9 +1085,10 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       }
     }
 
+    const finalBillCode = (billCode && billCode.trim()) ? billCode.trim() : 'UNKNOW';
     const commissionEnabled = autoPayCommission && safeDiscount > 0;
     const snapshotPopup = {
-      billCode: `HD-${billDate.replace(/-/g, '').slice(2)}`,
+      billCode: finalBillCode,
       billDate,
       checkInTime: checkInTime.trim() || undefined,
       checkOutTime: checkOutTime.trim() || undefined,
@@ -1086,12 +1104,14 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
       paidTransferAmount: finalPaidTransfer,
       debtorName: paymentType === 'debt' ? debtorName.trim() : undefined,
       commissionPaid: commissionEnabled,
+      isArchived,
     };
 
     setIsSaving(true);
     setErrorMsg(null);
     try {
       const savedBill = await onSaveExtractedBill({
+        billCode: finalBillCode,
         billDate,
         rawDate: rawCalendarDate,
         checkInTime: checkInTime.trim() || undefined,
@@ -1103,6 +1123,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         paidCashAmount: finalPaidCash,
         paidTransferAmount: finalPaidTransfer,
         note: finalNote,
+        isArchived,
         items: validItems.map((it) => ({
           ...it,
           isDiscountEligible: it.isDiscountEligible !== false,
@@ -1126,6 +1147,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
         billCode: savedBill?.billCode || snapshotPopup.billCode,
         billDate: savedBill?.billDate || snapshotPopup.billDate,
         totalAmount: savedBill?.totalAmount ?? snapshotPopup.totalAmount,
+        savedBill: savedBill || undefined,
       });
     } catch (err: any) {
       setErrorMsg(err?.message || 'Lỗi khi lưu hóa đơn.');
@@ -1990,7 +2012,20 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
           {/* Bill Metadata Grid */}
           <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Mã hóa đơn
+                </label>
+                <input
+                  type="text"
+                  value={billCode}
+                  onChange={(e) => setBillCode(e.target.value)}
+                  placeholder="Mã HĐ (VD: HD005114.U01)"
+                  className="w-full h-9 px-3 text-xs font-mono font-bold uppercase rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                />
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Ngày tính Bill (Ca ngày)
@@ -3098,11 +3133,62 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
               </div>
             </div>
 
+            {/* Bill Lưu Trữ Mode Toggle Card */}
+            <div className={`p-3 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              isArchived
+                ? 'border-amber-400 dark:border-amber-700 bg-amber-50/90 dark:bg-amber-950/40 ring-1 ring-amber-400/30'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40'
+            }`}>
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                  isArchived
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}>
+                  <Package className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-900 dark:text-white">
+                      Chế độ "Bill Lưu Trữ" (Ghi Nhớ)
+                    </span>
+                    {isArchived ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-200 text-amber-900 dark:bg-amber-900/80 dark:text-amber-200">
+                        Đang BẬT
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                        Hóa đơn bán hàng chuẩn
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight mt-0.5">
+                    Lưu trữ vào hệ thống để tra cứu, hiển thị ở Tổng quan nhưng <strong>không tính doanh thu, không tính công nợ, không tính số lượng bán ra</strong>.
+                  </p>
+                </div>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer shrink-0 self-end sm:self-center">
+                <input
+                  type="checkbox"
+                  checked={isArchived}
+                  onChange={(e) => setIsArchived(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-amber-600"></div>
+              </label>
+            </div>
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
               <div className="text-xs text-slate-500 dark:text-slate-400">
                 Ca ngày: <strong className="font-mono text-slate-800 dark:text-slate-200">{billDate}</strong> · Bàn:{' '}
                 <strong className="text-slate-800 dark:text-slate-200">{tableName || 'Chưa chọn'}</strong> · Hình thức:{' '}
                 <strong className="text-slate-800 dark:text-slate-200">{PAYMENT_LABELS[paymentType]}</strong>
+                {isArchived && (
+                  <span className="ml-2 font-bold text-amber-600 dark:text-amber-400">
+                    · [📦 Chỉ ghi nhớ]
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-2 flex-wrap">
@@ -3125,10 +3211,20 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                   type="button"
                   disabled={isSaving || !canWrite}
                   onClick={handleSaveBill}
-                  className="h-11 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                  className={`h-11 px-5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shadow-xs text-white ${
+                    isArchived
+                      ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
+                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                  }`}
                 >
                   <Save className="w-4 h-4 shrink-0" />
-                  <span>{isSaving ? 'Đang lưu vào hệ thống...' : 'Lưu Bill & Cập Nhật Doanh Thu'}</span>
+                  <span>
+                    {isSaving
+                      ? 'Đang lưu vào hệ thống...'
+                      : isArchived
+                      ? 'Lưu Bill Lưu Trữ (Không Tính DT)'
+                      : 'Lưu Bill & Cập Nhật Doanh Thu'}
+                  </span>
                 </button>
               </div>
             </div>
@@ -3248,12 +3344,24 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
             </div>
 
             <div className="p-5 space-y-3 text-xs">
+              {savedBillPopup.isArchived && (
+                <div className="p-2.5 rounded-xl bg-amber-100/90 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 text-[11px] font-bold text-amber-900 dark:text-amber-200 flex items-center gap-2">
+                  <Package className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span>Hóa đơn đã được lưu ở chế độ "Bill Lưu Trữ" (Ghi nhớ - Không tính doanh thu, công nợ hay số lượng bán ra)</span>
+                </div>
+              )}
+
               <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500 dark:text-slate-400">Mã hóa đơn:</span>
-                  <span className="font-mono font-bold text-slate-900 dark:text-white">
-                    {savedBillPopup.billCode}
-                  </span>
+                  <div className="flex items-center gap-1.5 font-mono font-bold text-slate-900 dark:text-white">
+                    <span>{savedBillPopup.billCode}</span>
+                    {savedBillPopup.isArchived && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-200 font-bold">
+                        📦 Lưu trữ
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500 dark:text-slate-400">Ca ngày:</span>
@@ -3297,57 +3405,94 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                     {savedBillPopup.itemCount} món ({savedBillPopup.totalQuantity} phần/lon)
                   </span>
                 </div>
-                {savedBillPopup.discountAmount > 0 && (
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500 dark:text-slate-400">Chiết khấu bill:</span>
-                      <span className="font-mono font-semibold text-rose-600 dark:text-rose-400">
-                        -{formatVND(savedBillPopup.discountAmount)}
-                      </span>
-                    </div>
-                    {savedBillPopup.commissionPaid ? (
-                      <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-800 dark:text-emerald-300 font-medium flex items-center gap-1.5">
-                        <Check className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
-                        <span>Đã tự động ghi chi hoa hồng -{formatVND(savedBillPopup.discountAmount)} cho người đặt bàn vào Sổ quỹ ngày!</span>
-                      </div>
-                    ) : onQuickPayCommission ? (
-                      <div className="pt-0.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const found = existingBills.find((b) => b.billCode === savedBillPopup.billCode) || {
-                              id: '',
-                              billCode: savedBillPopup.billCode,
-                              billDate: savedBillPopup.billDate,
-                              discountAmount: savedBillPopup.discountAmount,
-                              totalAmount: savedBillPopup.totalAmount,
-                              tableName: savedBillPopup.tableName,
-                              note: savedBillPopup.note || '',
-                            } as any;
-                            setSavedBillPopup(null);
-                            if (isModal && onCloseModal) onCloseModal();
-                            onQuickPayCommission(found);
-                          }}
-                          className="w-full py-1.5 px-3 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-[11px] font-bold text-amber-800 dark:text-amber-200 inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                        >
-                          <MinusCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                          <span>Chi hoa hồng đặt bàn ngay (-{formatVND(savedBillPopup.discountAmount)})</span>
-                        </button>
-                      </div>
-                    ) : null}
+                {/* Financial Summary formatted according to reference image */}
+                <div className="pt-2.5 border-t border-slate-200 dark:border-slate-700 space-y-1 font-mono text-xs">
+                  <div className="flex items-center justify-between font-medium">
+                    <span className="font-sans text-slate-600 dark:text-slate-400">Chiết khấu:</span>
+                    <span className={savedBillPopup.discountAmount > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-slate-700 dark:text-slate-300'}>
+                      {savedBillPopup.discountAmount > 0 ? `-${formatVND(savedBillPopup.discountAmount)}` : '0'}
+                    </span>
                   </div>
-                )}
-                <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
-                  <span className="font-semibold text-slate-700 dark:text-slate-300">
-                    Tổng tiền hóa đơn:
-                  </span>
-                  <span className="text-base font-bold font-mono text-emerald-600 dark:text-emerald-400">
-                    {formatVND(savedBillPopup.totalAmount)}
-                  </span>
+
+                  <div className="flex items-center justify-between text-base font-extrabold text-slate-900 dark:text-white pt-0.5">
+                    <span className="font-sans">Tổng Cộng Khách Trả:</span>
+                    <span>{formatVND(savedBillPopup.totalAmount)}</span>
+                  </div>
+
+                  {savedBillPopup.discountAmount > 0 && (
+                    <>
+                      <div className="pt-1.5 border-t border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-between font-semibold text-rose-600 dark:text-rose-400">
+                        <span className="font-sans">Trừ chiết khấu / Khoản trừ:</span>
+                        <span>-{formatVND(savedBillPopup.discountAmount)}</span>
+                      </div>
+
+                      <div className="flex items-center justify-between text-base font-extrabold text-emerald-700 dark:text-emerald-400">
+                        <span className="font-sans">Thực thu sau hoàn trả:</span>
+                        <span>{formatVND(Math.max(0, savedBillPopup.totalAmount - (savedBillPopup.commissionPaid ? savedBillPopup.discountAmount : 0)))}</span>
+                      </div>
+
+                      <div className="pt-1 border-t border-dashed border-slate-300 dark:border-slate-600 text-[11px] text-rose-600 dark:text-rose-400 flex items-center justify-between">
+                        <span>• Chiết khấu đặt bàn (tính chung 1 dòng Khoản trừ ngày): {savedBillPopup.tableName || 'Bàn'}</span>
+                        <span className="font-semibold">-{formatVND(savedBillPopup.discountAmount)}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
+
+                {savedBillPopup.discountAmount > 0 && (
+                  savedBillPopup.commissionPaid ? (
+                    <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-800 dark:text-emerald-300 font-medium flex items-center gap-1.5">
+                      <Check className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                      <span>Đã tự động ghi chi hoa hồng -{formatVND(savedBillPopup.discountAmount)} cho người đặt bàn vào Sổ quỹ ngày!</span>
+                    </div>
+                  ) : onQuickPayCommission ? (
+                    <div className="pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const found = existingBills.find((b) => b.billCode === savedBillPopup.billCode) || savedBillPopup.savedBill || {
+                            id: '',
+                            billCode: savedBillPopup.billCode,
+                            billDate: savedBillPopup.billDate,
+                            discountAmount: savedBillPopup.discountAmount,
+                            totalAmount: savedBillPopup.totalAmount,
+                            tableName: savedBillPopup.tableName,
+                            note: savedBillPopup.note || '',
+                          } as any;
+                          setSavedBillPopup(null);
+                          if (isModal && onCloseModal) onCloseModal();
+                          onQuickPayCommission(found);
+                        }}
+                        className="w-full py-1.5 px-3 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-[11px] font-bold text-amber-800 dark:text-amber-200 inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        <MinusCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                        <span>Chi hoa hồng đặt bàn ngay (-{formatVND(savedBillPopup.discountAmount)})</span>
+                      </button>
+                    </div>
+                  ) : null
+                )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {onInspectBill && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const found = existingBills.find((b) => b.billCode === savedBillPopup.billCode) || savedBillPopup.savedBill;
+                      if (found) {
+                        setSavedBillPopup(null);
+                        if (isModal && onCloseModal) onCloseModal();
+                        onInspectBill(found);
+                      }
+                    }}
+                    className="h-10 px-3.5 rounded-xl border border-slate-900 dark:border-white bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:hover:bg-slate-100 dark:text-slate-900 font-bold text-xs inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                    title="Xem & Soát Phiếu Tính Tiền (K80 / K58 / PDF)"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Xem Phiếu Bill</span>
+                  </button>
+                )}
+
                 {isModal && onCloseModal && (
                   <button
                     type="button"

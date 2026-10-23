@@ -36,6 +36,7 @@ import {
   extractBillTableName,
   extractReturnTableName,
   formatReturnDeductionTitle,
+  buildDefaultReturnNote,
 } from '../utils/parser';
 
 interface ReturnsDeductionsTabProps {
@@ -368,13 +369,15 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     return filteredBillsForDate[0] || null;
   }, [filteredBillsForDate, selectedBillId]);
 
-  // Auto-populate Số bàn when activeBill changes
+  // Auto-populate Số bàn when activeBill changes and reset selectedItemId
   useEffect(() => {
     if (activeBill) {
       setReturnTableName(extractBillTableName(activeBill, 'Bàn lẻ'));
       setReturnDate(activeBill.billDate || todayStr);
+      setSelectedItemId('');
     } else {
       setReturnTableName('');
+      setSelectedItemId('');
     }
   }, [activeBill?.id]);
 
@@ -390,6 +393,15 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     }
     return itemsInActiveBill[0] || null;
   }, [itemsInActiveBill, selectedItemId]);
+
+  // Auto-populate returnNote with product name and its note whenever activeBillItem changes
+  useEffect(() => {
+    if (activeBillItem) {
+      setReturnNote(buildDefaultReturnNote(activeBillItem));
+    } else {
+      setReturnNote('');
+    }
+  }, [activeBillItem?.id, activeBillItem?.productName, activeBillItem?.note]);
 
   const maxReturnableQty = activeBillItem
     ? Math.max(0, activeBillItem.quantity - activeBillItem.returnedQuantity)
@@ -924,7 +936,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             tableName: cleanTable,
             note:
               returnNote.trim() ||
-              `[${cleanTable}] Khách trả lại ${safeQty} ${activeBillItem.productName} (Bill ${activeBill.billCode} ngày ${formatDateDMY(activeBill.billDate)})`,
+              buildDefaultReturnNote(activeBillItem),
           });
           setStatusMsg({
             type: 'ok',
@@ -934,7 +946,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
               refundAmt
             )} — 1 dòng tiền duy nhất)!`,
           });
-          setReturnNote('');
+          setReturnNote(buildDefaultReturnNote(activeBillItem));
         } catch (err: any) {
           setStatusMsg({
             type: 'err',
@@ -2259,6 +2271,7 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                               onClick={() => {
                                 setSelectedItemId(it.id);
                                 setReturnQty(Math.min(1, remain));
+                                setReturnNote(buildDefaultReturnNote(it));
                               }}
                               className={`cursor-pointer transition-colors ${
                                 isPicked
@@ -2271,12 +2284,20 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                                   type="radio"
                                   name="returnItem"
                                   checked={isPicked}
-                                  onChange={() => setSelectedItemId(it.id)}
+                                  onChange={() => {
+                                    setSelectedItemId(it.id);
+                                    setReturnNote(buildDefaultReturnNote(it));
+                                  }}
                                   className="text-indigo-600 focus:ring-indigo-500"
                                 />
                               </td>
                               <td className="py-2.5 px-3 font-sans font-semibold text-slate-900 dark:text-white">
-                                {it.productName}
+                                <div>{it.productName}</div>
+                                {it.note?.trim() ? (
+                                  <div className="text-[11px] font-normal text-amber-600 dark:text-amber-400 italic">
+                                    Ghi chú: {it.note.trim()}
+                                  </div>
+                                ) : null}
                               </td>
                               <td className="py-2.5 px-2 text-right">{it.quantity}</td>
                               <td className="py-2.5 px-2 text-right text-indigo-600 dark:text-indigo-400">
@@ -2304,7 +2325,18 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                         Món / Bia đang chọn hoàn trả:
                       </span>
                       <span className="text-sm font-bold text-slate-900 dark:text-white">
-                        {activeBillItem ? activeBillItem.productName : 'Chưa chọn món'}
+                        {activeBillItem ? (
+                          <span>
+                            {activeBillItem.productName}
+                            {activeBillItem.note?.trim() && (
+                              <span className="ml-1.5 text-xs font-normal text-amber-600 dark:text-amber-400 italic">
+                                ({activeBillItem.note.trim()})
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          'Chưa chọn món'
+                        )}
                       </span>
                     </div>
                     {activeBill && (
@@ -2371,14 +2403,30 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Ghi chú thêm (Tùy chọn)
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                        Ghi chú hoàn trả (Tự động điền theo món & ghi chú món)
+                      </label>
+                      {activeBillItem && (
+                        <button
+                          type="button"
+                          onClick={() => setReturnNote(buildDefaultReturnNote(activeBillItem))}
+                          className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer font-medium"
+                          title="Điền lại tên món và ghi chú ban đầu của món này"
+                        >
+                          Điền lại mặc định
+                        </button>
+                      )}
+                    </div>
                     <textarea
                       rows={2}
                       value={returnNote}
                       onChange={(e) => setReturnNote(e.target.value)}
-                      placeholder="Ví dụ: Khách trả lại bia chưa khui cuối buổi..."
+                      placeholder={
+                        activeBillItem
+                          ? `Ví dụ: ${buildDefaultReturnNote(activeBillItem)}`
+                          : 'Tên món kèm ghi chú...'
+                      }
                       className="w-full p-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                     />
                   </div>

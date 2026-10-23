@@ -65,6 +65,7 @@ import {
   MinusCircle,
   ZoomIn,
   ZoomOut,
+  Archive,
 } from 'lucide-react';
 import {
   auth,
@@ -158,6 +159,7 @@ import {
   deleteProductsBatchFromFirestore,
   saveNewBillToCloud,
   updateBillAndItemsInCloud,
+  toggleBillArchiveStatusInCloud,
   deleteBillsBatchFromCloud,
   listenToKiotVietInbox,
   saveExpenseDeductionToCloud,
@@ -1915,9 +1917,15 @@ export default function App() {
 
   const periodBillIds = useMemo(() => new Set(periodBills.map((b) => b.id)), [periodBills]);
 
+  // Non-archived bills are used to calculate item sales volume & category analytics (bảo đảm bill lưu trữ không tính số lượng bán ra)
+  const periodSalesBillIds = useMemo(
+    () => new Set(periodBills.filter((b) => !b.isArchived).map((b) => b.id)),
+    [periodBills]
+  );
+
   const periodBillItems = useMemo(() => {
-    return effectiveBillItems.filter((it) => periodBillIds.has(it.billId));
-  }, [effectiveBillItems, periodBillIds]);
+    return effectiveBillItems.filter((it) => periodSalesBillIds.has(it.billId));
+  }, [effectiveBillItems, periodSalesBillIds]);
 
   // Ensure every return (hoàn bia / món thừa) is synced as a single unified cashflow line in Deductions (Khoản trừ)
   const effectiveDeductions = useMemo<DeductionRecord[]>(() => {
@@ -2102,20 +2110,23 @@ export default function App() {
           return (
             (b.paymentType === 'cash' ||
               (b.paymentType === 'split' && getBillPaymentBreakdown(b).cash > 0)) &&
-            !isOwnerUseBill(b)
+            !isOwnerUseBill(b) &&
+            !b.isArchived
           );
         }
         if (paymentFilter === 'transfer') {
           return (
             (b.paymentType === 'transfer' ||
               (b.paymentType === 'split' && getBillPaymentBreakdown(b).transfer > 0)) &&
-            !isOwnerUseBill(b)
+            !isOwnerUseBill(b) &&
+            !b.isArchived
           );
         }
-        if (paymentFilter === 'split') return b.paymentType === 'split' && !isOwnerUseBill(b);
-        if (paymentFilter === 'debt') return b.paymentType === 'debt' && !isOwnerUseBill(b);
+        if (paymentFilter === 'split') return b.paymentType === 'split' && !isOwnerUseBill(b) && !b.isArchived;
+        if (paymentFilter === 'debt') return b.paymentType === 'debt' && !isOwnerUseBill(b) && !b.isArchived;
         if (paymentFilter === 'has_return') return (b.deductedAmount || 0) > 0;
         if ((paymentFilter as string) === 'owner_use') return isOwnerUseBill(b);
+        if ((paymentFilter as string) === 'archived') return Boolean(b.isArchived);
         return true;
       })
       .filter((b) => {
@@ -2194,9 +2205,13 @@ export default function App() {
     let debt = 0;
     let has_return = 0;
     let owner_use = 0;
+    let archived = 0;
 
     for (const b of periodBills) {
       all += 1;
+      if (b.isArchived) {
+        archived += 1;
+      }
       if (isOwnerUseBill(b)) {
         owner_use += 1;
         continue;
@@ -2219,13 +2234,13 @@ export default function App() {
       }
     }
 
-    return { all, cash, transfer, split, debt, has_return, owner_use };
+    return { all, cash, transfer, split, debt, has_return, owner_use, archived };
   }, [periodBills]);
 
   // Total net revenue currently displayed in table based on paymentFilter
   const filteredTotalNet = useMemo(() => {
     return displayedBills.reduce((sum, b) => {
-      if (isOwnerUseBill(b)) return sum;
+      if (isOwnerUseBill(b) || b.isArchived) return sum;
       if (b.paymentType === 'split') {
         const bd = getBillPaymentBreakdown(b);
         if (paymentFilter === 'cash') {
@@ -2280,7 +2295,7 @@ export default function App() {
     // cộng lại phần hoa hồng vào doanh thu tiền mặt gộp (grossCashFromBills) để khi trừ tổng chi (totalDeductions),
     // tiền mặt thực nhận ca ngày (netCashRevenue) chính xác bằng tiền bán thực thu sau hoa hồng!
     const grossCashFromBills = periodBills
-      .filter((b) => !isOwnerUseBill(b))
+      .filter((b) => !isOwnerUseBill(b) && !b.isArchived)
       .reduce((s, b) => {
         const bd = getBillPaymentBreakdown(b);
         const billDisc = Math.max(0, Number(b.discountAmount) || 0);
@@ -2298,6 +2313,7 @@ export default function App() {
 
     // Doanh thu chuyển khoản từ hóa đơn phát sinh trong kỳ
     const grossTransferFromBills = periodBills
+      .filter((b) => !isOwnerUseBill(b) && !b.isArchived)
       .reduce((s, b) => {
         const bd = getBillPaymentBreakdown(b);
         const billDisc = Math.max(0, Number(b.discountAmount) || 0);
@@ -2318,7 +2334,7 @@ export default function App() {
 
     // Công nợ mới phát sinh trong kỳ còn chưa thanh toán
     const totalDebt = periodBills
-      .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid')
+      .filter((b) => b.paymentType === 'debt' && b.debtStatus !== 'paid' && !b.isArchived)
       .reduce((s, b) => {
         const netOrig = Math.max(
           0,
@@ -3112,6 +3128,7 @@ export default function App() {
 
   // Bill & Item Handlers
   const handleSaveExtractedBill = async (params: {
+    billCode?: string;
     billDate: string;
     rawDate?: string;
     checkInTime?: string;
@@ -3123,6 +3140,7 @@ export default function App() {
     note: string;
     subtotalAmount?: number;
     discountAmount?: number;
+    isArchived?: boolean;
     items: ExtractedBillItem[];
     commissionPayout?: {
       enabled: boolean;
@@ -3171,6 +3189,7 @@ export default function App() {
 
     const res = await saveNewBillToCloud({
       ownerId,
+      billCode: params.billCode?.trim() || 'UNKNOW',
       billDate: params.billDate,
       rawDate: params.rawDate,
       checkInTime: params.checkInTime,
@@ -3182,6 +3201,7 @@ export default function App() {
       note: params.note,
       subtotalAmount: params.subtotalAmount,
       discountAmount: params.discountAmount,
+      isArchived: params.isArchived,
       items: params.items,
       existingProducts: products,
       autoAddProducts,
@@ -3311,6 +3331,7 @@ export default function App() {
           const subtotal = itemsToSave.reduce((s, it) => s + it.subtotal, 0);
           const effectiveDate = incoming.billDate || getCurrentBusinessDate();
           await handleSaveExtractedBillRef.current({
+            billCode: incoming.code || incoming.billCode || incoming.InvoiceCode || 'UNKNOW',
             billDate: effectiveDate,
             rawDate: incoming.rawDate || incoming.billDate || getCurrentBusinessDate(),
             paymentType:
@@ -3554,6 +3575,25 @@ export default function App() {
       updatedAtMs: Date.now(),
     };
     await handleSaveEditedBill(updatedBill, updatedItems);
+  };
+
+  const handleToggleArchiveBill = async (bill: BillRecord) => {
+    const nextVal = !bill.isArchived;
+    setBills((prev) =>
+      prev.map((b) => (b.id === bill.id ? { ...b, isArchived: nextVal } : b))
+    );
+    if (inspectingBill && inspectingBill.id === bill.id) {
+      setInspectingBill({ ...inspectingBill, isArchived: nextVal });
+    }
+    if (editingBill && editingBill.id === bill.id) {
+      setEditingBill({ ...editingBill, isArchived: nextVal });
+    }
+    await toggleBillArchiveStatusInCloud(ownerId, bill, nextVal);
+    showToast(
+      nextVal
+        ? `Đã chuyển bill ${bill.billCode} sang "Bill lưu trữ" (Không tính doanh thu & công nợ)`
+        : `Đã khôi phục bill ${bill.billCode} sang hóa đơn bình thường (Tính doanh thu & công nợ)`
+    );
   };
 
   const handleDeleteBillDirect = async (bill: BillRecord) => {
@@ -7772,6 +7812,7 @@ export default function App() {
                         <option value="debt">Công nợ ({paymentCounts.debt})</option>
                         <option value="has_return">Có hoàn trả ({paymentCounts.has_return})</option>
                         <option value="owner_use">Chủ / QL dùng (0đ) ({paymentCounts.owner_use})</option>
+                        <option value="archived">📦 Bill lưu trữ ({paymentCounts.archived})</option>
                       </select>
 
                       <select
@@ -7938,6 +7979,17 @@ export default function App() {
                     }`}
                   >
                     👑 Chủ/QL dùng ({paymentCounts.owner_use})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentFilter('archived' as any)}
+                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
+                      paymentFilter === ('archived' as any)
+                        ? 'bg-amber-600 text-white border-amber-600 shadow-2xs ring-2 ring-amber-500/20'
+                        : 'bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border-amber-300 dark:border-amber-800 hover:bg-amber-100'
+                    }`}
+                  >
+                    📦 Bill lưu trữ ({paymentCounts.archived})
                   </button>
                 </div>
 
@@ -8123,6 +8175,11 @@ export default function App() {
 
                                   {/* Payment method badge & table */}
                                   <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                    {bill.isArchived && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200 border border-amber-300">
+                                        📦 Lưu trữ
+                                      </span>
+                                    )}
                                     {isSplit ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-900 dark:bg-purple-900/60 dark:text-purple-200 border border-purple-300">
                                         <CreditCard className="w-3 h-3 text-purple-600" />
@@ -8194,7 +8251,9 @@ export default function App() {
                                 </div>
                                 <div
                                   className={`text-sm font-bold tabular-nums ${
-                                    isDebt
+                                    bill.isArchived
+                                      ? 'text-amber-600 dark:text-amber-400 font-extrabold'
+                                      : isDebt
                                       ? 'text-amber-600 dark:text-amber-400 font-extrabold'
                                       : isSplit
                                       ? 'text-purple-700 dark:text-purple-300 font-extrabold'
@@ -8207,6 +8266,11 @@ export default function App() {
                                 >
                                   {isOwner ? '0 ₫' : formatVND(displayNet)}
                                 </div>
+                                {bill.isArchived && (
+                                  <div className="text-[10px] font-sans font-bold text-amber-600 dark:text-amber-400">
+                                    (0đ vào DT)
+                                  </div>
+                                )}
                                 {displayDeduction > 0 && (
                                   <div className="text-[10px] text-rose-500 font-mono">
                                     Trừ: -{formatVND(displayDeduction)}
@@ -8281,6 +8345,19 @@ export default function App() {
                                         Hoàn trả
                                       </button>
                                     )}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleArchiveBill(bill)}
+                                      className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                                        bill.isArchived
+                                          ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100'
+                                          : 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100'
+                                      }`}
+                                      title={bill.isArchived ? "Bỏ lưu trữ (Tính doanh thu & công nợ)" : "Lưu trữ (Không tính doanh thu & công nợ)"}
+                                    >
+                                      <Archive className="w-3 h-3 inline mr-1" />
+                                      <span>{bill.isArchived ? 'Bỏ lưu trữ' : 'Lưu trữ'}</span>
+                                    </button>
                                   </>
                                 )}
                                 {canDelete && (
@@ -8391,6 +8468,8 @@ export default function App() {
 
                             const rowBgClass = isSelected
                               ? 'bg-emerald-50/80 dark:bg-emerald-950/50'
+                              : bill.isArchived
+                              ? 'bg-amber-50/40 dark:bg-amber-950/20 hover:bg-amber-100/50 dark:hover:bg-amber-950/40 border-l-4 border-l-amber-500'
                               : isSplit
                               ? 'bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-100/50 dark:hover:bg-purple-950/40 border-l-4 border-l-purple-500'
                               : isDebt
@@ -8441,6 +8520,11 @@ export default function App() {
                                 <td className="py-3 px-3">
                                   {/* Payment method badge & table name */}
                                   <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                                    {bill.isArchived && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200 border border-amber-300 shadow-2xs">
+                                        📦 Lưu trữ
+                                      </span>
+                                    )}
                                     {isSplit ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-purple-100 text-purple-900 dark:bg-purple-900/60 dark:text-purple-200 border border-purple-300 shadow-2xs">
                                         <CreditCard className="w-3 h-3 text-purple-600" />
@@ -8537,7 +8621,9 @@ export default function App() {
                                 <td className="py-3 px-3 text-right font-mono">
                                   <div
                                     className={`font-bold tabular-nums text-sm ${
-                                      isDebt
+                                      bill.isArchived
+                                        ? 'text-amber-600 dark:text-amber-400 font-extrabold'
+                                        : isDebt
                                         ? 'text-amber-600 dark:text-amber-400 font-extrabold'
                                         : isSplit
                                         ? 'text-purple-700 dark:text-purple-300 font-extrabold'
@@ -8550,6 +8636,11 @@ export default function App() {
                                   >
                                     {isOwner ? '0 ₫' : formatVND(displayNet)}
                                   </div>
+                                  {bill.isArchived && (
+                                    <div className="text-[10px] font-sans font-bold text-amber-600 dark:text-amber-400">
+                                      (0đ vào DT)
+                                    </div>
+                                  )}
                                   {totalDed > 0 && !isOwner && (
                                     <div className="text-[10px] text-slate-400 font-sans font-normal">
                                       (Sau trừ)
@@ -8608,6 +8699,19 @@ export default function App() {
                                           Hoàn trả
                                         </button>
                                       )}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleArchiveBill(bill)}
+                                        className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer align-middle ${
+                                          bill.isArchived
+                                            ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-emerald-800 dark:text-emerald-200'
+                                            : 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-amber-800 dark:text-amber-200'
+                                        }`}
+                                        title={bill.isArchived ? "Bỏ lưu trữ (Tính doanh thu & công nợ)" : "Lưu trữ (Không tính doanh thu & công nợ)"}
+                                      >
+                                        <Archive className="w-3 h-3 inline mr-1" />
+                                        <span>{bill.isArchived ? 'Bỏ lưu trữ' : 'Lưu trữ'}</span>
+                                      </button>
                                     </>
                                   )}
                                   {canDelete && (
@@ -8766,6 +8870,7 @@ export default function App() {
               deductionCategories={effectiveDeductionCategories}
               onAddExpenseDeduction={handleAddExpenseDeduction}
               onQuickPayCommission={(b) => setCommissionBill(b)}
+              onInspectBill={(b) => setInspectingBill(b)}
               autoAddProducts={autoAddProducts}
               onToggleAutoAddProducts={setAutoAddProducts}
               onSaveExtractedBill={handleSaveExtractedBill}
@@ -9365,8 +9470,24 @@ export default function App() {
               bill={liveBill}
               items={effectiveBillItems.filter((it) => it.billId === liveBill.id)}
               products={products}
-              billReturns={returns.filter((r) => r.billId === liveBill.id)}
-              billDeductions={effectiveDeductions.filter((d) => d.billId === liveBill.id)}
+              billReturns={returns.filter(
+                (r) =>
+                  r.billId === liveBill.id ||
+                  (r as any).customBillId === liveBill.id ||
+                  (r.billCode &&
+                    liveBill.billCode &&
+                    r.billCode === liveBill.billCode &&
+                    r.billCode !== 'UNKNOW')
+              )}
+              billDeductions={effectiveDeductions.filter(
+                (d) =>
+                  d.billId === liveBill.id ||
+                  (d as any).customBillId === liveBill.id ||
+                  (d.billCode &&
+                    liveBill.billCode &&
+                    d.billCode === liveBill.billCode &&
+                    d.billCode !== 'UNKNOW')
+              )}
               canWrite={canWrite}
               canDelete={canDelete}
               canAccessReturns={allowedTabs.includes('returns')}
@@ -9390,6 +9511,7 @@ export default function App() {
               }}
               onDeleteBill={(b) => handleConfirmDeleteBill(b)}
               onQuickPayCommission={(b) => setCommissionBill(b)}
+              onToggleArchiveBill={canWrite ? handleToggleArchiveBill : undefined}
               onOpenSplitMerge={
                 canWrite ? (b) => setSplitMergeBill(b) : undefined
               }
@@ -9791,6 +9913,7 @@ export default function App() {
                 deductionCategories={effectiveDeductionCategories}
                 onAddExpenseDeduction={handleAddExpenseDeduction}
                 onQuickPayCommission={(b) => setCommissionBill(b)}
+                onInspectBill={(b) => setInspectingBill(b)}
                 autoAddProducts={autoAddProducts}
                 onToggleAutoAddProducts={setAutoAddProducts}
                 onSaveExtractedBill={handleSaveExtractedBill}

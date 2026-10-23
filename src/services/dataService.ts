@@ -50,6 +50,7 @@ import {
   reconstructBillItemsFromSummary,
   extractBillTableName,
   formatReturnDeductionTitle,
+  buildDefaultReturnNote,
   formatDateDMY,
   isFoodDiscountEligible,
 } from '../utils/parser';
@@ -795,6 +796,7 @@ export async function fetchFirestoreWorkspaceOnce(): Promise<WorkspaceCacheSnaps
         itemsSummary: data.itemsSummary || '',
         note: data.note || '',
         status: data.status || 'active',
+        isArchived: Boolean(data.isArchived),
         createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
         updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
       };
@@ -1008,6 +1010,7 @@ export async function syncFullSnapshotToFirestore(
         itemsSummary: truncateStr(b.itemsSummary || '', 1000, ''),
         note: truncateStr(b.note || '', 500, ''),
         status: b.status === 'locked' ? 'locked' : 'active',
+        isArchived: Boolean(b.isArchived),
       };
       await upsertFirestoreDoc(
         'bills',
@@ -1553,6 +1556,7 @@ export async function renameOrReassignCategoryInCloud(params: {
 // BILLS FIREBASE CRUD
 export async function saveNewBillToCloud(params: {
   ownerId: string;
+  billCode?: string;
   billDate: string;
   rawDate?: string;
   checkInTime?: string;
@@ -1565,6 +1569,7 @@ export async function saveNewBillToCloud(params: {
   note: string;
   subtotalAmount?: number;
   customBillCodePrefix?: string;
+  isArchived?: boolean;
   items: ExtractedBillItem[];
   existingProducts: ProductRecord[];
   autoAddProducts: boolean;
@@ -1575,6 +1580,7 @@ export async function saveNewBillToCloud(params: {
 }> {
   const {
     ownerId,
+    billCode,
     billDate,
     rawDate,
     checkInTime,
@@ -1586,6 +1592,7 @@ export async function saveNewBillToCloud(params: {
     paidTransferAmount,
     note,
     customBillCodePrefix,
+    isArchived,
     items,
     existingProducts,
     autoAddProducts,
@@ -1608,6 +1615,8 @@ export async function saveNewBillToCloud(params: {
 
   const codePrefix = (customBillCodePrefix || 'HD').trim();
   const shortCode = `${codePrefix}-${effectiveBillDate.replace(/-/g, '').slice(2)}-${String(now).slice(-4)}`;
+  const explicitBillCode = (billCode || '').trim();
+  const resolvedBillCode = explicitBillCode || (customBillCodePrefix ? shortCode : 'UNKNOW');
 
   const validItems = items.map((it) => {
     const qty = Math.max(1, Math.round(it.quantity || 1));
@@ -1667,7 +1676,7 @@ export async function saveNewBillToCloud(params: {
   const billRecord: BillRecord = {
     id: billId,
     ownerId: cleanOwnerId,
-    billCode: truncateStr(shortCode, 64, 'HD-001'),
+    billCode: truncateStr(resolvedBillCode, 64, 'UNKNOW'),
     billDate: effectiveBillDate,
     rawDate: rawDate || (baseDate !== effectiveBillDate ? baseDate : undefined),
     checkInTime: checkInTime ? truncateStr(checkInTime, 20, '') : undefined,
@@ -1699,6 +1708,7 @@ export async function saveNewBillToCloud(params: {
     deductedAmount: 0,
     itemsSummary: summaryStr,
     note: truncateStr(note, 500, ''),
+    isArchived: Boolean(isArchived),
     status: 'active',
     createdAtMs: now,
     updatedAtMs: now,
@@ -1733,8 +1743,10 @@ export async function saveNewBillToCloud(params: {
     const key = it.productName.toLowerCase().trim();
     const existing = productsMap.get(key);
     if (existing) {
-      existing.totalSold += it.quantity;
-      existing.totalRevenue += it.subtotal;
+      if (!isArchived) {
+        existing.totalSold += it.quantity;
+        existing.totalRevenue += it.subtotal;
+      }
       // Giữ nguyên giá mặc định (existing.unitPrice) của sản phẩm trong Menu khi chỉnh giá trong Bill
       if (existing.unitPrice <= 0 && (it.originalUnitPrice || it.unitPrice) > 0) {
         existing.unitPrice = it.originalUnitPrice || it.unitPrice;
@@ -1750,9 +1762,9 @@ export async function saveNewBillToCloud(params: {
         category: it.category,
         unitPrice: it.originalUnitPrice || it.unitPrice,
         unit: inferUnit(it.productName, it.category),
-        totalSold: it.quantity,
+        totalSold: isArchived ? 0 : it.quantity,
         totalReturned: 0,
-        totalRevenue: it.subtotal,
+        totalRevenue: isArchived ? 0 : it.subtotal,
         createdAtMs: now,
         updatedAtMs: now,
       };
@@ -1800,6 +1812,7 @@ export async function saveNewBillToCloud(params: {
           deductedAmount: billRecord.deductedAmount,
           itemsSummary: truncateStr(billRecord.itemsSummary || '', 5000, ''),
           note: truncateStr(billRecord.note || '', 2000, ''),
+          isArchived: Boolean(billRecord.isArchived),
           status: billRecord.status,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -1930,6 +1943,7 @@ export async function updateBillAndItemsInCloud(params: {
         deductedAmount: Math.max(0, Math.round(bill.deductedAmount)),
         itemsSummary: truncateStr(bill.itemsSummary || '', 5000, ''),
         note: truncateStr(bill.note || '', 2000, ''),
+        isArchived: Boolean(bill.isArchived),
         status: bill.status,
       },
       {
@@ -1968,6 +1982,7 @@ export async function updateBillAndItemsInCloud(params: {
         deductedAmount: Math.max(0, Math.round(bill.deductedAmount)),
         itemsSummary: truncateStr(bill.itemsSummary || '', 5000, ''),
         note: truncateStr(bill.note || '', 2000, ''),
+        isArchived: Boolean(bill.isArchived),
         status: bill.status,
       }
     );
@@ -2030,6 +2045,35 @@ export async function updateBillAndItemsInCloud(params: {
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `bills/${bill.id}`);
   }
+}
+
+export async function toggleBillArchiveStatusInCloud(
+  ownerId: string,
+  bill: BillRecord,
+  nextIsArchived: boolean
+): Promise<BillRecord> {
+  const cleanOwnerId = sanitizeId(ownerId);
+  const now = Date.now();
+  const updatedBill: BillRecord = {
+    ...bill,
+    isArchived: Boolean(nextIsArchived),
+    updatedAtMs: now,
+  };
+
+  await syncToRtdbSafe(`workspaces/${cleanOwnerId}/bills/${bill.id}`, updatedBill);
+
+  if (isFirestoreCloudActive()) {
+    try {
+      await updateDoc(doc(db, 'bills', bill.id), {
+        isArchived: Boolean(nextIsArchived),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `bills/${bill.id}`);
+    }
+  }
+
+  return updatedBill;
 }
 
 export async function deleteBillsBatchFromCloud(
@@ -2468,12 +2512,10 @@ export async function recordItemReturnToCloud(params: {
     safeQty
   );
 
-  const rawNoteBody = (note || '').trim();
-  const noteWithTable = rawNoteBody
-    ? rawNoteBody.startsWith('[')
-      ? rawNoteBody
-      : `[${cleanTableName}] ${rawNoteBody}`
-    : `[${cleanTableName}] Khách trả lại ${safeQty} ${billItem.productName} (Bill ${bill.billCode} ngày ${formatDateDMY(bill.billDate)})`;
+  const rawNoteBody = (note || '').trim() || buildDefaultReturnNote(billItem);
+  const noteWithTable = rawNoteBody.startsWith('[')
+    ? rawNoteBody
+    : `[${cleanTableName}] ${rawNoteBody}`;
 
   const returnId = sanitizeId(`ret_${now}_${Math.random().toString(36).slice(2, 6)}`);
   const linkedDeductionId = sanitizeId(`ded_${returnId}`);

@@ -294,6 +294,10 @@
           "description": "Bill lifecycle state.",
           "enum": ["active", "locked"]
         },
+        "isArchived": {
+          "type": "boolean",
+          "description": "Whether this bill is an archived memorial bill (excluded from revenue, debt, and product sold metrics)."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

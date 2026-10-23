@@ -1945,6 +1945,11 @@ app.post('/api/ocr-bill', async (req, res) => {
         billInfo: {
           type: Type.OBJECT,
           properties: {
+            billCode: {
+              type: Type.STRING,
+              description:
+                'Mã hóa đơn nếu có trên hóa đơn (VD: HD005114.U01). Nếu không có ghi rõ thì trả về "UNKNOW"',
+            },
             billDate: {
               type: Type.STRING,
               description:

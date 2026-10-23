@@ -161,6 +161,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
       if (clean) map.set(clean.toLowerCase(), clean);
     }
     for (const b of bills) {
+      if (b.isArchived) continue;
       const clean = (b.debtorName || '').trim();
       if (clean && !map.has(clean.toLowerCase())) {
         map.set(clean.toLowerCase(), clean);
@@ -171,6 +172,7 @@ export const DebtManagerTab: React.FC<DebtManagerTabProps> = ({
 
   const debtBills = useMemo(() => {
     return bills
+      .filter((b) => !b.isArchived)
       .filter(
         (b) =>
           b.paymentType === 'debt' ||

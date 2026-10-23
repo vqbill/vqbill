@@ -471,6 +471,10 @@ export function normalizeAndSanitizeExtractedBill(
   customCategories?: string[]
 ): ExtractedBillJSON {
   const billInfo = raw?.billInfo || {};
+  const billCode =
+    typeof billInfo.billCode === 'string' && billInfo.billCode.trim()
+      ? billInfo.billCode.trim()
+      : 'UNKNOW';
   const rawCalendarDate =
     typeof billInfo.rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(billInfo.rawDate.trim())
       ? billInfo.rawDate.trim()
@@ -577,6 +581,7 @@ export function normalizeAndSanitizeExtractedBill(
 
   return {
     billInfo: {
+      billCode,
       billDate: businessDate,
       rawDate: rawCalendarDate !== businessDate ? rawCalendarDate : undefined,
       checkInTime: checkInTime || undefined,
@@ -898,15 +903,22 @@ export async function extractBillWithGemini(params: {
       existingProducts,
       categories
     );
-    if (rawText && String(rawText).trim() && !normalized.billInfo.tableName) {
+    if (rawText && String(rawText).trim()) {
       const localParsed = parseInvoiceText(
         String(rawText),
         defaultDate,
         existingProducts,
         categories
       );
-      if (localParsed.billInfo.tableName) {
+      if (!normalized.billInfo.tableName && localParsed.billInfo.tableName) {
         normalized.billInfo.tableName = localParsed.billInfo.tableName;
+      }
+      if (
+        (!normalized.billInfo.billCode || normalized.billInfo.billCode === 'UNKNOW') &&
+        localParsed.billInfo.billCode &&
+        localParsed.billInfo.billCode !== 'UNKNOW'
+      ) {
+        normalized.billInfo.billCode = localParsed.billInfo.billCode;
       }
     }
     return normalized;
@@ -952,6 +964,10 @@ export async function extractBillWithGemini(params: {
             billInfo: {
               type: Type.OBJECT,
               properties: {
+                billCode: {
+                  type: Type.STRING,
+                  description: 'Mã hóa đơn / số hóa đơn nếu có trên hóa đơn (VD: HD005114.U01). Nếu không có thì là "UNKNOW"',
+                },
                 billDate: {
                   type: Type.STRING,
                   description: 'Ngày hóa đơn YYYY-MM-DD (áp dụng ca 09:00 sáng -> 08:00 sáng hôm sau)',
