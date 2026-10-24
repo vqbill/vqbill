@@ -37,6 +37,7 @@ import {
   Award,
   Star,
   AlertTriangle,
+  Archive,
 } from 'lucide-react';
 import {
   ManagementTabId,
@@ -125,9 +126,16 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
           showStatsStrip: parsed.showStatsStrip !== false,
           showRecentBills: parsed.showRecentBills !== false,
           showPwaBanner: parsed.showPwaBanner !== false,
-          pinnedTabIds: Array.isArray(parsed.pinnedTabIds) && parsed.pinnedTabIds.length > 0
-            ? parsed.pinnedTabIds
-            : allowedTabs,
+          pinnedTabIds: (() => {
+            if (Array.isArray(parsed.pinnedTabIds) && parsed.pinnedTabIds.length > 0) {
+              const list = [...parsed.pinnedTabIds];
+              if (!list.includes('archive')) {
+                list.push('archive');
+              }
+              return list;
+            }
+            return allowedTabs;
+          })(),
           showRevenueChart: parsed.showRevenueChart !== false,
           showTrafficAnalytics: parsed.showTrafficAnalytics !== false,
           showMenuEfficiency: parsed.showMenuEfficiency !== false,
@@ -565,6 +573,17 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       accentClass:
         'border-blue-200/90 dark:border-blue-900/60 hover:border-blue-500 dark:hover:border-blue-500',
       btnClass: 'text-blue-700 dark:text-blue-300',
+    },
+    {
+      id: 'archive',
+      title: 'Kho Bill Lưu Trữ (Ghi Nhớ)',
+      pathLabel: '/luu-tru',
+      desc: 'Quản lý toàn bộ các hóa đơn đã đưa vào kho lưu trữ (không tính vào doanh thu & công nợ). Hỗ trợ xem, sửa, bỏ lưu trữ hoặc xóa.',
+      statText: `${bills.filter((b) => b.isArchived).length} bill đang lưu trữ`,
+      icon: <Archive className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
+      accentClass:
+        'border-amber-200/90 dark:border-amber-900/60 hover:border-amber-500 dark:hover:border-amber-500 bg-gradient-to-br from-amber-50/20 to-orange-50/20',
+      btnClass: 'text-amber-700 dark:text-amber-300',
     },
     {
       id: 'categories',

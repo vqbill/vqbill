@@ -56,13 +56,13 @@ export const DEFAULT_EXTERNAL_LINKS: ExternalLinkItem[] = [
 export const DEFAULT_VISIBLE_PRIMARY_TABS: ManagementTabId[] = [
   'home',
   'dashboard',
+  'archive',
   'table_orders',
   'ocr',
   'categories',
   'deductions',
   'returns',
   'salary_advances',
-  'archive',
   'menu_settings',
   'gamification',
 ];
@@ -90,6 +90,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     shortLabel: 'Tổng quan',
     description:
       'Bảng đối soát doanh thu tiền mặt, chuyển khoản, khoản trừ, công nợ riêng và danh sách hóa đơn',
+  },
+  {
+    id: 'archive',
+    label: 'Kho Bill Lưu Trữ (Ghi Nhớ)',
+    shortLabel: 'Bill lưu trữ',
+    description:
+      'Kho lưu trữ các hóa đơn ghi nhớ, không tính vào doanh thu, công nợ hay số lượng món bán ra; có thể xem lại và bỏ lưu trữ để khôi phục bất cứ lúc nào',
   },
   {
     id: 'table_orders',
@@ -188,13 +195,6 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     shortLabel: 'Vui chơi & Bàn',
     description:
       'Vòng quay may mắn (Lucky Wheel), Sơ đồ bàn 2D trực quan, Bảng vàng doanh số & món ngôi sao, Mẹo phong thủy & câu chúc ngày mới, Hiệu ứng ăn mừng kỷ lục',
-  },
-  {
-    id: 'archive',
-    label: 'Kho Bill Lưu Trữ (Ghi Nhớ)',
-    shortLabel: 'Bill lưu trữ',
-    description:
-      'Kho lưu trữ các hóa đơn ghi nhớ, không tính vào doanh thu, công nợ hay số lượng món bán ra; có thể xem lại và bỏ lưu trữ để khôi phục bất cứ lúc nào',
   },
 ];
 
@@ -895,6 +895,9 @@ export function getEffectiveRolePermissions(
     if (!tabs.includes('salary_advances')) {
       tabs = [...tabs, 'salary_advances'];
     }
+    if (!tabs.includes('archive')) {
+      tabs = [...tabs, 'archive'];
+    }
   } else if (
     !useCustom &&
     (tabs.includes('categories') ||
@@ -903,7 +906,7 @@ export function getEffectiveRolePermissions(
       account.role === UserRole.INVENTORY ||
       account.role === UserRole.VIEWER)
   ) {
-    // Ensure existing cached roles automatically receive the new 'inventory', 'kitchen_inventory', 'owner_use', and 'salary_advances' tabs
+    // Ensure existing cached roles automatically receive the new 'inventory', 'kitchen_inventory', 'owner_use', 'salary_advances', and 'archive' tabs
     if (!tabs.includes('inventory')) {
       tabs = [...tabs, 'inventory'];
     }
@@ -916,6 +919,9 @@ export function getEffectiveRolePermissions(
     if (account.role !== UserRole.INVENTORY && !tabs.includes('salary_advances')) {
       tabs = [...tabs, 'salary_advances'];
     }
+    if (!tabs.includes('archive')) {
+      tabs = [...tabs, 'archive'];
+    }
   }
 
   if (!tabs.includes('table_orders')) {
@@ -924,6 +930,10 @@ export function getEffectiveRolePermissions(
 
   if (!tabs.includes('gamification')) {
     tabs = [...tabs, 'gamification'];
+  }
+
+  if (!tabs.includes('archive')) {
+    tabs = [...tabs, 'archive'];
   }
 
   if (!tabs.includes('home')) {

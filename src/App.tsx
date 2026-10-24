@@ -670,7 +670,12 @@ export default function App() {
 
   // Safe tab navigation helper that checks allowedTabs
   const handleSelectTab = (targetTab: ActiveTab) => {
-    if (!allowedTabs.includes(targetTab)) {
+    if (
+      targetTab !== 'home' &&
+      targetTab !== 'dashboard' &&
+      targetTab !== 'archive' &&
+      !allowedTabs.includes(targetTab)
+    ) {
       const tabMeta = MANAGEMENT_TABS.find((t) => t.id === targetTab);
       showToast(
         `Tài khoản @${currentStaffAccount?.username} không được phân quyền truy cập mục "${
@@ -688,6 +693,18 @@ export default function App() {
       setCustomEndDate(todayStr);
     }
     setActiveTab(targetTab);
+    try {
+      localStorage.setItem('vqbill_active_tab', targetTab);
+      const targetPath =
+        targetTab === 'dashboard'
+          ? `/tong-quan/${toDDMMYY(todayStr)}`
+          : TAB_TO_PATH[targetTab] || `/${targetTab}`;
+      if (window.location.pathname !== targetPath) {
+        window.history.pushState({ tab: targetTab }, '', targetPath);
+      }
+    } catch {
+      // ignore
+    }
   };
 
   // Customizable Main Screen Visible Tabs vs Overflow Dropdown Column
@@ -701,19 +718,24 @@ export default function App() {
           if (cleaned.length > 0) {
             // Auto-merge newly introduced tabs into user's cached visiblePrimaryTabs
             const merged = [...cleaned];
+            if (!merged.includes('archive')) {
+              const dashIdx = merged.indexOf('dashboard');
+              if (dashIdx >= 0) {
+                merged.splice(dashIdx + 1, 0, 'archive');
+              } else {
+                merged.splice(1, 0, 'archive');
+              }
+            }
             if (!merged.includes('table_orders')) {
               const dashIdx = merged.indexOf('dashboard');
               if (dashIdx >= 0) {
-                merged.splice(dashIdx + 1, 0, 'table_orders');
+                merged.splice(dashIdx + 2, 0, 'table_orders');
               } else {
                 merged.splice(1, 0, 'table_orders');
               }
             }
             if (!merged.includes('gamification')) {
               merged.push('gamification');
-            }
-            if (!merged.includes('archive')) {
-              merged.push('archive');
             }
             return merged;
           }
@@ -6248,6 +6270,12 @@ export default function App() {
       icon: <LayoutDashboard className="w-4 h-4" />,
     },
     {
+      id: 'archive',
+      label: 'Kho Bill Lưu Trữ (Ghi Nhớ)',
+      shortLabel: 'Bill lưu trữ',
+      icon: <Archive className="w-4 h-4" />,
+    },
+    {
       id: 'table_orders',
       label: 'Order Món Theo Bàn (Báo Bếp & In Bill)',
       shortLabel: 'Order Bàn',
@@ -6330,12 +6358,6 @@ export default function App() {
       label: 'Khu Vui Chơi & Sơ Đồ Bàn',
       shortLabel: 'Vui chơi & Bàn',
       icon: <Sparkles className="w-4 h-4" />,
-    },
-    {
-      id: 'archive',
-      label: 'Kho Bill Lưu Trữ (Ghi Nhớ)',
-      shortLabel: 'Bill lưu trữ',
-      icon: <Archive className="w-4 h-4" />,
     },
   ];
 
@@ -7975,7 +7997,13 @@ export default function App() {
                     <div className="grid grid-cols-2 sm:flex items-center gap-2">
                       <select
                         value={paymentFilter}
-                        onChange={(e) => setPaymentFilter(e.target.value as any)}
+                        onChange={(e) => {
+                          if (e.target.value === 'archived') {
+                            handleSelectTab('archive');
+                            return;
+                          }
+                          setPaymentFilter(e.target.value as any);
+                        }}
                         className="px-2.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
                       >
                         <option value="all">Mọi hình thức ({paymentCounts.all})</option>
@@ -7985,7 +8013,7 @@ export default function App() {
                         <option value="debt">Công nợ ({paymentCounts.debt})</option>
                         <option value="has_return">Có hoàn trả ({paymentCounts.has_return})</option>
                         <option value="owner_use">Chủ / QL dùng (0đ) ({paymentCounts.owner_use})</option>
-                        <option value="archived">📦 Bill lưu trữ ({paymentCounts.archived})</option>
+                        <option value="archived">📦 Mở tab Bill lưu trữ ({bills.filter((b) => b.isArchived).length})</option>
                       </select>
 
                       <select
@@ -8155,14 +8183,12 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPaymentFilter('archived' as any)}
-                    className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border ${
-                      paymentFilter === ('archived' as any)
-                        ? 'bg-amber-600 text-white border-amber-600 shadow-2xs ring-2 ring-amber-500/20'
-                        : 'bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border-amber-300 dark:border-amber-800 hover:bg-amber-100'
-                    }`}
+                    onClick={() => handleSelectTab('archive')}
+                    className="px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors cursor-pointer border bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border-amber-300 dark:border-amber-800 hover:bg-amber-100 flex items-center gap-1.5 shadow-2xs"
+                    title="Mở tab Kho Bill Lưu Trữ"
                   >
-                    📦 Bill lưu trữ ({paymentCounts.archived})
+                    <Archive className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                    <span>Kho Bill lưu trữ ({bills.filter((b) => b.isArchived).length})</span>
                   </button>
                 </div>
 
