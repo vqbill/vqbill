@@ -3655,3 +3655,28 @@ export function extractSalaryAdvancesFromDeductions(
     inferredEmployees: inferredEmps,
   };
 }
+
+/**
+ * Converts YYYY-MM-DD to DDMMYY (e.g. "2026-08-01" -> "010826")
+ */
+export function toDDMMYY(dateStr: string): string {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
+  const [yyyy, mm, dd] = dateStr.split('-');
+  return `${dd}${mm}${yyyy.slice(2)}`;
+}
+
+/**
+ * Converts DDMMYY to YYYY-MM-DD (e.g. "010826" -> "2026-08-01", "151026" -> "2026-10-15")
+ */
+export function fromDDMMYY(code: string): string | null {
+  if (!code || !/^\d{6}$/.test(code)) return null;
+  const dd = code.slice(0, 2);
+  const mm = code.slice(2, 4);
+  const yy = code.slice(4, 6);
+  const yyyy = `20${yy}`;
+  const dNum = parseInt(dd, 10);
+  const mNum = parseInt(mm, 10);
+  if (mNum < 1 || mNum > 12 || dNum < 1 || dNum > 31) return null;
+  return `${yyyy}-${mm}-${dd}`;
+}
+

@@ -122,12 +122,13 @@ service cloud.firestore {
           'note', 'status', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'ownerId', 'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime', 'tableName',
+          'id', 'ownerId', 'billCode', 'billDate', 'rawDate', 'checkInTime', 'checkOutTime', 'tableName',
           'paymentType', 'debtorName', 'debtStatus', 'settleDate', 'settledMethod',
           'paidCashAmount', 'paidTransferAmount', 'subtotalAmount', 'discountAmount',
           'totalAmount', 'deductedAmount', 'itemsSummary',
           'note', 'status', 'isArchived', 'createdAt', 'updatedAt'
         ]) &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
         canWriteWorkspace(data.ownerId) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.billCode is string && data.billCode.size() >= 1 && data.billCode.size() <= 64 &&

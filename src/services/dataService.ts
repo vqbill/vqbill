@@ -2060,16 +2060,46 @@ export async function toggleBillArchiveStatusInCloud(
     updatedAtMs: now,
   };
 
-  await syncToRtdbSafe(`workspaces/${cleanOwnerId}/bills/${bill.id}`, updatedBill);
+  // 1. Update RTDB mirror
+  syncToRtdbSafe(`workspaces/${cleanOwnerId}/bills/${bill.id}`, updatedBill);
 
+  // 2. Update local mirror immediately so state survives page refresh and background sync
+  try {
+    const localSnap = loadLocalMirror(cleanOwnerId);
+    if (localSnap) {
+      const nextBills = (localSnap.bills || []).map((b) =>
+        b.id === bill.id ? { ...b, isArchived: Boolean(nextIsArchived), updatedAtMs: now } : b
+      );
+      const updatedSnap: WorkspaceCacheSnapshot = {
+        ...localSnap,
+        bills: nextBills,
+        updatedAtMs: now,
+      };
+      saveLocalMirror(cleanOwnerId, updatedSnap);
+      pushWorkspaceToServer(updatedSnap, 'replace', 'archive_toggle').catch(() => {});
+    }
+  } catch {}
+
+  // 3. Update Firestore with fallback
   if (isFirestoreCloudActive()) {
     try {
       await updateDoc(doc(db, 'bills', bill.id), {
         isArchived: Boolean(nextIsArchived),
         updatedAt: serverTimestamp(),
       });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `bills/${bill.id}`);
+    } catch {
+      try {
+        await setDoc(
+          doc(db, 'bills', bill.id),
+          {
+            isArchived: Boolean(nextIsArchived),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Firestore toggle archive update skipped:', err);
+      }
     }
   }
 

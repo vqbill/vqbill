@@ -125,6 +125,8 @@ import {
   mergeInventoryData,
   shiftDateByDays,
   extractSalaryAdvancesFromDeductions,
+  toDDMMYY,
+  fromDDMMYY,
 } from './utils/parser';
 import {
   fetchGeminiStatus,
@@ -215,6 +217,7 @@ import { ChatAssistantWidget } from './components/ChatAssistantWidget';
 import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { GamificationTab } from './components/GamificationTab';
 import { TableOrdersTab } from './components/TableOrdersTab';
+import { ArchiveManagerTab } from './components/ArchiveManagerTab';
 import {
   playKachingSound,
   playChimeSound,
@@ -389,6 +392,7 @@ export default function App() {
     () => ({
       home: '/trang-chu',
       dashboard: '/tong-quan',
+      archive: '/luu-tru',
       ocr: '/nhap-bill',
       categories: '/danh-muc',
       inventory: '/kho-do-uong',
@@ -411,6 +415,7 @@ export default function App() {
     const validTabs: ActiveTab[] = [
       'home',
       'dashboard',
+      'archive',
       'table_orders',
       'ocr',
       'categories',
@@ -428,6 +433,12 @@ export default function App() {
     ];
     try {
       const cleanPath = window.location.pathname.replace(/\/+$/, '') || '/';
+      if (/^\/tong-quan(?:\/\d{6})?$/.test(cleanPath)) {
+        return 'dashboard';
+      }
+      if (cleanPath === '/luu-tru') {
+        return 'archive';
+      }
       for (const [tabId, pathStr] of Object.entries(TAB_TO_PATH)) {
         if (cleanPath === pathStr || cleanPath === `/${tabId}`) {
           return tabId as ActiveTab;
@@ -472,28 +483,109 @@ export default function App() {
     });
   }, []);
 
-  // Sync activeTab to URL path and localStorage so F5/Refresh stays on the current tab
+  // Parse date from URL pathname (e.g. /tong-quan/151026 -> 2026-10-15)
+  const parseDateFromCurrentPath = useCallback((): string | null => {
+    try {
+      const m = window.location.pathname.match(/^\/tong-quan\/(\d{6})$/);
+      if (m && m[1]) {
+        return fromDDMMYY(m[1]);
+      }
+    } catch {}
+    return null;
+  }, []);
+
+  const initialPathDate = parseDateFromCurrentPath();
+
+  // Filter & Search State on Dashboard (Default to today)
+  const [periodPreset, setPeriodPreset] = useState<PeriodPreset>(() => {
+    if (initialPathDate) {
+      return initialPathDate === todayStr
+        ? 'today'
+        : initialPathDate === yesterdayStr
+        ? 'yesterday'
+        : 'custom';
+    }
+    return 'today';
+  });
+  const [customStartDate, setCustomStartDate] = useState<string>(
+    () => initialPathDate || todayStr
+  );
+  const [customEndDate, setCustomEndDate] = useState<string>(
+    () => initialPathDate || todayStr
+  );
+  const [paymentFilter, setPaymentFilter] = useState<
+    'all' | 'cash' | 'transfer' | 'debt' | 'split' | 'has_return'
+  >('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [searchKeyword, setSearchKeyword] = useState<string>('');
+
+  // Sync activeTab & date to URL path and localStorage so F5/Refresh stays on the current tab & date
   useEffect(() => {
     try {
       localStorage.setItem('vqbill_active_tab', activeTab);
-      const targetPath = TAB_TO_PATH[activeTab] || '/trang-chu';
+      let targetPath = TAB_TO_PATH[activeTab] || '/trang-chu';
+      if (activeTab === 'dashboard') {
+        const activeDate =
+          periodPreset === 'today'
+            ? todayStr
+            : periodPreset === 'yesterday'
+            ? yesterdayStr
+            : customStartDate === customEndDate && customStartDate
+            ? customStartDate
+            : todayStr;
+        const code = toDDMMYY(activeDate);
+        if (code) {
+          targetPath = `/tong-quan/${code}`;
+        }
+      }
       if (window.location.pathname !== targetPath) {
         window.history.pushState({ tab: activeTab }, '', targetPath);
       }
     } catch {
       // ignore
     }
-  }, [activeTab, TAB_TO_PATH]);
+  }, [
+    activeTab,
+    TAB_TO_PATH,
+    periodPreset,
+    customStartDate,
+    customEndDate,
+    todayStr,
+    yesterdayStr,
+  ]);
 
-  // Listen to browser Back / Forward buttons
+  // Listen to browser Back / Forward buttons & URL changes
   useEffect(() => {
     const onPopState = () => {
+      const cleanPath = window.location.pathname.replace(/\/+$/, '') || '/';
+      const mDate = cleanPath.match(/^\/tong-quan\/(\d{6})$/);
+      if (mDate) {
+        const parsed = fromDDMMYY(mDate[1]);
+        if (parsed) {
+          setActiveTab('dashboard');
+          if (parsed === todayStr) {
+            setPeriodPreset('today');
+          } else if (parsed === yesterdayStr) {
+            setPeriodPreset('yesterday');
+          } else {
+            setPeriodPreset('custom');
+          }
+          setCustomStartDate(parsed);
+          setCustomEndDate(parsed);
+          return;
+        }
+      }
       const nextTab = resolveTabFromLocation();
       setActiveTab(nextTab);
+      if (nextTab === 'dashboard') {
+        setPeriodPreset('today');
+        setCustomStartDate(todayStr);
+        setCustomEndDate(todayStr);
+      }
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [resolveTabFromLocation]);
+  }, [resolveTabFromLocation, todayStr, yesterdayStr]);
 
   // Settings (Default: không tự lưu món mới vào menu)
   const [autoAddProducts, setAutoAddProductsState] = useState<boolean>(() => {
@@ -509,16 +601,6 @@ export default function App() {
       // Ignore localStorage write error
     }
   };
-
-  // Filter & Search State on Dashboard
-  const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('all');
-  const [customStartDate, setCustomStartDate] = useState<string>('2026-08-01');
-  const [customEndDate, setCustomEndDate] = useState<string>(todayStr);
-  const [paymentFilter, setPaymentFilter] = useState<
-    'all' | 'cash' | 'transfer' | 'debt' | 'split' | 'has_return'
-  >('all');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [searchKeyword, setSearchKeyword] = useState<string>('');
 
   // Sub-tab inside Financial Summary
   const [netFormulaTab, setNetFormulaTab] = useState<'net_summary' | 'formula_explain'>(
@@ -600,6 +682,11 @@ export default function App() {
     if (activeTab !== targetTab) {
       setPreviousTab(activeTab);
     }
+    if (targetTab === 'dashboard') {
+      setPeriodPreset('today');
+      setCustomStartDate(todayStr);
+      setCustomEndDate(todayStr);
+    }
     setActiveTab(targetTab);
   };
 
@@ -624,6 +711,9 @@ export default function App() {
             }
             if (!merged.includes('gamification')) {
               merged.push('gamification');
+            }
+            if (!merged.includes('archive')) {
+              merged.push('archive');
             }
             return merged;
           }
@@ -1632,6 +1722,8 @@ export default function App() {
                 itemsSummary: data.itemsSummary || '',
                 note: data.note || '',
                 status: data.status || 'active',
+                isArchived: Boolean(data.isArchived),
+                archivedAtMs: data.archivedAtMs ? Number(data.archivedAtMs) : undefined,
                 createdAtMs: data.createdAt?.toMillis?.() || Date.now(),
                 updatedAtMs: data.updatedAt?.toMillis?.() || Date.now(),
               };
@@ -1910,9 +2002,9 @@ export default function App() {
     });
   }, [bills, billItems, products]);
 
-  // Filtered Bills & Deductions for Active Period + Search + Category + Payment
+  // Filtered Bills & Deductions for Active Period + Search + Category + Payment (Exclude archived bills)
   const periodBills = useMemo(() => {
-    return bills.filter((b) => isDateInPeriod(b.billDate));
+    return bills.filter((b) => isDateInPeriod(b.billDate) && !b.isArchived);
   }, [bills, periodPreset, customStartDate, customEndDate, todayStr, yesterdayStr]);
 
   const periodBillIds = useMemo(() => new Set(periodBills.map((b) => b.id)), [periodBills]);
@@ -2380,6 +2472,80 @@ export default function App() {
       totalAllBillsGross,
     };
   }, [periodBills, periodDeductions, inventoryData.debtPayments, bills]);
+
+  // Summary specifically for today (Requirement 7: Sidebar quick summary box always reflects today)
+  const todayFinancialSummary = useMemo(() => {
+    const todayBills = bills.filter((b) => b.billDate === todayStr && !b.isArchived);
+    const todayDeds = effectiveDeductions.filter(
+      (d) => (d.deductionDate || d.billDate) === todayStr
+    );
+    const debtPaymentsList = inventoryData.debtPayments || [];
+    const todayDebtPayments = debtPaymentsList.filter((p) => p && p.paidDate === todayStr);
+
+    const todayDebtCashCollected = todayDebtPayments
+      .filter((p) => p.paymentMethod === 'cash')
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
+    const todayDebtTransferCollected = todayDebtPayments
+      .filter((p) => p.paymentMethod === 'transfer')
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
+    const todaySettledDebtTotal = todayDebtCashCollected + todayDebtTransferCollected;
+
+    const grossCashFromBills = todayBills
+      .filter((b) => !isOwnerUseBill(b))
+      .reduce((s, b) => {
+        const bd = getBillPaymentBreakdown(b);
+        const billDisc = Math.max(0, Number(b.discountAmount) || 0);
+        let addGrossCash = 0;
+        if (billDisc > 0) {
+          if (b.paymentType === 'cash') {
+            addGrossCash = billDisc;
+          } else if (b.paymentType === 'split') {
+            const ratio = b.totalAmount > 0 ? bd.cash / b.totalAmount : 0.5;
+            addGrossCash = Math.round(billDisc * ratio);
+          }
+        }
+        return s + bd.cash + addGrossCash;
+      }, 0);
+
+    const grossTransferFromBills = todayBills
+      .filter((b) => !isOwnerUseBill(b))
+      .reduce((s, b) => {
+        const bd = getBillPaymentBreakdown(b);
+        const billDisc = Math.max(0, Number(b.discountAmount) || 0);
+        let addGrossTransfer = 0;
+        if (billDisc > 0) {
+          if (b.paymentType === 'transfer') {
+            addGrossTransfer = billDisc;
+          } else if (b.paymentType === 'split') {
+            const ratio = b.totalAmount > 0 ? bd.transfer / b.totalAmount : 0.5;
+            addGrossTransfer = Math.round(billDisc * ratio);
+          }
+        }
+        return s + bd.transfer + addGrossTransfer;
+      }, 0);
+
+    const totalDeductions = todayDeds.reduce((s, d) => s + d.amount, 0);
+
+    const netCashRevenue = grossCashFromBills - totalDeductions;
+    const totalNetCashAfterDebt = netCashRevenue + todayDebtCashCollected;
+    const netTransferRevenue = grossTransferFromBills + todayDebtTransferCollected;
+    const netDayTotal = totalNetCashAfterDebt + netTransferRevenue;
+
+    return {
+      billCount: todayBills.length,
+      grossCashFromBills,
+      todayDebtCashCollected,
+      todayDebtTransferCollected,
+      todaySettledDebtTotal,
+      totalDeductions,
+      netCashRevenue,
+      totalNetCashAfterDebt,
+      netTransferRevenue,
+      netDayTotal,
+    };
+  }, [bills, effectiveDeductions, inventoryData.debtPayments, todayStr]);
 
   // Bulk Selection Handlers
   const handleToggleSelectBill = (billId: string) => {
@@ -6165,11 +6331,18 @@ export default function App() {
       shortLabel: 'Vui chơi & Bàn',
       icon: <Sparkles className="w-4 h-4" />,
     },
+    {
+      id: 'archive',
+      label: 'Kho Bill Lưu Trữ (Ghi Nhớ)',
+      shortLabel: 'Bill lưu trữ',
+      icon: <Archive className="w-4 h-4" />,
+    },
   ];
 
   const tabIconMap: Record<ManagementTabId, React.ReactNode> = {
     home: <Home className="w-4 h-4" />,
     dashboard: <LayoutDashboard className="w-4 h-4" />,
+    archive: <Archive className="w-4 h-4" />,
     table_orders: <UtensilsCrossed className="w-4 h-4" />,
     ocr: <Camera className="w-4 h-4" />,
     categories: <Layers className="w-4 h-4" />,
@@ -6908,7 +7081,7 @@ export default function App() {
             <div className="p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2 text-xs">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-slate-800 dark:text-slate-200">
-                  Tóm tắt kỳ đang xem
+                  Tóm tắt hôm nay ({formatDateDMY(todayStr)})
                 </span>
                 <button
                   type="button"
@@ -6930,9 +7103,9 @@ export default function App() {
                 </button>
               </div>
               <div className="flex items-center justify-between font-mono">
-                <span className="text-slate-500">Số Bill:</span>
+                <span className="text-slate-500">Số Bill hôm nay:</span>
                 <span className="font-bold text-slate-900 dark:text-white">
-                  {periodBills.length} bill
+                  {todayFinancialSummary.billCount} bill
                 </span>
               </div>
               <div className="flex items-center justify-between font-mono">
@@ -6945,27 +7118,27 @@ export default function App() {
                 <span className="text-slate-500">Tiền mặt bán:</span>
                 <span
                   className={`font-semibold flex items-center gap-1 ${
-                    financialSummary.netCashRevenue < 0
+                    todayFinancialSummary.netCashRevenue < 0
                       ? 'text-rose-600 dark:text-rose-400 font-bold'
                       : 'text-emerald-600 dark:text-emerald-400'
                   }`}
                 >
-                  {financialSummary.netCashRevenue < 0 && (
+                  {todayFinancialSummary.netCashRevenue < 0 && (
                     <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                   )}
-                  <span>{formatVND(financialSummary.netCashRevenue)}</span>
-                  {financialSummary.netCashRevenue < 0 && (
+                  <span>{formatVND(todayFinancialSummary.netCashRevenue)}</span>
+                  {todayFinancialSummary.netCashRevenue < 0 && (
                     <span className="text-[10px] px-1 py-0.2 rounded bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 font-bold">
                       Âm
                     </span>
                   )}
                 </span>
               </div>
-              {financialSummary.periodSettledDebtTotal > 0 && (
+              {todayFinancialSummary.todaySettledDebtTotal > 0 && (
                 <div className="flex items-center justify-between font-mono">
                   <span className="text-amber-600 dark:text-amber-400">Thu nợ:</span>
                   <span className="font-semibold text-amber-600 dark:text-amber-400">
-                    +{formatVND(financialSummary.periodSettledDebtTotal)}
+                    +{formatVND(todayFinancialSummary.todaySettledDebtTotal)}
                   </span>
                 </div>
               )}
@@ -6973,16 +7146,16 @@ export default function App() {
                 <span className="text-slate-700 dark:text-slate-300 font-bold">Két tiền mặt:</span>
                 <span
                   className={`font-bold flex items-center gap-1 ${
-                    financialSummary.totalNetCashAfterDebt < 0
+                    todayFinancialSummary.totalNetCashAfterDebt < 0
                       ? 'text-rose-600 dark:text-rose-400'
                       : 'text-emerald-600 dark:text-emerald-400'
                   }`}
                 >
-                  {financialSummary.totalNetCashAfterDebt < 0 && (
+                  {todayFinancialSummary.totalNetCashAfterDebt < 0 && (
                     <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                   )}
-                  <span>{formatVND(financialSummary.totalNetCashAfterDebt)}</span>
-                  {financialSummary.totalNetCashAfterDebt < 0 && (
+                  <span>{formatVND(todayFinancialSummary.totalNetCashAfterDebt)}</span>
+                  {todayFinancialSummary.totalNetCashAfterDebt < 0 && (
                     <span className="text-[10px] px-1 py-0.2 rounded bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 font-bold">
                       Âm két
                     </span>
@@ -6992,15 +7165,15 @@ export default function App() {
               <div className="flex items-center justify-between font-mono">
                 <span className="text-slate-500">Chuyển khoản:</span>
                 <span className="font-semibold text-blue-600 dark:text-blue-400">
-                  {formatVND(financialSummary.netTransferRevenue)}
+                  {formatVND(todayFinancialSummary.netTransferRevenue)}
                 </span>
               </div>
               <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between font-mono">
                 <span className="font-bold text-slate-700 dark:text-slate-300">
-                  Tổng thực thu:
+                  Tổng thực thu hôm nay:
                 </span>
                 <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                  {formatVND(financialSummary.netDayTotal)}
+                  {formatVND(todayFinancialSummary.netDayTotal)}
                 </span>
               </div>
             </div>
@@ -8589,6 +8762,18 @@ export default function App() {
                                   )}
                                 </td>
 
+                                <td className="py-3 px-3 max-w-[280px] xl:max-w-md">
+                                  <div
+                                    className="text-slate-700 dark:text-slate-200 line-clamp-2 leading-relaxed"
+                                    title={bill.itemsSummary}
+                                  >
+                                    {bill.itemsSummary || '(Chưa có chi tiết món)'}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 font-sans mt-0.5">
+                                    {billItemCount} món · Bấm dòng để xem chi tiết
+                                  </div>
+                                </td>
+
                                 <td className="py-3 px-3 text-right font-mono font-semibold text-slate-900 dark:text-white">
                                   <div>{formatVND(displayGross)}</div>
                                   {isSplit && (paymentFilter === 'cash' || paymentFilter === 'transfer') && (
@@ -9210,6 +9395,27 @@ export default function App() {
               onSaveOrders={handleSaveTableOrders}
               initialSelectedTable={orderInitialTable}
               onConvertToBill={handleConvertOrderToBill}
+            />
+          )}
+
+          {/* TAB ARCHIVE: KHO BILL LƯU TRỮ (GHI NHỚ) */}
+          {activeTab === 'archive' && (
+            <ArchiveManagerTab
+              bills={bills}
+              billItems={effectiveBillItems}
+              products={products}
+              returns={returns}
+              deductions={deductions}
+              canWrite={canWrite}
+              canDelete={canDelete}
+              onInspectBill={(b) => setInspectingBill(b)}
+              onEditBill={(b) => setEditingBill(b)}
+              onToggleArchiveBill={handleToggleArchiveBill}
+              onDeleteBill={handleConfirmDeleteBill}
+              onDeleteMultipleBills={handleDeleteMultipleBills}
+              requestConfirm={requestConfirm}
+              hideMoney={hideMoney}
+              formatVND={formatVND}
             />
           )}
         </main>

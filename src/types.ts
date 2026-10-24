@@ -22,7 +22,8 @@ export type ManagementTabId =
   | 'accounts'
   | 'menu_settings'
   | 'gamification'
-  | 'table_orders';
+  | 'table_orders'
+  | 'archive';
 
 export interface ExternalLinkItem {
   id: string;
@@ -61,6 +62,7 @@ export const DEFAULT_VISIBLE_PRIMARY_TABS: ManagementTabId[] = [
   'deductions',
   'returns',
   'salary_advances',
+  'archive',
   'menu_settings',
   'gamification',
 ];
@@ -187,6 +189,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     description:
       'Vòng quay may mắn (Lucky Wheel), Sơ đồ bàn 2D trực quan, Bảng vàng doanh số & món ngôi sao, Mẹo phong thủy & câu chúc ngày mới, Hiệu ứng ăn mừng kỷ lục',
   },
+  {
+    id: 'archive',
+    label: 'Kho Bill Lưu Trữ (Ghi Nhớ)',
+    shortLabel: 'Bill lưu trữ',
+    description:
+      'Kho lưu trữ các hóa đơn ghi nhớ, không tính vào doanh thu, công nợ hay số lượng món bán ra; có thể xem lại và bỏ lưu trữ để khôi phục bất cứ lúc nào',
+  },
 ];
 
 export type RoleActionMode = 'read_only' | 'full_crud';
@@ -223,6 +232,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'salary_advances',
       'products',
       'accounts',
+      'archive',
       'menu_settings',
       'gamification',
     ],
@@ -249,6 +259,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'returns',
       'salary_advances',
       'products',
+      'archive',
       'menu_settings',
       'gamification',
     ],
@@ -272,6 +283,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'deductions',
       'returns',
       'salary_advances',
+      'archive',
       'menu_settings',
       'gamification',
     ],
@@ -295,6 +307,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'deductions',
       'returns',
       'salary_advances',
+      'archive',
       'gamification',
     ],
     canWrite: false,
