@@ -316,7 +316,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>('percent');
   const [discountPercent, setDiscountPercent] = useState<number>(0);
-  const [autoPayCommission, setAutoPayCommission] = useState<boolean>(true);
+  const [autoPayCommission, setAutoPayCommission] = useState<boolean>(false);
   const [commissionRecipient, setCommissionRecipient] = useState<string>('');
   const [commissionPaymentMethod, setCommissionPaymentMethod] = useState<'cash' | 'transfer'>('cash');
   const [paymentType, setPaymentType] = useState<PaymentType>('cash');
@@ -2310,11 +2310,13 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                 {/* Commission Payout / Gửi tiền chiết khấu cho người đặt bàn */}
                 {safeDiscount > 0 && (
                   <div className="pt-2.5 border-t border-emerald-200/60 dark:border-emerald-900/40 space-y-2">
-                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-100/70 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800">
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                       <div className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                        <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
-                          Tự động tính vào Khoản trừ: -{formatVND(safeDiscount)}
+                        <Tag className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                          {autoPayCommission
+                            ? `Chi hoa hồng người đặt bàn: -${formatVND(safeDiscount)} (tính vào Khoản trừ)`
+                            : `Giảm giá trực tiếp cho khách: -${formatVND(safeDiscount)} (Không trừ vào Khoản trừ)`}
                         </span>
                       </div>
                       <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
@@ -2324,7 +2326,7 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                           onChange={(e) => setAutoPayCommission(e.target.checked)}
                           className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 dark:border-slate-700 cursor-pointer"
                         />
-                        <span>Đồng bộ Khoản trừ</span>
+                        <span>Chi hoa hồng đặt bàn (vào Khoản trừ)</span>
                       </label>
                     </div>
 
@@ -3057,9 +3059,13 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
                                 }
                                 className="w-full h-8 px-2 text-right font-mono font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
                               />
-                              {catalogMatch && (
+                              {(catalogMatch || (item.originalUnitPrice && item.originalUnitPrice > (item.unitPrice || 0))) && (
                                 <div className="text-[10px] text-right mt-1 font-mono text-slate-400 truncate">
-                                  {isCustomBillPrice ? (
+                                  {item.originalUnitPrice && item.originalUnitPrice > (item.unitPrice || 0) ? (
+                                    <span className="text-amber-600 dark:text-amber-400 font-semibold" title={`Giá gốc ${formatVND(item.originalUnitPrice)}`}>
+                                      Giá gốc: {formatVND(item.originalUnitPrice)}
+                                    </span>
+                                  ) : isCustomBillPrice ? (
                                     <span className="text-amber-600 dark:text-amber-400">
                                       Menu: {formatVND(catalogMatch.unitPrice)}
                                     </span>
@@ -3421,20 +3427,29 @@ export const OcrScannerTab: React.FC<OcrScannerTabProps> = ({
 
                   {savedBillPopup.discountAmount > 0 && (
                     <>
-                      <div className="pt-1.5 border-t border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-between font-semibold text-rose-600 dark:text-rose-400">
-                        <span className="font-sans">Trừ chiết khấu / Khoản trừ:</span>
-                        <span>-{formatVND(savedBillPopup.discountAmount)}</span>
-                      </div>
+                      {savedBillPopup.commissionPaid ? (
+                        <>
+                          <div className="pt-1.5 border-t border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-between font-semibold text-rose-600 dark:text-rose-400">
+                            <span className="font-sans">Chi hoa hồng / Khoản trừ:</span>
+                            <span>-{formatVND(savedBillPopup.discountAmount)}</span>
+                          </div>
 
-                      <div className="flex items-center justify-between text-base font-extrabold text-emerald-700 dark:text-emerald-400">
-                        <span className="font-sans">Thực thu sau hoàn trả:</span>
-                        <span>{formatVND(Math.max(0, savedBillPopup.totalAmount - (savedBillPopup.commissionPaid ? savedBillPopup.discountAmount : 0)))}</span>
-                      </div>
+                          <div className="flex items-center justify-between text-base font-extrabold text-emerald-700 dark:text-emerald-400">
+                            <span className="font-sans">Thực thu sau chi hoa hồng:</span>
+                            <span>{formatVND(Math.max(0, savedBillPopup.totalAmount - savedBillPopup.discountAmount))}</span>
+                          </div>
 
-                      <div className="pt-1 border-t border-dashed border-slate-300 dark:border-slate-600 text-[11px] text-rose-600 dark:text-rose-400 flex items-center justify-between">
-                        <span>• Chiết khấu đặt bàn (tính chung 1 dòng Khoản trừ ngày): {savedBillPopup.tableName || 'Bàn'}</span>
-                        <span className="font-semibold">-{formatVND(savedBillPopup.discountAmount)}</span>
-                      </div>
+                          <div className="pt-1 border-t border-dashed border-slate-300 dark:border-slate-600 text-[11px] text-rose-600 dark:text-rose-400 flex items-center justify-between">
+                            <span>• Chi hoa hồng đặt bàn (ghi vào Khoản trừ ngày): {savedBillPopup.tableName || 'Bàn'}</span>
+                            <span className="font-semibold">-{formatVND(savedBillPopup.discountAmount)}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="pt-1.5 border-t border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
+                          <span className="font-sans">Mục giảm giá cho khách (không trừ vào Khoản trừ):</span>
+                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">-{formatVND(savedBillPopup.discountAmount)}</span>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

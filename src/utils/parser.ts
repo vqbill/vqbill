@@ -630,6 +630,10 @@ export function normalizeMoneyNumber(raw: string | number): number {
   }
   const str = String(raw || '').trim().toLowerCase();
   if (!str) return 0;
+  // If it ends with % or is a percent string (e.g. "-10.07 %"), it is a discount percentage, NOT a monetary amount in VNĐ!
+  if (/%\s*$/.test(str) || /^\-?\d+(?:[.,]\d+)?\s*%$/.test(str)) {
+    return 0;
+  }
   const hasK = /\d+\s*k\b/.test(str) || str.endsWith('k');
   const hasTr = /\d+\s*(tr|triệu)\b/.test(str);
   const digits = str.replace(/[^\d]/g, '');
@@ -1743,7 +1747,7 @@ export function isPosMetadataOrHeaderLine(line: string): boolean {
   const cleaned = cleanDecorativeLine(line);
   if (!cleaned) return false;
   return (
-    /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+[a-z0-9\(\)]+|vip\s*[a-z0-9\(\)]*(?:\s*\/.*)?$|mang\s*về(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mang\s*đi(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mv\s*\d*(?:\s*\/.*)?$|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|chính\s*sách\s*giá|áp\s*dụng\s*giá|tìm\s*(?:khách\s*hàng|mặt\s*hàng|sản\s*phẩm|kiếm)|chọn\s*bàn|chuyển\s*bàn|thêm\s*món|trả\s*hàng|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán\s*[:\-]|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|(?:thành\s*)?tiền$|đ\.?\s*giá$|sl$)/i.test(
+    /^(?:vịnh\s*quán|hóa\s*đơn|phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán|bill\b|ngày(?:\s*bán|\s*in|\s*thanh\s*toán)?\s*[:\-]|giờ\s*(?:vào|ra|đến|đi|in|thanh\s*toán)?\s*[:\-]|thời\s*gian|bàn\s+[a-z0-9\(\)]+|vip\s*[a-z0-9\(\)]*(?:\s*\/.*)?$|mang\s*về(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mang\s*đi(?:\s*[:\-]?\s*\(?\s*\d+\s*\)?)?(?:\s*\/.*)?$|mv\s*\d*(?:\s*\/.*)?$|phòng\s*\/\s*bàn|bàn\s*[:\-]|khu\s*vực\s*[:\-]|thu\s*ngân|nhân\s*viên|người\s*tạo|người\s*nhận|kênh\s*bán|bảng\s*giá|chính\s*sách\s*giá|áp\s*dụng\s*giá|tìm\s*(?:khách\s*hàng|mặt\s*hàng|sản\s*phẩm|kiếm)|chọn\s*bàn|chuyển\s*bàn|thêm\s*món|trả\s*hàng|số\s*khách|mã\s*đặt\s*hàng|phục\s*vụ|thanh\s*toán(?:\s*[:\-]|(?:\s*từng\s*phần|\s*toàn\s*bộ)?$)?|hình\s*thức\s*[:\-]|chuyển\s*khoản\s*[:\-]?$|tiền\s*mặt\s*[:\-]?$|công\s*nợ\s*[:\-]|ghi\s*nợ\s*[:\-]|ký\s*nợ\s*[:\-]|khách\s*hàng\s*[:\-]|khách\s*lẻ$|hoàn\s*thành$|chi\s*nhánh|đc\s*[:\-]|địa\s*chỉ\s*[:\-]|sđt\s*[:\-]|đt\s*[:\-]|điện\s*thoại|cảm\s*ơn|hẹn\s*gặp\s*lại|powered\s*by|stt\s+tên\s*món|tên\s*món\s+sl|tên\s*hàng\s+đ\.?\s*giá|(?:thành\s*)?tiền$|đ\.?\s*giá$|sl$|đồ\s*ăn$|đồ\s*uống$|thức\s*uống$|nước\s*uống$)/i.test(
       cleaned
     ) ||
     /^(?:bảng\s*giá(?:\s*[:\-].*)?|chính\s*sách\s*giá(?:\s*[:\-].*)?|áp\s*dụng\s*giá(?:\s*[:\-].*)?|giá\s*(?:bán|vip(?:\s*\d+)?|chung|thường|sảnh|phòng\s*(?:vip(?:\s*\d+)?|lạnh)?|mang\s*về|sỉ|buôn|đêm|lễ(?:\s*[\/\-]?\s*tết)?|cuối\s*tuần|đại\s*lý|đối\s*tác|chuẩn|mặc\s*định|niêm\s*yết)(?:\s*[:\-].*)?)(?:\s*\(f\d+\))?$/i.test(
@@ -1753,6 +1757,8 @@ export function isPosMetadataOrHeaderLine(line: string): boolean {
       cleaned
     ) ||
     /^\d{2,4}\-\d{1,4}$/.test(cleaned) ||
+    /^#\s*[A-Za-z0-9._\-\/]+$/.test(cleaned) ||
+    /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/.test(cleaned) ||
     /^HD\d+[A-Za-z0-9._\-]*$/i.test(cleaned) ||
     /^(?:thông\s*tin\s*xuất\s*hóa\s*đơn|chưa\s*phát\s*hành|người\s*mua|bán\s*cho\s*người\s*tiêu\s*dùng(?:\s*\/.*)?|mã\s*(?:hóa\s*đơn|hđ|đặt\s*hàng)|chưa\s*có)$/i.test(
       cleaned
@@ -1968,15 +1974,100 @@ function parseMultiLinePosItemBlock(
     sub = normalizeMoneyNumber(numLines[5]);
   } else if (numLines.length === 5) {
     qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
-    origPrice = normalizeMoneyNumber(numLines[1]);
-    explicitPct = extractPctValue(numLines[2]);
-    uPrice = normalizeMoneyNumber(numLines[3]);
-    sub = normalizeMoneyNumber(numLines[4]);
+    const pctIdx = numLines.findIndex((l, idx) => idx > 0 && extractPctValue(l) !== undefined);
+    if (pctIdx > 0) {
+      explicitPct = extractPctValue(numLines[pctIdx]);
+      const moneylines = numLines
+        .filter((_, idx) => idx !== 0 && idx !== pctIdx)
+        .map((l) => normalizeMoneyNumber(l));
+      const pA = moneylines[0] || 0;
+      const pB = moneylines[1] || 0;
+      const pC = moneylines[2] || 0;
+      if (pC > 0 && Math.abs(pC - qty * pA) <= 100) {
+        uPrice = pA;
+        origPrice = Math.max(pA, pB);
+        sub = pC;
+      } else if (pC > 0 && Math.abs(pC - qty * pB) <= 100) {
+        uPrice = pB;
+        origPrice = Math.max(pA, pB);
+        sub = pC;
+      } else {
+        origPrice = Math.max(pA, pB);
+        uPrice = Math.min(pA, pB) || (pC > 0 ? Math.round(pC / qty) : 0);
+        sub = pC || qty * uPrice;
+      }
+      if (origPrice <= uPrice && explicitPct && explicitPct > 0 && explicitPct < 100) {
+        origPrice = Math.round((uPrice / (1 - explicitPct / 100)) / 1000) * 1000;
+      }
+    } else {
+      const p1 = normalizeMoneyNumber(numLines[1]);
+      const p2 = normalizeMoneyNumber(numLines[2]);
+      const p3 = normalizeMoneyNumber(numLines[3]);
+      const p4 = normalizeMoneyNumber(numLines[4]);
+      if (p4 > 0 && Math.abs(p4 - qty * p3) <= 100) {
+        uPrice = p3;
+        origPrice = p1;
+        sub = p4;
+      } else if (p4 > 0 && Math.abs(p4 - qty * p1) <= 100) {
+        uPrice = p1;
+        origPrice = Math.max(p2, p3);
+        sub = p4;
+      } else {
+        origPrice = Math.max(p1, p2, p3);
+        uPrice = p3 || p1;
+        sub = p4 || qty * uPrice;
+      }
+    }
   } else if (numLines.length === 4) {
     qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
-    origPrice = normalizeMoneyNumber(numLines[1]);
-    uPrice = normalizeMoneyNumber(numLines[2]) || origPrice;
-    sub = normalizeMoneyNumber(numLines[3]);
+    const pct1 = extractPctValue(numLines[1]);
+    const pct2 = extractPctValue(numLines[2]);
+    const p1 = normalizeMoneyNumber(numLines[1]);
+    const p2 = normalizeMoneyNumber(numLines[2]);
+    const p3 = normalizeMoneyNumber(numLines[3]);
+
+    if (pct2 !== undefined) {
+      // Structure: [qty, sellPrice, discountPct%, subtotal]
+      // Example: 1, 125,000, -10.07 %, 125,000
+      explicitPct = pct2;
+      uPrice = p1 || (p3 > 0 ? Math.round(p3 / qty) : 0);
+      sub = p3 || qty * uPrice;
+      if (explicitPct > 0 && explicitPct < 100 && uPrice > 0) {
+        origPrice = Math.round((uPrice / (1 - explicitPct / 100)) / 1000) * 1000;
+      }
+    } else if (pct1 !== undefined) {
+      // Structure: [qty, discountPct%, sellPrice, subtotal]
+      explicitPct = pct1;
+      uPrice = p2 || (p3 > 0 ? Math.round(p3 / qty) : 0);
+      sub = p3 || qty * uPrice;
+      if (explicitPct > 0 && explicitPct < 100 && uPrice > 0) {
+        origPrice = Math.round((uPrice / (1 - explicitPct / 100)) / 1000) * 1000;
+      }
+    } else {
+      // Structure without percent sign: [qty, price1, price2, subtotal]
+      // Example: 1, 125,000, 139,000, 125,000
+      if (p1 > 0 && p2 > 0) {
+        if (p3 > 0 && Math.abs(p3 - qty * p1) <= 100) {
+          // p1 * qty matches subtotal p3 -> p1 is the actual selling unit price
+          uPrice = p1;
+          origPrice = p2;
+          sub = p3;
+        } else if (p3 > 0 && Math.abs(p3 - qty * p2) <= 100) {
+          // p2 * qty matches subtotal p3 -> p2 is the actual selling unit price
+          uPrice = p2;
+          origPrice = p1;
+          sub = p3;
+        } else {
+          // Fallback: smaller price is selling price, larger is original price
+          origPrice = Math.max(p1, p2);
+          uPrice = Math.min(p1, p2);
+          sub = p3 || qty * uPrice;
+        }
+      } else {
+        uPrice = p1 || p2 || p3;
+        sub = p3 || qty * uPrice;
+      }
+    }
   } else if (numLines.length === 3) {
     qty = Math.max(1, parseInt(numLines[0].replace(/[^\d]/g, ''), 10) || 1);
     uPrice = normalizeMoneyNumber(numLines[1]);
@@ -1998,16 +2089,32 @@ function parseMultiLinePosItemBlock(
 
   if (uPrice <= 0) return null;
 
-  const discInfo =
-    origPrice > uPrice
-      ? formatItemDiscountNote(origPrice, uPrice, explicitPct)
-      : null;
-
   const split = splitProductNameAndInlineNote(
     rawDishName,
     existingProducts,
     customCategories
   );
+
+  // If menu catalog exists, check if origPrice can be snapped to exact menu price
+  if (split.productName && existingProducts && existingProducts.length > 0) {
+    const catalogMatch = existingProducts.find(
+      (p) =>
+        p.productName.toLowerCase().trim() ===
+        split.productName.toLowerCase().trim()
+    );
+    if (catalogMatch && catalogMatch.unitPrice > 0) {
+      if (origPrice <= 0 && catalogMatch.unitPrice > uPrice) {
+        origPrice = catalogMatch.unitPrice;
+      } else if (origPrice > 0 && Math.abs(origPrice - catalogMatch.unitPrice) <= 3000) {
+        origPrice = catalogMatch.unitPrice;
+      }
+    }
+  }
+
+  const discInfo =
+    origPrice > uPrice
+      ? formatItemDiscountNote(origPrice, uPrice, explicitPct)
+      : null;
 
   const cleanedNotes = noteLines
     .map((n) =>
@@ -2123,6 +2230,8 @@ export function normalizeSynchronizedReceiptText(rawText: string): string {
       ) ||
       /\b(?:phiếu\s*tính\s*tiền|phiếu\s*thanh\s*toán)\b/i.test(s) ||
       /^\d{2,4}\-\d{1,4}$/.test(s) ||
+      /^#\s*[A-Za-z0-9._\-\/]+$/.test(s) ||
+      /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/.test(s) ||
       /^HD\d{4,}$/i.test(s)
     );
   };
@@ -2279,6 +2388,13 @@ export function parseRawTextToBillJSON(
       /^HD[\-_][A-Za-z0-9._\-]+$/i.test(line)
     ) {
       billCode = line;
+      break;
+    }
+
+    // Pattern 3B: Standalone POS hash invoice code line (e.g. "#63-404", "#HD123")
+    const hashMatch = line.match(/^#([A-Za-z0-9][A-Za-z0-9._\-\/]*)$/);
+    if (hashMatch && hashMatch[1]) {
+      billCode = hashMatch[1].trim();
       break;
     }
 

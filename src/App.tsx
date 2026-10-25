@@ -3407,7 +3407,7 @@ export default function App() {
     );
     setProducts(dedupeRecordsById(res.updatedProducts));
 
-    if ((params.discountAmount || 0) > 0) {
+    if ((params.discountAmount || 0) > 0 && params.commissionPayout?.enabled) {
       const catName = 'Hoa hồng / Chiết khấu đặt bàn';
       const tableLabel = extractBillTableName(res.bill) || res.bill.tableName || 'Bàn';
       const recipient = (params.commissionPayout?.recipientName || '').trim();
