@@ -894,6 +894,157 @@ export function extractReceiptOriginalPrice(item: {
   return undefined;
 }
 
+/**
+ * Calculates item discount fields linking percentage (%) and direct amount (₫) bi-directionally.
+ * Example: original = 109k, selling = 98k -> discount is 10.09% or 11k.
+ * If input is empty, clears discount and restores original unit price.
+ */
+export function calculateItemDiscountFields(params: {
+  currentOriginalPrice?: number;
+  currentUnitPrice: number;
+  catalogPrice?: number;
+  mode: 'percent' | 'amount';
+  inputValue: string | number;
+}): {
+  originalUnitPrice?: number;
+  unitPrice: number;
+  discountAmount?: number;
+  discountPercent?: number;
+  discountType: 'percent' | 'amount';
+} {
+  const { currentOriginalPrice, currentUnitPrice, catalogPrice, mode, inputValue } = params;
+  const inputStr = String(inputValue ?? '').trim();
+
+  // If input is empty or 0, user removed the discount!
+  if (!inputStr || Number(inputStr) === 0) {
+    const restoredPrice =
+      currentOriginalPrice && currentOriginalPrice > 0
+        ? currentOriginalPrice
+        : currentUnitPrice > 0
+        ? currentUnitPrice
+        : catalogPrice || 0;
+    return {
+      originalUnitPrice: undefined,
+      unitPrice: restoredPrice,
+      discountAmount: undefined,
+      discountPercent: undefined,
+      discountType: mode,
+    };
+  }
+
+  // Base original price
+  const basePrice =
+    currentOriginalPrice && currentOriginalPrice > 0
+      ? currentOriginalPrice
+      : currentUnitPrice > 0
+      ? currentUnitPrice
+      : catalogPrice || 0;
+
+  if (basePrice <= 0) {
+    return {
+      originalUnitPrice: undefined,
+      unitPrice: currentUnitPrice,
+      discountAmount: undefined,
+      discountPercent: undefined,
+      discountType: mode,
+    };
+  }
+
+  if (mode === 'percent') {
+    const pct = Math.min(100, Math.max(0, parseFloat(inputStr) || 0));
+    if (pct <= 0) {
+      return {
+        originalUnitPrice: undefined,
+        unitPrice: basePrice,
+        discountAmount: undefined,
+        discountPercent: undefined,
+        discountType: 'percent',
+      };
+    }
+    const discAmt = Math.round((basePrice * pct) / 100);
+    const sellPrice = Math.max(0, basePrice - discAmt);
+    return {
+      originalUnitPrice: basePrice,
+      unitPrice: sellPrice,
+      discountAmount: discAmt,
+      discountPercent: pct,
+      discountType: 'percent',
+    };
+  } else {
+    let amt = Math.max(0, Math.round(Number(inputStr) || 0));
+    // If user typed 11 for 11k when base is >= 1000
+    if (amt > 0 && amt < 1000 && basePrice >= 1000) {
+      amt *= 1000;
+    }
+    amt = Math.min(basePrice, amt);
+    if (amt <= 0) {
+      return {
+        originalUnitPrice: undefined,
+        unitPrice: basePrice,
+        discountAmount: undefined,
+        discountPercent: undefined,
+        discountType: 'amount',
+      };
+    }
+    const pct = Number(((amt / basePrice) * 100).toFixed(2));
+    const sellPrice = Math.max(0, basePrice - amt);
+    return {
+      originalUnitPrice: basePrice,
+      unitPrice: sellPrice,
+      discountAmount: amt,
+      discountPercent: pct,
+      discountType: 'amount',
+    };
+  }
+}
+
+/**
+ * Recalculates discount amount & percentage when user directly modifies the selling unit price.
+ */
+export function recalculateDiscountFromUnitPrice(params: {
+  newUnitPrice: number;
+  currentOriginalPrice?: number;
+  catalogPrice?: number;
+  currentMode?: 'percent' | 'amount';
+}): {
+  originalUnitPrice?: number;
+  unitPrice: number;
+  discountAmount?: number;
+  discountPercent?: number;
+  discountType: 'percent' | 'amount';
+} {
+  const { newUnitPrice, currentOriginalPrice, catalogPrice, currentMode } = params;
+  const mode = currentMode || 'percent';
+  const sellPrice = Math.max(0, Math.round(Number(newUnitPrice) || 0));
+
+  const origBase =
+    currentOriginalPrice && currentOriginalPrice > 0
+      ? currentOriginalPrice
+      : catalogPrice && catalogPrice > sellPrice
+      ? catalogPrice
+      : 0;
+
+  if (origBase > sellPrice) {
+    const discAmt = origBase - sellPrice;
+    const pct = Number(((discAmt / origBase) * 100).toFixed(2));
+    return {
+      originalUnitPrice: origBase,
+      unitPrice: sellPrice,
+      discountAmount: discAmt,
+      discountPercent: pct,
+      discountType: mode,
+    };
+  }
+
+  return {
+    originalUnitPrice: undefined,
+    unitPrice: sellPrice,
+    discountAmount: undefined,
+    discountPercent: undefined,
+    discountType: mode,
+  };
+}
+
 const KNOWN_VINH_QUAN_ITEM_PRICES: Record<string, number> = {
   'cơm chiên hải sản': 109000,
   'sụn gà chiên mắm': 89000,

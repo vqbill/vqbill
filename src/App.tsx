@@ -66,6 +66,7 @@ import {
   ZoomIn,
   ZoomOut,
   Archive,
+  Percent,
 } from 'lucide-react';
 import {
   auth,
@@ -218,6 +219,7 @@ import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { GamificationTab } from './components/GamificationTab';
 import { TableOrdersTab } from './components/TableOrdersTab';
 import { ArchiveManagerTab } from './components/ArchiveManagerTab';
+import { CustomerDiscountTab } from './components/CustomerDiscountTab';
 import {
   playKachingSound,
   playChimeSound,
@@ -407,6 +409,7 @@ export default function App() {
       menu_settings: '/cai-dat-danh-muc',
       gamification: '/vui-choi',
       table_orders: '/order-ban',
+      discounts: '/giam-gia-mon',
     }),
     []
   );
@@ -416,6 +419,7 @@ export default function App() {
       'home',
       'dashboard',
       'archive',
+      'discounts',
       'table_orders',
       'ocr',
       'categories',
@@ -438,6 +442,9 @@ export default function App() {
       }
       if (cleanPath === '/luu-tru') {
         return 'archive';
+      }
+      if (cleanPath === '/giam-gia-mon' || cleanPath === '/giam-gia' || cleanPath === '/discounts') {
+        return 'discounts';
       }
       for (const [tabId, pathStr] of Object.entries(TAB_TO_PATH)) {
         if (cleanPath === pathStr || cleanPath === `/${tabId}`) {
@@ -6348,6 +6355,12 @@ export default function App() {
       icon: <Shield className="w-4 h-4" />,
     },
     {
+      id: 'discounts',
+      label: 'Giảm giá món ăn cho khách',
+      shortLabel: 'Giảm giá món',
+      icon: <Percent className="w-4 h-4" />,
+    },
+    {
       id: 'menu_settings',
       label: 'Cài đặt Hiển thị Danh mục',
       shortLabel: 'Cài đặt Menu',
@@ -6365,6 +6378,7 @@ export default function App() {
     home: <Home className="w-4 h-4" />,
     dashboard: <LayoutDashboard className="w-4 h-4" />,
     archive: <Archive className="w-4 h-4" />,
+    discounts: <Percent className="w-4 h-4" />,
     table_orders: <UtensilsCrossed className="w-4 h-4" />,
     ocr: <Camera className="w-4 h-4" />,
     categories: <Layers className="w-4 h-4" />,
@@ -9440,6 +9454,21 @@ export default function App() {
               onDeleteBill={handleConfirmDeleteBill}
               onDeleteMultipleBills={handleDeleteMultipleBills}
               requestConfirm={requestConfirm}
+              hideMoney={hideMoney}
+              formatVND={formatVND}
+            />
+          )}
+
+          {/* TAB DISCOUNTS: GIẢM GIÁ MÓN ĂN CHO KHÁCH */}
+          {activeTab === 'discounts' && allowedTabs.includes('discounts') && (
+            <CustomerDiscountTab
+              bills={bills}
+              billItems={effectiveBillItems}
+              products={products}
+              categories={effectiveCategories}
+              canWrite={canWrite}
+              onInspectBill={(b) => setInspectingBill(b)}
+              onEditBill={(b) => setEditingBill(b)}
               hideMoney={hideMoney}
               formatVND={formatVND}
             />

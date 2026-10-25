@@ -38,6 +38,7 @@ import {
   Star,
   AlertTriangle,
   Archive,
+  Percent,
 } from 'lucide-react';
 import {
   ManagementTabId,
@@ -583,6 +584,17 @@ export const HomeLaunchpadTab: React.FC<HomeLaunchpadTabProps> = ({
       icon: <Archive className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
       accentClass:
         'border-amber-200/90 dark:border-amber-900/60 hover:border-amber-500 dark:hover:border-amber-500 bg-gradient-to-br from-amber-50/20 to-orange-50/20',
+      btnClass: 'text-amber-700 dark:text-amber-300',
+    },
+    {
+      id: 'discounts',
+      title: 'Giảm Giá Món Ăn Cho Khách',
+      pathLabel: '/giam-gia-mon',
+      desc: 'Báo cáo độc lập các khoản giảm giá trực tiếp trên món cho thực khách (%, ₫). Không tính vào khoản chi/khoản trừ quán.',
+      statText: 'Thống kê theo ngày, tuần, tháng, kỳ giảm giá',
+      icon: <Percent className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
+      accentClass:
+        'border-amber-200/90 dark:border-amber-900/60 hover:border-amber-500 dark:hover:border-amber-500 bg-gradient-to-br from-amber-50/20 to-emerald-50/20',
       btnClass: 'text-amber-700 dark:text-amber-300',
     },
     {

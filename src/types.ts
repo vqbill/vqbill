@@ -10,6 +10,7 @@ export type ManagementTabId =
   | 'home'
   | 'dashboard'
   | 'ocr'
+  | 'discounts'
   | 'categories'
   | 'inventory'
   | 'kitchen_inventory'
@@ -57,6 +58,7 @@ export const DEFAULT_VISIBLE_PRIMARY_TABS: ManagementTabId[] = [
   'home',
   'dashboard',
   'archive',
+  'discounts',
   'table_orders',
   'ocr',
   'categories',
@@ -90,6 +92,13 @@ export const MANAGEMENT_TABS: ManagementTabMeta[] = [
     shortLabel: 'Tổng quan',
     description:
       'Bảng đối soát doanh thu tiền mặt, chuyển khoản, khoản trừ, công nợ riêng và danh sách hóa đơn',
+  },
+  {
+    id: 'discounts',
+    label: 'Giảm giá món ăn cho khách',
+    shortLabel: 'Giảm giá món',
+    description:
+      'Thống kê chiết khấu & giảm giá món ăn cho khách theo ngày, tuần, tháng, kỳ chọn; hoàn toàn độc lập, không tính vào khoản trừ',
   },
   {
     id: 'archive',
@@ -222,6 +231,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'dashboard',
       'table_orders',
       'ocr',
+      'discounts',
       'categories',
       'inventory',
       'kitchen_inventory',
@@ -250,6 +260,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'dashboard',
       'table_orders',
       'ocr',
+      'discounts',
       'categories',
       'inventory',
       'kitchen_inventory',
@@ -277,6 +288,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'dashboard',
       'table_orders',
       'ocr',
+      'discounts',
       'inventory',
       'owner_use',
       'debts',
@@ -300,6 +312,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
       'home',
       'dashboard',
       'table_orders',
+      'discounts',
       'categories',
       'inventory',
       'owner_use',
@@ -355,6 +368,7 @@ export interface ExtractedBillItem {
   originalUnitPrice?: number;
   discountAmount?: number;
   discountPercent?: number;
+  discountType?: 'percent' | 'amount';
   isDiscountEligible?: boolean; // Áp dụng chiết khấu % cho món này (VD: món ăn được CK, bia/nước không CK)
 }
 
@@ -421,6 +435,7 @@ export interface BillItemRecord {
   originalUnitPrice?: number;
   discountAmount?: number;
   discountPercent?: number;
+  discountType?: 'percent' | 'amount';
   isDiscountEligible?: boolean; // Áp dụng chiết khấu % cho món này
   createdAtMs: number;
   updatedAtMs: number;
@@ -898,6 +913,9 @@ export function getEffectiveRolePermissions(
     if (!tabs.includes('archive')) {
       tabs = [...tabs, 'archive'];
     }
+    if (!tabs.includes('discounts')) {
+      tabs = [...tabs, 'discounts'];
+    }
   } else if (
     !useCustom &&
     (tabs.includes('categories') ||
@@ -906,7 +924,7 @@ export function getEffectiveRolePermissions(
       account.role === UserRole.INVENTORY ||
       account.role === UserRole.VIEWER)
   ) {
-    // Ensure existing cached roles automatically receive the new 'inventory', 'kitchen_inventory', 'owner_use', 'salary_advances', and 'archive' tabs
+    // Ensure existing cached roles automatically receive the new 'inventory', 'kitchen_inventory', 'owner_use', 'salary_advances', 'discounts', and 'archive' tabs
     if (!tabs.includes('inventory')) {
       tabs = [...tabs, 'inventory'];
     }
@@ -919,6 +937,9 @@ export function getEffectiveRolePermissions(
     if (account.role !== UserRole.INVENTORY && !tabs.includes('salary_advances')) {
       tabs = [...tabs, 'salary_advances'];
     }
+    if (!tabs.includes('discounts')) {
+      tabs = [...tabs, 'discounts'];
+    }
     if (!tabs.includes('archive')) {
       tabs = [...tabs, 'archive'];
     }
@@ -930,6 +951,10 @@ export function getEffectiveRolePermissions(
 
   if (!tabs.includes('gamification')) {
     tabs = [...tabs, 'gamification'];
+  }
+
+  if (!tabs.includes('discounts')) {
+    tabs = [...tabs, 'discounts'];
   }
 
   if (!tabs.includes('archive')) {

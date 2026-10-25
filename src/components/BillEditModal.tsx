@@ -40,6 +40,8 @@ import {
   calculateItemsDiscountSummary,
   getBillPaymentBreakdown,
   extractBillTableName,
+  calculateItemDiscountFields,
+  recalculateDiscountFromUnitPrice,
 } from '../utils/parser';
 
 interface BillEditModalProps {
@@ -282,6 +284,9 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
       if (curr.category !== init.category) return true;
       if (Number(curr.quantity) !== Number(init.quantity)) return true;
       if (Number(curr.unitPrice) !== Number(init.unitPrice)) return true;
+      if (Number(curr.originalUnitPrice || 0) !== Number(init.originalUnitPrice || 0)) return true;
+      if (Number(curr.discountAmount || 0) !== Number(init.discountAmount || 0)) return true;
+      if (Number(curr.discountPercent || 0) !== Number(init.discountPercent || 0)) return true;
       if ((curr.isDiscountEligible !== false) !== (init.isDiscountEligible !== false)) return true;
     }
 
@@ -306,6 +311,52 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
     existingCommission,
   ]);
 
+  // Discount unit mode for individual item rows: '%' or '₫'
+  const [globalItemDiscountMode, setGlobalItemDiscountMode] = useState<'percent' | 'amount'>('percent');
+
+  const handleToggleGlobalDiscountMode = () => {
+    setGlobalItemDiscountMode((prev) => (prev === 'percent' ? 'amount' : 'percent'));
+  };
+
+  const handleToggleRowDiscountMode = (index: number) => {
+    setEditItems((prev) =>
+      prev.map((item, idx) => {
+        if (idx !== index) return item;
+        const currentMode = item.discountType || globalItemDiscountMode;
+        const nextMode = currentMode === 'percent' ? 'amount' : 'percent';
+        return { ...item, discountType: nextMode };
+      })
+    );
+  };
+
+  const handleItemDiscountValueChange = (index: number, rawVal: string | number) => {
+    setEditItems((prev) =>
+      prev.map((item, idx) => {
+        if (idx !== index) return item;
+        const rowMode = item.discountType || globalItemDiscountMode;
+        const catalogMatch = products.find(
+          (p) => p.productName.toLowerCase().trim() === item.productName.toLowerCase().trim()
+        );
+        const res = calculateItemDiscountFields({
+          currentOriginalPrice: item.originalUnitPrice,
+          currentUnitPrice: item.unitPrice,
+          catalogPrice: catalogMatch?.unitPrice,
+          mode: rowMode,
+          inputValue: rawVal,
+        });
+        return {
+          ...item,
+          originalUnitPrice: res.originalUnitPrice,
+          unitPrice: res.unitPrice,
+          discountAmount: res.discountAmount,
+          discountPercent: res.discountPercent,
+          discountType: res.discountType,
+          subtotal: item.quantity * res.unitPrice,
+        };
+      })
+    );
+  };
+
   const handleItemChange = (
     idx: number,
     field: 'productName' | 'note' | 'category' | 'quantity' | 'unitPrice',
@@ -325,6 +376,9 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
             copy.category = catalogProd.category;
             if (copy.unitPrice === 0 || it.productName !== nameStr) {
               copy.unitPrice = catalogProd.unitPrice;
+              copy.originalUnitPrice = undefined;
+              copy.discountAmount = undefined;
+              copy.discountPercent = undefined;
               copy.subtotal = copy.quantity * copy.unitPrice;
             }
           } else {
@@ -338,7 +392,22 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
           copy.quantity = Math.max(1, Math.round(Number(val) || 1));
           copy.subtotal = copy.quantity * copy.unitPrice;
         } else if (field === 'unitPrice') {
-          copy.unitPrice = Math.max(0, Math.round(Number(val) || 0));
+          const newPrice = Math.max(0, Math.round(Number(val) || 0));
+          const catalogMatch = products.find(
+            (p) => p.productName.toLowerCase().trim() === it.productName.toLowerCase().trim()
+          );
+          const rowMode = it.discountType || globalItemDiscountMode;
+          const res = recalculateDiscountFromUnitPrice({
+            newUnitPrice: newPrice,
+            currentOriginalPrice: it.originalUnitPrice,
+            catalogPrice: catalogMatch?.unitPrice,
+            currentMode: rowMode,
+          });
+          copy.originalUnitPrice = res.originalUnitPrice;
+          copy.unitPrice = res.unitPrice;
+          copy.discountAmount = res.discountAmount;
+          copy.discountPercent = res.discountPercent;
+          copy.discountType = res.discountType;
           copy.subtotal = copy.quantity * copy.unitPrice;
         }
         return copy;
@@ -1397,6 +1466,56 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                       </div>
                     </div>
 
+                    {/* Mobile Discount Row */}
+                    {(() => {
+                      const rowMode = it.discountType || globalItemDiscountMode;
+                      const hasDiscount = (it.discountAmount !== undefined && it.discountAmount > 0) || (it.discountPercent !== undefined && it.discountPercent > 0);
+                      return (
+                        <div className="p-2 rounded-lg bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                              Giảm giá món:
+                            </span>
+                            <div className="relative flex items-center w-36">
+                              <input
+                                type="number"
+                                min={0}
+                                step={rowMode === 'percent' ? 0.01 : 1000}
+                                value={
+                                  rowMode === 'percent'
+                                    ? (it.discountPercent !== undefined && it.discountPercent > 0 ? it.discountPercent : '')
+                                    : (it.discountAmount !== undefined && it.discountAmount > 0 ? it.discountAmount : '')
+                                }
+                                placeholder="-"
+                                onChange={(e) => handleItemDiscountValueChange(idx, e.target.value)}
+                                className="w-full h-7 pl-2 pr-7 text-right font-mono font-bold rounded-md border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs focus:ring-1 focus:ring-amber-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleToggleRowDiscountMode(idx)}
+                                className="absolute right-1 px-1.5 py-0.5 text-[10px] font-bold rounded bg-amber-100 hover:bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 cursor-pointer"
+                                title={`Chuyển sang ${rowMode === 'percent' ? '₫' : '%'}`}
+                              >
+                                {rowMode === 'percent' ? '%' : '₫'}
+                              </button>
+                            </div>
+                          </div>
+                          {hasDiscount && (
+                            <div className="flex items-center justify-between text-[10px] font-mono text-amber-700 dark:text-amber-300 pt-0.5 border-t border-amber-200/50 dark:border-amber-900/30">
+                              <span>
+                                {rowMode === 'percent' ? `Tiền giảm: -${formatVND(it.discountAmount || 0)}` : `Tỷ lệ: -${it.discountPercent || 0}%`}
+                              </span>
+                              {it.originalUnitPrice && it.originalUnitPrice > (it.unitPrice || 0) && (
+                                <span className="text-slate-400">
+                                  Giá gốc: {formatVND(it.originalUnitPrice)}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     <div className="flex items-center justify-between pt-1 border-t border-slate-200/70 dark:border-slate-800 text-xs font-mono">
                       <label className="inline-flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold">
                         <input
@@ -1425,10 +1544,23 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500">
                     <th className="py-2.5 px-3">Tên món & Ghi chú món</th>
                     <th className="py-2.5 px-2 w-32">Danh mục</th>
-                    <th className="py-2.5 px-2 w-24 text-center">Áp dụng CK</th>
+                    <th className="py-2.5 px-2 w-20 text-center">Áp dụng CK</th>
                     <th className="py-2.5 px-2 w-16 text-right">SL</th>
+                    <th className="py-2.5 px-2 w-28 text-center">
+                      <div className="inline-flex items-center justify-center gap-1">
+                        <span>Giảm giá</span>
+                        <button
+                          type="button"
+                          onClick={handleToggleGlobalDiscountMode}
+                          className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 hover:bg-amber-200 dark:bg-amber-900/50 dark:hover:bg-amber-800 text-amber-800 dark:text-amber-200 transition-colors cursor-pointer"
+                          title={`Chuyển tất cả sang nhập bằng ${globalItemDiscountMode === 'percent' ? 'Tiền trực tiếp (₫)' : 'Phần trăm (%)'}`}
+                        >
+                          {globalItemDiscountMode === 'percent' ? '%' : '₫'}
+                        </button>
+                      </div>
+                    </th>
                     <th className="py-2.5 px-2 w-32 text-right">
-                      Đơn giá trong Bill (₫)
+                      Đơn giá bán (₫)
                     </th>
                     <th className="py-2.5 px-3 w-28 text-right">Thành tiền</th>
                     <th className="py-2.5 px-2 w-10"></th>
@@ -1448,6 +1580,9 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                     const categoryOptions = Array.from(
                       new Set([...categories, it.category].filter(Boolean))
                     );
+
+                    const rowMode = it.discountType || globalItemDiscountMode;
+                    const hasDiscount = (it.discountAmount !== undefined && it.discountAmount > 0) || (it.discountPercent !== undefined && it.discountPercent > 0);
 
                     return (
                       <tr
@@ -1497,7 +1632,7 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                           <button
                             type="button"
                             onClick={() => handleToggleItemDiscount(idx)}
-                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                            className={`inline-flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
                               it.isDiscountEligible !== false
                                 ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 shadow-2xs'
                                 : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-400 hover:text-slate-600'
@@ -1507,12 +1642,12 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                             {it.isDiscountEligible !== false ? (
                               <>
                                 <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>Áp dụng CK</span>
+                                <span>Áp dụng</span>
                               </>
                             ) : (
                               <>
                                 <Square className="w-3.5 h-3.5 text-slate-400" />
-                                <span>Không CK</span>
+                                <span>Không</span>
                               </>
                             )}
                           </button>
@@ -1528,6 +1663,40 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                             className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                           />
                         </td>
+
+                        {/* Giảm giá column */}
+                        <td className="p-2 align-top">
+                          <div className="relative flex items-center">
+                            <input
+                              type="number"
+                              min={0}
+                              step={rowMode === 'percent' ? 0.01 : 1000}
+                              value={
+                                rowMode === 'percent'
+                                  ? (it.discountPercent !== undefined && it.discountPercent > 0 ? it.discountPercent : '')
+                                  : (it.discountAmount !== undefined && it.discountAmount > 0 ? it.discountAmount : '')
+                              }
+                              placeholder="-"
+                              onChange={(e) => handleItemDiscountValueChange(idx, e.target.value)}
+                              className="w-full h-9 pl-1.5 pr-6 text-right font-mono font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs focus:ring-1 focus:ring-amber-500"
+                              title="Nhập phần trăm hoặc số tiền giảm cho món này (để trống nếu không giảm)"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleToggleRowDiscountMode(idx)}
+                              className="absolute right-1 px-1 py-0.5 text-[10px] font-bold rounded bg-slate-100 hover:bg-amber-100 dark:bg-slate-800 dark:hover:bg-amber-900/60 text-slate-600 hover:text-amber-700 dark:text-slate-300 dark:hover:text-amber-300 cursor-pointer transition-colors"
+                              title={`Đang dùng ${rowMode === 'percent' ? '%' : '₫'}. Bấm để chuyển sang ${rowMode === 'percent' ? '₫' : '%'}`}
+                            >
+                              {rowMode === 'percent' ? '%' : '₫'}
+                            </button>
+                          </div>
+                          {hasDiscount && (
+                            <div className="text-[10px] text-right font-mono text-amber-600 dark:text-amber-400 mt-1 truncate" title={rowMode === 'percent' ? `Tiền giảm: ${formatVND(it.discountAmount || 0)}` : `Tỷ lệ giảm: ${it.discountPercent}%`}>
+                              {rowMode === 'percent' ? `-${formatVND(it.discountAmount || 0)}` : `-${it.discountPercent}%`}
+                            </div>
+                          )}
+                        </td>
+
                         <td className="p-2 align-top">
                           <input
                             type="number"
@@ -1539,14 +1708,18 @@ export const BillEditModal: React.FC<BillEditModalProps> = ({
                             }
                             className="w-full h-9 px-2 text-right font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                           />
-                          {catalogMatch && (
-                            <div className="text-[10px] text-right mt-0.5 font-mono text-slate-400">
-                              {isCustomPrice ? (
+                          {(catalogMatch || (it.originalUnitPrice && it.originalUnitPrice > (it.unitPrice || 0))) && (
+                            <div className="text-[10px] text-right mt-0.5 font-mono text-slate-400 truncate">
+                              {it.originalUnitPrice && it.originalUnitPrice > (it.unitPrice || 0) ? (
+                                <span className="text-amber-600 dark:text-amber-400 font-semibold" title={`Giá gốc ${formatVND(it.originalUnitPrice)}`}>
+                                  Gốc: {formatVND(it.originalUnitPrice)}
+                                </span>
+                              ) : isCustomPrice ? (
                                 <span className="text-amber-600 dark:text-amber-400">
-                                  Giá gốc Menu: {formatVND(catalogMatch.unitPrice)}
+                                  Menu: {formatVND(catalogMatch.unitPrice)}
                                 </span>
                               ) : (
-                                <span>Giá gốc Menu: {formatVND(catalogMatch.unitPrice)}</span>
+                                <span>Chuẩn menu</span>
                               )}
                             </div>
                           )}
