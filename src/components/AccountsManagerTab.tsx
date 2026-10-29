@@ -15,20 +15,29 @@ import {
   RotateCcw,
   Lock,
   Filter,
+  Check,
+  Sparkles,
+  Settings,
+  AlertCircle,
+  Briefcase,
 } from 'lucide-react';
 import {
   StaffAccount,
   UserRole,
   ROLE_LABELS,
+  getRoleDisplayName,
+  getRoleDefaultPosition,
   ConfirmRequestOptions,
   MANAGEMENT_TABS,
   ManagementTabId,
   RolePermissionsMap,
+  RolePermissionConfig,
   RoleActionMode,
   AccountActionMode,
   DEFAULT_ROLE_PERMISSIONS,
   STANDARD_CATEGORIES,
   getEffectiveRolePermissions,
+  EmployeeRecord,
 } from '../types';
 
 interface AccountsManagerTabProps {
@@ -36,6 +45,7 @@ interface AccountsManagerTabProps {
   currentAccount: StaffAccount;
   rolePermissions: RolePermissionsMap;
   productCategories?: string[];
+  employees?: EmployeeRecord[];
   onSaveRolePermissions: (
     updatedMap: RolePermissionsMap,
     syncAccountsOfRoles: boolean
@@ -48,7 +58,7 @@ interface AccountsManagerTabProps {
   requestConfirm: (opts: ConfirmRequestOptions) => void;
 }
 
-const ROLE_ORDER: UserRole[] = [
+const BUILTIN_ROLE_KEYS: string[] = [
   UserRole.ADMIN,
   UserRole.MANAGER,
   UserRole.CASHIER,
@@ -56,18 +66,25 @@ const ROLE_ORDER: UserRole[] = [
   UserRole.INVENTORY,
 ];
 
-const NON_ADMIN_ROLES: UserRole[] = [
-  UserRole.MANAGER,
-  UserRole.CASHIER,
-  UserRole.VIEWER,
-  UserRole.INVENTORY,
-];
+function slugifyRoleKey(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 32);
+}
 
 export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   staffAccounts,
   currentAccount,
   rolePermissions,
   productCategories,
+  employees,
   onSaveRolePermissions,
   onCreateAccount,
   onUpdateAccount,
@@ -87,6 +104,11 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
       const clean = (c || '').trim();
       if (clean && !seen.has(clean.toLowerCase())) {
         seen.add(clean.toLowerCase());
+      }
+    }
+    for (const c of source) {
+      const clean = (c || '').trim();
+      if (clean && !result.some((r) => r.toLowerCase() === clean.toLowerCase())) {
         result.push(clean);
       }
     }
@@ -106,11 +128,255 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     });
   }, [rolePermissions]);
 
+  // Dynamically compute role lists: Admin first, then other built-ins, then custom roles
+  const allRoleKeys = useMemo(() => {
+    const customKeys = Object.keys(draftRolePerms).filter(
+      (k) => !BUILTIN_ROLE_KEYS.includes(k)
+    );
+    return [...BUILTIN_ROLE_KEYS, ...customKeys];
+  }, [draftRolePerms]);
+
+  const nonAdminRoleKeys = useMemo(() => {
+    return allRoleKeys.filter((k) => k !== UserRole.ADMIN && k !== 'admin');
+  }, [allRoleKeys]);
+
+  // ============================================================================
+  // ROLE MODAL STATE (CREATE / EDIT CUSTOM OR SYSTEM ROLES)
+  // ============================================================================
+  const [showRoleModal, setShowRoleModal] = useState<boolean>(false);
+  const [isEditingExistingRole, setIsEditingExistingRole] = useState<boolean>(false);
+  const [roleFormKey, setRoleFormKey] = useState<string>('');
+  const [roleFormName, setRoleFormName] = useState<string>('');
+  const [roleFormDefaultPos, setRoleFormDefaultPos] = useState<string>('');
+  const [roleFormDesc, setRoleFormDesc] = useState<string>('');
+  const [roleFormActionMode, setRoleFormActionMode] = useState<RoleActionMode>('full_crud');
+  const [roleFormCanWrite, setRoleFormCanWrite] = useState<boolean>(true);
+  const [roleFormCanDelete, setRoleFormCanDelete] = useState<boolean>(true);
+  const [roleFormAllowedTabs, setRoleFormAllowedTabs] = useState<ManagementTabId[]>([
+    'home',
+    'table_orders',
+    'kitchen_inventory',
+    'menu_settings',
+    'gamification',
+  ]);
+  const [roleFormError, setRoleFormError] = useState<string>('');
+
+  const handleOpenCreateRoleModal = () => {
+    setIsEditingExistingRole(false);
+    setRoleFormKey('');
+    setRoleFormName('');
+    setRoleFormDefaultPos('');
+    setRoleFormDesc('');
+    setRoleFormActionMode('full_crud');
+    setRoleFormCanWrite(true);
+    setRoleFormCanDelete(true);
+    setRoleFormAllowedTabs([
+      'home',
+      'table_orders',
+      'kitchen_inventory',
+      'menu_settings',
+      'gamification',
+    ]);
+    setRoleFormError('');
+    setShowRoleModal(true);
+  };
+
+  const handleOpenEditRoleModal = (roleKey: string) => {
+    const cfg = draftRolePerms[roleKey] || (DEFAULT_ROLE_PERMISSIONS as any)[roleKey];
+    setIsEditingExistingRole(true);
+    setRoleFormKey(roleKey);
+    setRoleFormName(getRoleDisplayName(roleKey, draftRolePerms));
+    setRoleFormDefaultPos(getRoleDefaultPosition(roleKey, draftRolePerms));
+    setRoleFormDesc(cfg?.description || '');
+    const isReadOnly =
+      cfg?.actionMode === 'read_only' || (!cfg?.canWrite && !cfg?.canDelete);
+    setRoleFormActionMode(isReadOnly ? 'read_only' : 'full_crud');
+    setRoleFormCanWrite(typeof cfg?.canWrite === 'boolean' ? cfg.canWrite : true);
+    setRoleFormCanDelete(typeof cfg?.canDelete === 'boolean' ? cfg.canDelete : true);
+    setRoleFormAllowedTabs(cfg?.allowedTabs || ['dashboard']);
+    setRoleFormError('');
+    setShowRoleModal(true);
+  };
+
+  const handleApplyRoleTemplate = (preset: 'bep' | 'bar' | 'waiter' | 'manager') => {
+    if (preset === 'bep') {
+      setRoleFormName('Bếp');
+      setRoleFormDefaultPos('Bếp chính');
+      if (!isEditingExistingRole) setRoleFormKey('bep');
+      setRoleFormDesc('Xử lý order món, quản lý hàng hóa & tồn kho bếp, xem thực đơn');
+      setRoleFormActionMode('full_crud');
+      setRoleFormCanWrite(true);
+      setRoleFormCanDelete(true);
+      setRoleFormAllowedTabs([
+        'home',
+        'table_orders',
+        'kitchen_inventory',
+        'menu_settings',
+        'gamification',
+      ]);
+    } else if (preset === 'bar') {
+      setRoleFormName('Pha chế');
+      setRoleFormDefaultPos('Pha chế');
+      if (!isEditingExistingRole) setRoleFormKey('pha_che');
+      setRoleFormDesc('Xử lý order đồ uống, kiểm kho bia & nước ngọt, nguyên liệu');
+      setRoleFormActionMode('full_crud');
+      setRoleFormCanWrite(true);
+      setRoleFormCanDelete(true);
+      setRoleFormAllowedTabs([
+        'home',
+        'table_orders',
+        'inventory',
+        'kitchen_inventory',
+        'menu_settings',
+      ]);
+    } else if (preset === 'waiter') {
+      setRoleFormName('Phục vụ');
+      setRoleFormDefaultPos('Nhân viên phục vụ');
+      if (!isEditingExistingRole) setRoleFormKey('phuc_vu');
+      setRoleFormDesc('Ghi order món cho khách theo bàn, xem sơ đồ bàn & thực đơn');
+      setRoleFormActionMode('full_crud');
+      setRoleFormCanWrite(true);
+      setRoleFormCanDelete(false);
+      setRoleFormAllowedTabs([
+        'home',
+        'table_orders',
+        'gamification',
+        'menu_settings',
+      ]);
+    } else if (preset === 'manager') {
+      setRoleFormName('Quản lý ca');
+      setRoleFormDefaultPos('Quản lý');
+      if (!isEditingExistingRole) setRoleFormKey('quan_ly_ca');
+      setRoleFormDesc('Giám sát toàn diện ca bán lẻ, thu ngân, kho & ứng lương');
+      setRoleFormActionMode('full_crud');
+      setRoleFormCanWrite(true);
+      setRoleFormCanDelete(true);
+      setRoleFormAllowedTabs([
+        'home',
+        'dashboard',
+        'table_orders',
+        'ocr',
+        'discounts',
+        'categories',
+        'inventory',
+        'kitchen_inventory',
+        'owner_use',
+        'debts',
+        'deductions',
+        'returns',
+        'salary_advances',
+        'products',
+        'archive',
+        'menu_settings',
+        'gamification',
+      ]);
+    }
+  };
+
+  const handleSaveRoleForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = roleFormName.trim();
+    if (!cleanName) {
+      setRoleFormError('Vui lòng nhập tên Role / Chức vụ.');
+      return;
+    }
+    const cleanKey = isEditingExistingRole
+      ? roleFormKey.trim()
+      : (roleFormKey.trim() || slugifyRoleKey(cleanName)).toLowerCase();
+
+    if (!cleanKey) {
+      setRoleFormError('Mã định danh Role không hợp lệ.');
+      return;
+    }
+
+    if (!isEditingExistingRole && draftRolePerms[cleanKey]) {
+      setRoleFormError(`Mã Role "${cleanKey}" đã tồn tại. Vui lòng chọn mã khác.`);
+      return;
+    }
+
+    const cleanDefaultPos = roleFormDefaultPos.trim() || cleanName;
+    const isReadOnly = roleFormActionMode === 'read_only';
+    const canWrite = isReadOnly ? false : roleFormCanWrite;
+    const canDelete = isReadOnly ? false : roleFormCanDelete;
+    const finalTabs: ManagementTabId[] =
+      roleFormAllowedTabs.length > 0 ? roleFormAllowedTabs : ['dashboard'];
+
+    const existingCfg = draftRolePerms[cleanKey];
+    const newCfg: RolePermissionConfig = {
+      role: cleanKey,
+      roleName: cleanName,
+      defaultPosition: cleanDefaultPos,
+      description: roleFormDesc.trim(),
+      isSystem: Boolean(existingCfg?.isSystem || cleanKey in DEFAULT_ROLE_PERMISSIONS),
+      allowedTabs: finalTabs,
+      canWrite,
+      canDelete,
+      actionMode: isReadOnly ? 'read_only' : 'full_crud',
+      readOnlyTabs: existingCfg?.readOnlyTabs || [],
+      restrictProductCategories: Boolean(existingCfg?.restrictProductCategories),
+      allowedProductCategories: existingCfg?.allowedProductCategories || [],
+      createdAtMs: existingCfg?.createdAtMs || Date.now(),
+      updatedAtMs: Date.now(),
+    };
+
+    const nextDraft: RolePermissionsMap = {
+      ...draftRolePerms,
+      [cleanKey]: newCfg,
+    };
+    setDraftRolePerms(nextDraft);
+    setShowRoleModal(false);
+    await onSaveRolePermissions(nextDraft, syncRoleToAccounts);
+  };
+
+  const handleDeleteRole = (roleKey: string) => {
+    if (roleKey === 'admin' || roleKey === UserRole.ADMIN) {
+      return;
+    }
+    const roleLabel = getRoleDisplayName(roleKey, draftRolePerms);
+    const affectedStaffCount = staffAccounts.filter((a) => a.role === roleKey).length;
+    const affectedEmpCount = (employees || []).filter((e) => e.systemRole === roleKey).length;
+
+    let warningText = `Bạn có chắc chắn muốn xóa Role "${roleLabel}" (Mã: ${roleKey}) khỏi hệ thống không?`;
+    if (affectedStaffCount > 0 || affectedEmpCount > 0) {
+      warningText += ` Hiện có ${affectedStaffCount} tài khoản đăng nhập và ${affectedEmpCount} nhân sự đang mang Role này. Toàn bộ tài khoản và nhân sự trên sẽ được chuyển an toàn sang Role Kế toán (Chỉ xem) để đảm bảo không gián đoạn hoạt động của quán.`;
+    }
+
+    requestConfirm({
+      title: `Xác nhận Xóa Role "${roleLabel}"`,
+      message: warningText,
+      confirmLabel: 'Xóa Role này',
+      variant: 'danger',
+      onConfirm: async () => {
+        // Reassign affected staff accounts to viewer
+        if (affectedStaffCount > 0) {
+          for (const acc of staffAccounts) {
+            if (acc.role === roleKey) {
+              await onUpdateAccount({
+                ...acc,
+                role: UserRole.VIEWER,
+                allowedTabs:
+                  draftRolePerms[UserRole.VIEWER]?.allowedTabs ||
+                  DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER].allowedTabs,
+                useCustomTabs: false,
+                actionMode: 'role_default',
+              });
+            }
+          }
+        }
+        // Remove from draftRolePerms
+        const nextDraft: RolePermissionsMap = { ...draftRolePerms };
+        delete nextDraft[roleKey];
+        setDraftRolePerms(nextDraft);
+        await onSaveRolePermissions(nextDraft, syncRoleToAccounts);
+      },
+    });
+  };
+
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newInfo, setNewInfo] = useState('');
-  const [newRole, setNewRole] = useState<UserRole>(UserRole.CASHIER);
+  const [newRole, setNewRole] = useState<string>(UserRole.CASHIER);
   const [newUseCustomTabs, setNewUseCustomTabs] = useState<boolean>(false);
   const [newAllowedTabs, setNewAllowedTabs] = useState<ManagementTabId[]>(
     rolePermissions[UserRole.CASHIER]?.allowedTabs ||
@@ -124,15 +390,19 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
 
   useEffect(() => {
     const roleCfg =
-      rolePermissions[newRole] || DEFAULT_ROLE_PERMISSIONS[newRole];
-    if (!newUseCustomTabs) {
+      draftRolePerms[newRole] ||
+      rolePermissions[newRole] ||
+      (newRole in DEFAULT_ROLE_PERMISSIONS
+        ? DEFAULT_ROLE_PERMISSIONS[newRole as UserRole]
+        : DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER]);
+    if (!newUseCustomTabs && roleCfg) {
       setNewAllowedTabs(roleCfg.allowedTabs);
     }
-    if (!newUseCustomProdCats) {
+    if (!newUseCustomProdCats && roleCfg) {
       setNewRestrictProdCats(Boolean(roleCfg.restrictProductCategories));
       setNewAllowedProdCats(roleCfg.allowedProductCategories || []);
     }
-  }, [newRole, newUseCustomTabs, newUseCustomProdCats, rolePermissions]);
+  }, [newRole, newUseCustomTabs, newUseCustomProdCats, draftRolePerms, rolePermissions]);
 
   const [editingAcc, setEditingAcc] = useState<StaffAccount | null>(null);
   const [visiblePasswords, setVisiblePasswords] = useState<Record<string, boolean>>({});
@@ -143,11 +413,11 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     setVisiblePasswords((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const handleToggleRoleTab = (role: UserRole, tabId: ManagementTabId) => {
-    if (role === UserRole.ADMIN && tabId === 'accounts') return;
+  const handleToggleRoleTab = (role: string, tabId: ManagementTabId) => {
+    if ((role === UserRole.ADMIN || role === 'admin') && tabId === 'accounts') return;
 
     setDraftRolePerms((prev) => {
-      const currentRoleCfg = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const currentRoleCfg = prev[role] || (DEFAULT_ROLE_PERMISSIONS as any)[role] || DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER];
       const exists = currentRoleCfg.allowedTabs.includes(tabId);
       let nextTabs = exists
         ? currentRoleCfg.allowedTabs.filter((t) => t !== tabId)
@@ -156,7 +426,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
       if (nextTabs.length === 0) {
         nextTabs = ['dashboard'];
       }
-      if (role === UserRole.ADMIN && !nextTabs.includes('accounts')) {
+      if ((role === UserRole.ADMIN || role === 'admin') && !nextTabs.includes('accounts')) {
         nextTabs.push('accounts');
       }
 
@@ -175,13 +445,13 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   };
 
   const handleToggleRoleCapability = (
-    role: UserRole,
+    role: string,
     field: 'canWrite' | 'canDelete',
     value: boolean
   ) => {
-    if (role === UserRole.ADMIN) return;
+    if (role === UserRole.ADMIN || role === 'admin') return;
     setDraftRolePerms((prev) => {
-      const current = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const current = prev[role] || (DEFAULT_ROLE_PERMISSIONS as any)[role] || DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER];
       const nextCanWrite = field === 'canWrite' ? value : current.canWrite;
       const nextCanDelete = field === 'canDelete' ? value : current.canDelete;
       const nextActionMode: RoleActionMode =
@@ -201,10 +471,10 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
   // Chọn nhanh chế độ quyền thao tác cho Role:
   // 1) 'read_only' -> Chỉ xem (Không được Thêm / Sửa / Xóa)
   // 2) 'full_crud' -> Có thể Thêm / Sửa / Xóa
-  const handleSetRoleActionMode = (role: UserRole, mode: RoleActionMode) => {
-    if (role === UserRole.ADMIN) return;
+  const handleSetRoleActionMode = (role: string, mode: RoleActionMode) => {
+    if (role === UserRole.ADMIN || role === 'admin') return;
     setDraftRolePerms((prev) => {
-      const current = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const current = prev[role] || (DEFAULT_ROLE_PERMISSIONS as any)[role] || DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER];
       if (mode === 'read_only') {
         return {
           ...prev,
@@ -231,12 +501,12 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
 
   // Bật / tắt chế độ "Chỉ xem" cho từng Tab riêng lẻ trong Role
   const handleToggleRoleTabReadOnly = (
-    role: UserRole,
+    role: string,
     tabId: ManagementTabId
   ) => {
-    if (role === UserRole.ADMIN || tabId === 'home') return;
+    if (role === UserRole.ADMIN || role === 'admin' || tabId === 'home') return;
     setDraftRolePerms((prev) => {
-      const current = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const current = prev[role] || (DEFAULT_ROLE_PERMISSIONS as any)[role] || DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER];
       const currentReadOnly = current.readOnlyTabs || [];
       const isReadOnly = currentReadOnly.includes(tabId);
       const nextReadOnly = isReadOnly
@@ -254,13 +524,13 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
 
   // Toggle or set product categories allowed in "Số lượng theo Danh mục" for a Role
   const handleSetRoleCategoryMode = (
-    role: UserRole,
+    role: string,
     restrict: boolean,
     initialCats?: string[]
   ) => {
-    if (role === UserRole.ADMIN) return;
+    if (role === UserRole.ADMIN || role === 'admin') return;
     setDraftRolePerms((prev) => {
-      const currentRoleCfg = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const currentRoleCfg = prev[role] || (DEFAULT_ROLE_PERMISSIONS as any)[role] || DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER];
       const nextTabs = currentRoleCfg.allowedTabs.includes('categories')
         ? currentRoleCfg.allowedTabs
         : MANAGEMENT_TABS.map((m) => m.id).filter(
@@ -283,10 +553,10 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
     });
   };
 
-  const handleToggleRoleProductCategory = (role: UserRole, categoryName: string) => {
-    if (role === UserRole.ADMIN) return;
+  const handleToggleRoleProductCategory = (role: string, categoryName: string) => {
+    if (role === UserRole.ADMIN || role === 'admin') return;
     setDraftRolePerms((prev) => {
-      const currentRoleCfg = prev[role] || DEFAULT_ROLE_PERMISSIONS[role];
+      const currentRoleCfg = prev[role] || (DEFAULT_ROLE_PERMISSIONS as any)[role] || DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER];
       const wasRestricted = Boolean(currentRoleCfg.restrictProductCategories);
       const currentCats = currentRoleCfg.allowedProductCategories || [];
 
@@ -684,27 +954,45 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 Admin chọn trực tiếp cho từng Role: <strong>Chỉ xem (Không được Thêm / Sửa / Xóa)</strong> để khóa mọi nút nhập/sửa/xóa chỉ cho phép xem báo cáo, hoặc <strong>Có thể Thêm / Sửa / Xóa</strong> để cho phép thao tác dữ liệu. Sau khi chọn, bấm <strong>&ldquo;Lưu Phân Quyền Role&rdquo;</strong> để áp dụng ngay.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleSaveRoleMatrixClick}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs"
-            >
-              <Save className="w-3.5 h-3.5" />
-              <span>Lưu Quyền Role</span>
-            </button>
+            <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={handleOpenCreateRoleModal}
+                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Thêm Role Mới</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveRoleMatrixClick}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Lưu Quyền Role</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-            {NON_ADMIN_ROLES.map((roleKey) => {
+            {nonAdminRoleKeys.map((roleKey) => {
               const cfg =
-                draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
+                draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey] || {
+                  role: roleKey,
+                  roleName: roleKey,
+                  defaultPosition: '',
+                  allowedTabs: [],
+                  canWrite: false,
+                  canDelete: false,
+                  actionMode: 'read_only'
+                };
               const isReadOnlyMode =
                 cfg.actionMode === 'read_only' ||
                 (!cfg.canWrite && !cfg.canDelete);
-              const isFullCrudMode =
-                !isReadOnlyMode && cfg.canWrite && cfg.canDelete;
               const isWriteNoDeleteMode =
                 !isReadOnlyMode && cfg.canWrite && !cfg.canDelete;
+              const displayName = getRoleDisplayName(roleKey, draftRolePerms);
+              const defPos = getRoleDefaultPosition(roleKey, draftRolePerms);
 
               return (
                 <div
@@ -715,28 +1003,55 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                       : 'border-emerald-300 dark:border-emerald-800/80 bg-white dark:bg-slate-900'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                    <div>
-                      <div className="text-xs font-bold text-slate-900 dark:text-white">
-                        Role: {ROLE_LABELS[roleKey]}
+                  <div className="flex items-start justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 truncate">
+                        <span>Role: {displayName}</span>
                       </div>
-                      <div className="text-[11px] text-slate-500">
+                      {defPos && (
+                        <div className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium truncate flex items-center gap-1 mt-0.5">
+                          <Briefcase className="w-3 h-3 shrink-0" />
+                          <span>Chức vụ: {defPos}</span>
+                        </div>
+                      )}
+                      <div className="text-[10px] text-slate-500 mt-0.5">
                         Đang mở {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} mục quản lý
                       </div>
                     </div>
-                    <span
-                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold shrink-0 ${
-                        isReadOnlyMode
-                          ? 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
-                          : 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
-                      }`}
-                    >
-                      {isReadOnlyMode
-                        ? 'Chỉ xem'
-                        : isWriteNoDeleteMode
-                        ? 'Thêm/Sửa (Khóa Xóa)'
-                        : 'Thêm / Sửa / Xóa'}
-                    </span>
+
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <span
+                        className={`px-2 py-0.5 rounded-lg text-[10px] font-bold shrink-0 ${
+                          isReadOnlyMode
+                            ? 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                            : 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                        }`}
+                      >
+                        {isReadOnlyMode
+                          ? 'Chỉ xem'
+                          : isWriteNoDeleteMode
+                          ? 'Thêm/Sửa'
+                          : 'Thêm / Sửa / Xóa'}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditRoleModal(roleKey)}
+                          title="Sửa thông tin & Chức vụ mặc định của Role này"
+                          className="p-1 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRole(roleKey)}
+                          title="Xóa Role này"
+                          className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   {/* 2 Main Radio Choice Buttons requested by Admin */}
@@ -844,31 +1159,69 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
 
         {/* Mobile Role Cards (< lg) */}
         <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {ROLE_ORDER.map((roleKey) => {
+          {allRoleKeys.map((roleKey) => {
             const cfg =
-              draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
+              draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey] || {
+                role: roleKey,
+                roleName: roleKey,
+                defaultPosition: '',
+                allowedTabs: [],
+                canWrite: false,
+                canDelete: false,
+                actionMode: 'read_only'
+              };
             const isAdminRole = roleKey === UserRole.ADMIN;
             const isRoleReadOnly =
               !isAdminRole &&
               (cfg.actionMode === 'read_only' ||
                 (!cfg.canWrite && !cfg.canDelete));
+            const displayName = getRoleDisplayName(roleKey, draftRolePerms);
+            const defPos = getRoleDefaultPosition(roleKey, draftRolePerms);
+
             return (
               <div
                 key={roleKey}
                 className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/20 space-y-3"
               >
                 <div className="flex flex-col gap-2 border-b border-slate-200/70 dark:border-slate-800 pb-2.5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-bold text-slate-900 dark:text-white">
-                        {ROLE_LABELS[roleKey]}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {displayName}
                       </div>
+                      {defPos && (
+                        <div className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium truncate flex items-center gap-1">
+                          <Briefcase className="w-3 h-3 shrink-0" />
+                          <span>{defPos}</span>
+                        </div>
+                      )}
                       <div className="text-[11px] font-mono text-slate-500">
                         {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} mục quản lý
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <label className="inline-flex items-center gap-1 cursor-pointer">
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {!isAdminRole && (
+                        <div className="flex items-center gap-1 mr-1">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditRoleModal(roleKey)}
+                            title="Sửa Role"
+                            className="p-1 rounded text-slate-400 hover:text-indigo-600 cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRole(roleKey)}
+                            title="Xóa Role"
+                            className="p-1 rounded text-slate-400 hover:text-rose-600 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                      <label className="inline-flex items-center gap-1 cursor-pointer text-[11px]">
                         <input
                           type="checkbox"
                           checked={isAdminRole ? true : cfg.canWrite}
@@ -884,7 +1237,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         />
                         <span>Thêm/Sửa</span>
                       </label>
-                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                      <label className="inline-flex items-center gap-1 cursor-pointer text-[11px]">
                         <input
                           type="checkbox"
                           checked={isAdminRole ? true : cfg.canDelete}
@@ -973,7 +1326,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                <th className="py-2.5 px-3 w-44">Loại tài khoản (Role)</th>
+                <th className="py-2.5 px-3 w-48">Loại tài khoản (Role)</th>
                 {MANAGEMENT_TABS.map((tab) => (
                   <th key={tab.id} className="py-2.5 px-2 text-center">
                     <div className="text-slate-800 dark:text-slate-200 font-semibold">
@@ -987,24 +1340,63 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {ROLE_ORDER.map((roleKey) => {
+              {allRoleKeys.map((roleKey) => {
                 const cfg =
-                  draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
+                  draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey] || {
+                    role: roleKey,
+                    roleName: roleKey,
+                    defaultPosition: '',
+                    allowedTabs: [],
+                    canWrite: false,
+                    canDelete: false,
+                    actionMode: 'read_only'
+                  };
                 const isAdminRole = roleKey === UserRole.ADMIN;
                 const isRoleReadOnly =
                   !isAdminRole &&
                   (cfg.actionMode === 'read_only' ||
                     (!cfg.canWrite && !cfg.canDelete));
                 const roleReadOnlyTabs = cfg.readOnlyTabs || [];
+                const displayName = getRoleDisplayName(roleKey, draftRolePerms);
+                const defPos = getRoleDefaultPosition(roleKey, draftRolePerms);
+
                 return (
                   <tr
                     key={roleKey}
                     className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
                   >
                     <td className="py-3 px-3">
-                      <div className="font-bold text-slate-900 dark:text-white">
-                        {ROLE_LABELS[roleKey]}
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          {displayName}
+                        </div>
+                        {!isAdminRole && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditRoleModal(roleKey)}
+                              title="Chỉnh sửa Role này"
+                              className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteRole(roleKey)}
+                              title="Xóa Role này"
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </div>
+                      {defPos && (
+                        <div className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1 mt-0.5">
+                          <Briefcase className="w-3 h-3 shrink-0" />
+                          <span>{defPos}</span>
+                        </div>
+                      )}
                       <div className="text-[11px] text-slate-500 font-mono">
                         {cfg.allowedTabs.length}/{MANAGEMENT_TABS.length} mục
                       </div>
@@ -1186,12 +1578,21 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {NON_ADMIN_ROLES.map((roleKey) => {
+            {nonAdminRoleKeys.map((roleKey) => {
               const cfg =
-                draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey];
+                draftRolePerms[roleKey] || DEFAULT_ROLE_PERMISSIONS[roleKey] || {
+                  role: roleKey,
+                  roleName: roleKey,
+                  defaultPosition: '',
+                  allowedTabs: [],
+                  canWrite: false,
+                  canDelete: false,
+                  actionMode: 'read_only'
+                };
               const isRestricted = Boolean(cfg.restrictProductCategories);
               const selectedCats = cfg.allowedProductCategories || [];
               const hasCategoryTabAccess = cfg.allowedTabs.includes('categories');
+              const roleTitle = getRoleDisplayName(roleKey, draftRolePerms);
 
               return (
                 <div
@@ -1202,7 +1603,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-bold text-slate-900 dark:text-white">
-                          Role: {ROLE_LABELS[roleKey]}
+                          Role: {roleTitle}
                         </span>
                         {!hasCategoryTabAccess && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
@@ -1277,7 +1678,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                           title={
                             !isRestricted
                               ? `Bấm vào "${catName}" để chuyển sang chế độ chỉ xem riêng "${catName}"`
-                              : `Bật/tắt quyền xem danh mục "${catName}" cho Role ${ROLE_LABELS[roleKey]}`
+                              : `Bật/tắt quyền xem danh mục "${catName}" cho Role ${roleTitle}`
                           }
                         >
                           <input
@@ -1414,24 +1815,29 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
             <select
               value={newRole}
               onChange={(e) => {
-                const selectedRole = e.target.value as UserRole;
+                const selectedRole = e.target.value;
                 const roleCfg =
+                  draftRolePerms[selectedRole] ||
                   rolePermissions[selectedRole] ||
                   DEFAULT_ROLE_PERMISSIONS[selectedRole];
                 setNewRole(selectedRole);
                 setNewUseCustomTabs(false);
-                setNewAllowedTabs(roleCfg.allowedTabs);
+                setNewAllowedTabs(roleCfg?.allowedTabs || []);
                 setNewUseCustomProdCats(false);
-                setNewRestrictProdCats(Boolean(roleCfg.restrictProductCategories));
-                setNewAllowedProdCats(roleCfg.allowedProductCategories || []);
+                setNewRestrictProdCats(Boolean(roleCfg?.restrictProductCategories));
+                setNewAllowedProdCats(roleCfg?.allowedProductCategories || []);
               }}
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
             >
-              <option value={UserRole.ADMIN}>Chủ quán (Admin)</option>
-              <option value={UserRole.MANAGER}>Quản lý</option>
-              <option value={UserRole.CASHIER}>Thu ngân</option>
-              <option value={UserRole.VIEWER}>Kế toán (Chỉ xem)</option>
-              <option value={UserRole.INVENTORY}>Kiểm kho</option>
+              {allRoleKeys.map((rk) => {
+                const name = getRoleDisplayName(rk, draftRolePerms);
+                const pos = getRoleDefaultPosition(rk, draftRolePerms);
+                return (
+                  <option key={rk} value={rk}>
+                    {name}{pos ? ` (Chức vụ: ${pos})` : ''}
+                  </option>
+                );
+              })}
             </select>
           </div>
         </div>
@@ -1783,8 +2189,9 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                 <select
                   value={editingAcc.role}
                   onChange={(e) => {
-                    const nextRole = e.target.value as UserRole;
+                    const nextRole = e.target.value;
                     const roleCfg =
+                      draftRolePerms[nextRole] ||
                       rolePermissions[nextRole] ||
                       DEFAULT_ROLE_PERMISSIONS[nextRole];
                     setEditingAcc({
@@ -1792,24 +2199,28 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                       role: nextRole,
                       allowedTabs: editingAcc.useCustomTabs
                         ? editingAcc.allowedTabs
-                        : roleCfg.allowedTabs,
+                        : roleCfg?.allowedTabs || [],
                       restrictProductCategories:
                         editingAcc.useCustomProductCategories
                           ? editingAcc.restrictProductCategories
-                          : Boolean(roleCfg.restrictProductCategories),
+                          : Boolean(roleCfg?.restrictProductCategories),
                       allowedProductCategories:
                         editingAcc.useCustomProductCategories
                           ? editingAcc.allowedProductCategories
-                          : roleCfg.allowedProductCategories || [],
+                          : roleCfg?.allowedProductCategories || [],
                     });
                   }}
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                 >
-                  <option value={UserRole.ADMIN}>Chủ quán (Admin)</option>
-                  <option value={UserRole.MANAGER}>Quản lý</option>
-                  <option value={UserRole.CASHIER}>Thu ngân</option>
-                  <option value={UserRole.VIEWER}>Kế toán (Chỉ xem)</option>
-                  <option value={UserRole.INVENTORY}>Kiểm kho</option>
+                  {allRoleKeys.map((rk) => {
+                    const name = getRoleDisplayName(rk, draftRolePerms);
+                    const pos = getRoleDefaultPosition(rk, draftRolePerms);
+                    return (
+                      <option key={rk} value={rk}>
+                        {name}{pos ? ` (Chức vụ: ${pos})` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             </div>
@@ -1828,8 +2239,9 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                     type="button"
                     onClick={() => {
                       const roleTabs =
+                        draftRolePerms[editingAcc.role]?.allowedTabs ||
                         rolePermissions[editingAcc.role]?.allowedTabs ||
-                        DEFAULT_ROLE_PERMISSIONS[editingAcc.role].allowedTabs;
+                        DEFAULT_ROLE_PERMISSIONS[editingAcc.role]?.allowedTabs || [];
                       setEditingAcc({
                         ...editingAcc,
                         allowedTabs: roleTabs,
@@ -1842,7 +2254,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                         : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
                     }`}
                   >
-                    Theo mặc định Role ({ROLE_LABELS[editingAcc.role]})
+                    Theo mặc định Role ({getRoleDisplayName(editingAcc.role, draftRolePerms)})
                   </button>
 
                   <button
@@ -1931,7 +2343,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                               : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
                           }`}
                         >
-                          Theo Role ({ROLE_LABELS[editingAcc.role]})
+                          Theo Role ({getRoleDisplayName(editingAcc.role, draftRolePerms)})
                         </button>
                         <button
                           type="button"
@@ -1993,16 +2405,17 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                           type="button"
                           onClick={() => {
                             const roleCfg =
+                              draftRolePerms[editingAcc.role] ||
                               rolePermissions[editingAcc.role] ||
                               DEFAULT_ROLE_PERMISSIONS[editingAcc.role];
                             setEditingAcc({
                               ...editingAcc,
                               useCustomProductCategories: false,
                               restrictProductCategories: Boolean(
-                                roleCfg.restrictProductCategories
+                                roleCfg?.restrictProductCategories
                               ),
                               allowedProductCategories:
-                                roleCfg.allowedProductCategories || [],
+                                roleCfg?.allowedProductCategories || [],
                             });
                           }}
                           className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
@@ -2011,7 +2424,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                               : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
                           }`}
                         >
-                          Theo Role ({ROLE_LABELS[editingAcc.role]})
+                          Theo Role ({getRoleDisplayName(editingAcc.role, draftRolePerms)})
                         </button>
                         <button
                           type="button"
@@ -2167,7 +2580,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
                     </div>
                     <div className="font-mono text-slate-500 flex flex-wrap items-center gap-1.5 mt-0.5">
                       <span>
-                        @{acc.username} · {ROLE_LABELS[acc.role]}
+                        @{acc.username} · {getRoleDisplayName(acc.role, draftRolePerms)}
                       </span>
                       {!eff.canWrite && !eff.canDelete ? (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 font-sans text-[10px] font-bold">
@@ -2350,7 +2763,7 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
 
                     <td className="py-3 px-3">
                       <div className="font-semibold text-slate-900 dark:text-white">
-                        {ROLE_LABELS[acc.role]}
+                        {getRoleDisplayName(acc.role, draftRolePerms)}
                       </div>
                       <div className="mt-1">
                         {!eff.canWrite && !eff.canDelete ? (
@@ -2442,6 +2855,351 @@ export const AccountsManagerTab: React.FC<AccountsManagerTabProps> = ({
           </table>
         </div>
       </div>
+
+      {/* MODAL: TẠO THÊM / CHỈNH SỬA ROLE NHÂN VIÊN */}
+      {showRoleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden my-6 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                    {isEditingExistingRole
+                      ? `Chỉnh Sửa Role: ${roleFormName || roleFormKey}`
+                      : 'Tạo Thêm Role Mới Cho Hệ Thống'}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Liên kết Role với Chức vụ nhân viên & thiết lập phân quyền thao tác
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRoleModal(false)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+              {roleFormError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{roleFormError}</span>
+                </div>
+              )}
+
+              {/* Quick Template Presets for new roles */}
+              {!isEditingExistingRole && (
+                <div className="p-3 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/60 space-y-2">
+                  <div className="text-xs font-semibold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Mẫu Role gợi ý nhanh (bấm để điền mẫu):</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleApplyRoleTemplate('bep')}
+                      className="px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      🍳 Role Bếp
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyRoleTemplate('bar')}
+                      className="px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      🍸 Role Pha chế / Bar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyRoleTemplate('waiter')}
+                      className="px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      🏃 Role Phục vụ bàn
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyRoleTemplate('manager')}
+                      className="px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      👔 Role Quản lý ca
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Form inputs */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Tên Role hiển thị *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={roleFormName}
+                    onChange={(e) => setRoleFormName(e.target.value)}
+                    placeholder="VD: Bếp, Pha chế, Quản lý ca..."
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Mã Role định danh (key) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    disabled={isEditingExistingRole}
+                    value={roleFormKey}
+                    onChange={(e) => setRoleFormKey(e.target.value)}
+                    placeholder="VD: bep, pha_che, shift_leader..."
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white disabled:opacity-60"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    {isEditingExistingRole
+                      ? 'Mã định danh không thể thay đổi sau khi tạo'
+                      : 'Viết liền không dấu, có thể dùng gạch dưới (vd: kitchen, bar_team)'}
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Bộ phận / Chức vụ liên kết mặc định *
+                  </label>
+                  <input
+                    type="text"
+                    value={roleFormDefaultPos}
+                    onChange={(e) => setRoleFormDefaultPos(e.target.value)}
+                    placeholder="VD: Nhân viên bếp, Pha chế viên..."
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5 block">
+                    🔗 Khi chọn Role này ở form Nhân viên, hệ thống sẽ tự động gán Chức vụ này.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Mô tả công việc / phạm vi
+                  </label>
+                  <input
+                    type="text"
+                    value={roleFormDesc}
+                    onChange={(e) => setRoleFormDesc(e.target.value)}
+                    placeholder="VD: Phụ trách khu bếp nóng, kiểm soát order..."
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              {/* Action Mode Choice */}
+              <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <label className="block text-xs font-bold text-slate-900 dark:text-white">
+                  Chế độ thao tác dữ liệu mặc định của Role này:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label
+                    className={`p-3 rounded-xl border cursor-pointer flex items-start gap-2.5 transition-all ${
+                      roleFormActionMode === 'read_only'
+                        ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200'
+                        : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="role-form-action-mode"
+                      checked={roleFormActionMode === 'read_only'}
+                      onChange={() => {
+                        setRoleFormActionMode('read_only');
+                        setRoleFormCanWrite(false);
+                        setRoleFormCanDelete(false);
+                      }}
+                      className="mt-0.5 text-amber-600 focus:ring-amber-500"
+                    />
+                    <div>
+                      <div className="text-xs font-bold flex items-center gap-1">
+                        <Eye className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Chỉ xem (Không thêm / sửa / xóa)</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Khóa toàn bộ nút nhập, sửa hoặc xóa dữ liệu
+                      </div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`p-3 rounded-xl border cursor-pointer flex items-start gap-2.5 transition-all ${
+                      roleFormActionMode === 'full_crud'
+                        ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200'
+                        : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="role-form-action-mode"
+                      checked={roleFormActionMode === 'full_crud'}
+                      onChange={() => {
+                        setRoleFormActionMode('full_crud');
+                        setRoleFormCanWrite(true);
+                        setRoleFormCanDelete(true);
+                      }}
+                      className="mt-0.5 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <div>
+                      <div className="text-xs font-bold flex items-center gap-1">
+                        <Edit3 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Có thể Thêm / Sửa / Xóa</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Cho phép thao tác nhập mới và cập nhật dữ liệu
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                {roleFormActionMode === 'full_crud' && (
+                  <div className="flex items-center gap-4 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-xs">
+                    <span className="font-medium text-slate-600 dark:text-slate-300">
+                      Chi tiết quyền:
+                    </span>
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={roleFormCanWrite}
+                        onChange={(e) => setRoleFormCanWrite(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded text-emerald-600"
+                      />
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                        Thêm / Sửa
+                      </span>
+                    </label>
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={roleFormCanDelete}
+                        onChange={(e) => setRoleFormCanDelete(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded text-rose-600"
+                      />
+                      <span className="font-semibold text-rose-700 dark:text-rose-400">
+                        Xóa dữ liệu
+                      </span>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              {/* Management Tabs assignment */}
+              <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-900 dark:text-white">
+                      Các mục quản lý được phép truy cập ({roleFormAllowedTabs.length}/{MANAGEMENT_TABS.length}):
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRoleFormAllowedTabs(
+                          MANAGEMENT_TABS.filter((t) => t.id !== 'accounts').map(
+                            (t) => t.id
+                          )
+                        )
+                      }
+                      className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                    >
+                      Chọn tất cả
+                    </button>
+                    <span className="text-slate-300">·</span>
+                    <button
+                      type="button"
+                      onClick={() => setRoleFormAllowedTabs(['dashboard'])}
+                      className="text-[11px] text-slate-500 hover:underline cursor-pointer"
+                    >
+                      Chỉ Tổng quan
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {MANAGEMENT_TABS.map((tab) => {
+                    const checked = roleFormAllowedTabs.includes(tab.id);
+                    const isAccountsLocked = tab.id === 'accounts';
+
+                    return (
+                      <label
+                        key={tab.id}
+                        className={`p-2 rounded-xl border text-xs flex items-center gap-2 transition-all ${
+                          checked
+                            ? 'border-indigo-400 dark:border-indigo-700 bg-indigo-50/60 dark:bg-indigo-950/30 text-indigo-900 dark:text-indigo-200 font-semibold'
+                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400'
+                        } ${
+                          isAccountsLocked
+                            ? 'opacity-60 cursor-not-allowed'
+                            : 'cursor-pointer'
+                        }`}
+                        title={
+                          isAccountsLocked
+                            ? 'Mục Phân quyền Tài khoản chỉ dành cho Admin'
+                            : tab.description
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={isAccountsLocked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setRoleFormAllowedTabs((prev) => [
+                                ...prev,
+                                tab.id,
+                              ]);
+                            } else {
+                              setRoleFormAllowedTabs((prev) =>
+                                prev.filter((id) => id !== tab.id)
+                              );
+                            }
+                          }}
+                          className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 shrink-0"
+                        />
+                        <span className="truncate">{tab.shortLabel}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowRoleModal(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveRoleForm}
+                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>{isEditingExistingRole ? 'Cập Nhật Role' : 'Lưu & Tạo Role Mới'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

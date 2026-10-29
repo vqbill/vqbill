@@ -211,7 +211,11 @@ export type RoleActionMode = 'read_only' | 'full_crud';
 export type AccountActionMode = 'role_default' | 'read_only' | 'full_crud';
 
 export interface RolePermissionConfig {
-  role: UserRole;
+  role: UserRole | string;
+  roleName?: string; // Tên hiển thị của Role: ví dụ "Bếp", "Pha chế", "Tổ trưởng", "Quản lý"
+  defaultPosition?: string; // Bộ phận / Chức vụ liên kết mặc định: ví dụ "Bếp", "Phục vụ", "Thu ngân"
+  description?: string; // Ghi chú mô tả vai trò
+  isSystem?: boolean; // true nếu là role hệ thống mặc định (admin, manager, cashier, viewer, inventory)
   allowedTabs: ManagementTabId[];
   canWrite: boolean;
   canDelete: boolean;
@@ -219,13 +223,19 @@ export interface RolePermissionConfig {
   readOnlyTabs?: ManagementTabId[]; // Danh sách các tab cụ thể chỉ cho phép Xem (nếu Role đang ở chế độ Có thể Thêm/Sửa/Xóa)
   restrictProductCategories?: boolean;
   allowedProductCategories?: string[];
+  createdAtMs?: number;
+  updatedAtMs?: number;
 }
 
-export type RolePermissionsMap = Record<UserRole, RolePermissionConfig>;
+export type RolePermissionsMap = Record<string, RolePermissionConfig>;
 
 export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   [UserRole.ADMIN]: {
     role: UserRole.ADMIN,
+    roleName: 'Chủ quán (Admin)',
+    defaultPosition: 'Chủ quán (Admin)',
+    description: 'Toàn quyền quản trị hệ thống và phân quyền tài khoản',
+    isSystem: true,
     allowedTabs: [
       'home',
       'dashboard',
@@ -255,6 +265,10 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.MANAGER]: {
     role: UserRole.MANAGER,
+    roleName: 'Quản lý',
+    defaultPosition: 'Quản lý',
+    description: 'Quản lý vận hành quán, hóa đơn, thực đơn, kho và ứng lương',
+    isSystem: true,
     allowedTabs: [
       'home',
       'dashboard',
@@ -283,6 +297,10 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.CASHIER]: {
     role: UserRole.CASHIER,
+    roleName: 'Thu ngân',
+    defaultPosition: 'Thu ngân',
+    description: 'Tạo bill, Quét OCR, Công nợ, Khoản trừ, Hoàn trả và Ứng lương',
+    isSystem: true,
     allowedTabs: [
       'home',
       'dashboard',
@@ -308,6 +326,10 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.VIEWER]: {
     role: UserRole.VIEWER,
+    roleName: 'Kế toán (Chỉ xem)',
+    defaultPosition: 'Kế toán',
+    description: 'Xem báo cáo doanh thu, đối soát số liệu, không có quyền sửa/xóa',
+    isSystem: true,
     allowedTabs: [
       'home',
       'dashboard',
@@ -332,6 +354,10 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
   },
   [UserRole.INVENTORY]: {
     role: UserRole.INVENTORY,
+    roleName: 'Kiểm kho',
+    defaultPosition: 'Kiểm kho',
+    description: 'Quản lý tồn kho đồ uống, xuất nhập nguyên liệu và hàng hóa bếp',
+    isSystem: true,
     allowedTabs: ['home', 'categories', 'inventory', 'kitchen_inventory', 'owner_use', 'gamification', 'table_orders'],
     canWrite: true,
     canDelete: true,
@@ -546,7 +572,7 @@ export interface EmployeeRecord {
   active: boolean;
   // Phân role & Quyền đăng nhập hệ thống (nếu không phân role thì mặc định là Nhân viên phục vụ và không cần tài khoản đăng nhập)
   hasLoginAccount?: boolean;
-  systemRole?: UserRole;
+  systemRole?: UserRole | string;
   username?: string;
   password?: string;
   linkedStaffAccountId?: string;
@@ -768,7 +794,7 @@ export interface StaffAccount {
   password: string;
   displayName: string;
   info: string;
-  role: UserRole;
+  role: UserRole | string;
   active: boolean;
   allowedTabs?: ManagementTabId[];
   useCustomTabs?: boolean;
@@ -802,13 +828,56 @@ export interface GeminiKeyStatus {
   error?: string;
 }
 
-export const ROLE_LABELS: Record<UserRole, string> = {
+export const ROLE_LABELS: Record<string, string> = {
   [UserRole.ADMIN]: 'Chủ quán (Admin)',
   [UserRole.MANAGER]: 'Quản lý',
   [UserRole.CASHIER]: 'Thu ngân',
   [UserRole.VIEWER]: 'Kế toán (Chỉ xem)',
   [UserRole.INVENTORY]: 'Kiểm kho',
 };
+
+export function getRoleDisplayName(
+  roleKey: string,
+  rolePermissions?: RolePermissionsMap
+): string {
+  if (rolePermissions && rolePermissions[roleKey]?.roleName) {
+    return rolePermissions[roleKey].roleName!;
+  }
+  if (roleKey in ROLE_LABELS) {
+    return ROLE_LABELS[roleKey as UserRole];
+  }
+  const cleaned = roleKey.replace(/[_-]/g, ' ').trim();
+  if (!cleaned) return roleKey;
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+export function getRoleDefaultPosition(
+  roleKey: string,
+  rolePermissions?: RolePermissionsMap
+): string {
+  if (rolePermissions && rolePermissions[roleKey]?.defaultPosition) {
+    return rolePermissions[roleKey].defaultPosition!;
+  }
+  if (rolePermissions && rolePermissions[roleKey]?.roleName) {
+    return rolePermissions[roleKey].roleName!;
+  }
+  switch (roleKey) {
+    case 'admin':
+      return 'Chủ quán (Admin)';
+    case 'manager':
+      return 'Quản lý';
+    case 'cashier':
+      return 'Thu ngân';
+    case 'inventory':
+      return 'Kiểm kho';
+    case 'viewer':
+      return 'Kế toán';
+    default: {
+      const cleaned = roleKey.replace(/[_-]/g, ' ').trim();
+      return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    }
+  }
+}
 
 export const PAYMENT_LABELS: Record<PaymentType, string> = {
   cash: 'Tiền mặt',
@@ -876,8 +945,9 @@ export function getEffectiveRolePermissions(
 
   const roleConfig =
     rolePermissions?.[account.role] ||
-    DEFAULT_ROLE_PERMISSIONS[account.role] ||
-    DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER];
+    (account.role in DEFAULT_ROLE_PERMISSIONS
+      ? DEFAULT_ROLE_PERMISSIONS[account.role as UserRole]
+      : DEFAULT_ROLE_PERMISSIONS[UserRole.VIEWER]);
 
   const customTabs = sanitizeTabList(account.allowedTabs);
   const useCustom = Boolean(account.useCustomTabs && customTabs.length > 0);

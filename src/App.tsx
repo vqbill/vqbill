@@ -85,6 +85,8 @@ import {
   StaffAccount,
   UserRole,
   ROLE_LABELS,
+  getRoleDisplayName,
+  getRoleDefaultPosition,
   PAYMENT_LABELS,
   STANDARD_CATEGORIES,
   ExtractedBillItem,
@@ -5011,7 +5013,9 @@ export default function App() {
       const cleanPass = empInput.password?.trim() || '123456';
       const defaultTabs =
         rolePermissions[empInput.systemRole]?.allowedTabs ||
-        DEFAULT_ROLE_PERMISSIONS[empInput.systemRole].allowedTabs;
+        (empInput.systemRole in DEFAULT_ROLE_PERMISSIONS
+          ? DEFAULT_ROLE_PERMISSIONS[empInput.systemRole as UserRole].allowedTabs
+          : ['home', 'table_orders', 'categories']);
       resolvedTabs =
         empInput.useCustomTabs && empInput.allowedTabs?.length
           ? empInput.allowedTabs
@@ -5080,9 +5084,10 @@ export default function App() {
     await saveInventoryDataToCloud(ownerId, nextInventoryData, rolePermissions);
     showToast(
       hasLogin
-        ? `Đã thêm nhân viên "${newEmp.fullName}" với Role "${
-            ROLE_LABELS[newEmp.systemRole!]
-          }" (TK: @${newEmp.username})!`
+        ? `Đã thêm nhân viên "${newEmp.fullName}" với Role "${getRoleDisplayName(
+            newEmp.systemRole!,
+            rolePermissions
+          )}" (TK: @${newEmp.username})!`
         : `Đã thêm nhân viên "${newEmp.fullName}" (Mặc định: ${newEmp.roleOrPosition} — Không cần TK đăng nhập)!`
     );
     return newEmp;
@@ -5110,7 +5115,9 @@ export default function App() {
       const cleanPass = updates.password?.trim() || '123456';
       const defaultTabs =
         rolePermissions[updates.systemRole]?.allowedTabs ||
-        DEFAULT_ROLE_PERMISSIONS[updates.systemRole].allowedTabs;
+        (updates.systemRole in DEFAULT_ROLE_PERMISSIONS
+          ? DEFAULT_ROLE_PERMISSIONS[updates.systemRole as UserRole].allowedTabs
+          : ['home', 'table_orders', 'categories']);
       resolvedTabs =
         updates.useCustomTabs && updates.allowedTabs?.length
           ? updates.allowedTabs
@@ -9366,6 +9373,7 @@ export default function App() {
                 currentAccount={currentStaffAccount}
                 rolePermissions={rolePermissions}
                 productCategories={effectiveCategories}
+                employees={effectiveEmployees}
                 onSaveRolePermissions={handleSaveRolePermissions}
                 onCreateAccount={handleCreateStaffAccount}
                 onUpdateAccount={handleUpdateStaffAccount}
@@ -9379,7 +9387,10 @@ export default function App() {
                     setActiveTab(eff.allowedTabs[0] || 'dashboard');
                   }
                   showToast(
-                    `Đã chuyển sang tài khoản ${acc.displayName} (${ROLE_LABELS[acc.role]}) — Được phép truy cập ${eff.allowedTabs.length} danh mục quản lý.`
+                    `Đã chuyển sang tài khoản ${acc.displayName} (${getRoleDisplayName(
+                      acc.role,
+                      rolePermissions
+                    )}) — Được phép truy cập ${eff.allowedTabs.length} danh mục quản lý.`
                   );
                 }}
                 requestConfirm={requestConfirm}

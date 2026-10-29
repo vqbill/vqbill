@@ -35,6 +35,8 @@ import {
   ConfirmRequestOptions,
   UserRole,
   ROLE_LABELS,
+  getRoleDisplayName,
+  getRoleDefaultPosition,
   RolePermissionsMap,
   DEFAULT_ROLE_PERMISSIONS,
   MANAGEMENT_TABS,
@@ -57,7 +59,7 @@ export interface EmployeeUpsertInput {
   baseSalary?: number;
   note?: string;
   hasLoginAccount?: boolean;
-  systemRole?: UserRole;
+  systemRole?: UserRole | string;
   username?: string;
   password?: string;
   useCustomTabs?: boolean;
@@ -1074,10 +1076,105 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
   const [empBaseSalary, setEmpBaseSalary] = useState<number>(0);
   const [empNote, setEmpNote] = useState('');
   const [empHasLogin, setEmpHasLogin] = useState<boolean>(false);
-  const [empSystemRole, setEmpSystemRole] = useState<UserRole>(UserRole.CASHIER);
+  const [empSystemRole, setEmpSystemRole] = useState<string>('cashier');
   const [empUsername, setEmpUsername] = useState('');
   const [empPassword, setEmpPassword] = useState('123456');
   const [showNewEmpPass, setShowNewEmpPass] = useState(false);
+
+  // Dynamic roles computed from rolePermissions + DEFAULT_ROLE_PERMISSIONS
+  const dynamicAssignableRoles = useMemo(() => {
+    const rolesMap: RolePermissionsMap = {
+      ...DEFAULT_ROLE_PERMISSIONS,
+      ...(rolePermissions || {}),
+    };
+    const keys = Object.keys(rolesMap);
+    const priority = ['cashier', 'manager', 'inventory', 'viewer', 'admin'];
+    const sortedKeys = [...keys].sort((a, b) => {
+      const idxA = priority.indexOf(a);
+      const idxB = priority.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    return sortedKeys.map((roleKey) => {
+      const cfg = rolesMap[roleKey];
+      const label = getRoleDisplayName(roleKey, rolesMap);
+      const defaultPos = getRoleDefaultPosition(roleKey, rolesMap);
+      const desc =
+        cfg?.description ||
+        `Truy cập ${cfg?.allowedTabs?.length || 0} mục quản lý (${
+          cfg?.actionMode === 'read_only' ? 'Chỉ xem' : 'Thêm/Sửa/Xóa'
+        })`;
+      return {
+        role: roleKey,
+        label,
+        defaultPosition: defaultPos,
+        desc,
+      };
+    });
+  }, [rolePermissions]);
+
+  const dynamicPositionSuggestions = useMemo(() => {
+    const list = new Set<string>();
+    POSITION_SUGGESTIONS.forEach((p) => list.add(p));
+    dynamicAssignableRoles.forEach((r) => {
+      if (r.defaultPosition) list.add(r.defaultPosition);
+      if (r.label) list.add(r.label);
+    });
+    employees.forEach((e) => {
+      if (e.roleOrPosition && e.roleOrPosition.trim()) {
+        list.add(e.roleOrPosition.trim());
+      }
+    });
+    return Array.from(list);
+  }, [dynamicAssignableRoles, employees]);
+
+  // Bi-directional link: position string -> roleKey
+  const findMatchingRoleByPosition = (pos: string): string | null => {
+    const clean = pos.trim().toLowerCase();
+    if (!clean) return null;
+    // 1. Exact match on defaultPosition, label, or roleKey
+    for (const r of dynamicAssignableRoles) {
+      if (
+        r.defaultPosition.toLowerCase() === clean ||
+        r.label.toLowerCase() === clean ||
+        r.role.toLowerCase() === clean
+      ) {
+        return r.role;
+      }
+    }
+    // 2. Keyword matching for common restaurant roles
+    for (const r of dynamicAssignableRoles) {
+      const rPos = r.defaultPosition.toLowerCase();
+      const rRole = r.role.toLowerCase();
+      if (clean.includes('bếp') && (rPos.includes('bếp') || rRole.includes('bep') || rRole.includes('kitchen'))) return r.role;
+      if (clean.includes('thu ngân') && (rPos.includes('thu ngân') || rRole === 'cashier')) return r.role;
+      if (clean.includes('quản lý') && (rPos.includes('quản lý') || rRole === 'manager')) return r.role;
+      if (clean.includes('kiểm kho') && (rPos.includes('kiểm kho') || rRole === 'inventory')) return r.role;
+      if (clean.includes('kế toán') && (rPos.includes('kế toán') || rRole === 'viewer')) return r.role;
+      if (clean.includes('pha chế') && (rPos.includes('pha chế') || rRole.includes('bar'))) return r.role;
+      if (clean.includes('phục vụ') && (rPos.includes('phục vụ') || rRole.includes('service') || rRole.includes('waiter'))) return r.role;
+    }
+    return null;
+  };
+
+  const handleEmpRoleChange = (val: string) => {
+    setEmpRole(val);
+    const matched = findMatchingRoleByPosition(val);
+    if (matched) {
+      setEmpSystemRole(matched);
+    }
+  };
+
+  const handleEmpSystemRoleChange = (roleKey: string) => {
+    setEmpSystemRole(roleKey);
+    const meta = dynamicAssignableRoles.find((r) => r.role === roleKey);
+    if (meta) {
+      setEmpRole(meta.defaultPosition || meta.label);
+    }
+  };
 
   // Edit Employee Modal state
   const [editingEmployee, setEditingEmployee] = useState<EmployeeRecord | null>(
@@ -1089,14 +1186,20 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
   const [editEmpBaseSalary, setEditEmpBaseSalary] = useState<number>(0);
   const [editEmpNote, setEditEmpNote] = useState('');
   const [editHasLogin, setEditHasLogin] = useState<boolean>(false);
-  const [editSystemRole, setEditSystemRole] = useState<UserRole>(
-    UserRole.CASHIER
-  );
+  const [editSystemRole, setEditSystemRole] = useState<string>('cashier');
   const [editUsername, setEditUsername] = useState('');
   const [editPassword, setEditPassword] = useState('123456');
   const [editUseCustomTabs, setEditUseCustomTabs] = useState<boolean>(false);
   const [editAllowedTabs, setEditAllowedTabs] = useState<ManagementTabId[]>([]);
   const [showEditEmpPass, setShowEditEmpPass] = useState(false);
+
+  const handleEditEmpRoleChange = (val: string) => {
+    setEditEmpRole(val);
+    const matched = findMatchingRoleByPosition(val);
+    if (matched) {
+      setEditSystemRole(matched);
+    }
+  };
 
   // ============================================================================
   // 4. FILTER & PERIOD STATE
@@ -1255,8 +1358,10 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
     const uname = emp.username || linkedAcc?.username || '';
     const pwd = emp.password || linkedAcc?.password || '123456';
     const roleTabs = sysRole
-      ? rolePermissions[sysRole]?.allowedTabs ||
-        DEFAULT_ROLE_PERMISSIONS[sysRole].allowedTabs
+      ? rolePermissions?.[sysRole]?.allowedTabs ||
+        (sysRole in DEFAULT_ROLE_PERMISSIONS
+          ? DEFAULT_ROLE_PERMISSIONS[sysRole as UserRole].allowedTabs
+          : ['home', 'table_orders', 'categories'])
       : [];
     const effectiveTabs =
       (emp.useCustomTabs && emp.allowedTabs?.length
@@ -1468,8 +1573,10 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
     }
 
     const defaultRoleTabs =
-      rolePermissions[empSystemRole]?.allowedTabs ||
-      DEFAULT_ROLE_PERMISSIONS[empSystemRole].allowedTabs;
+      rolePermissions?.[empSystemRole]?.allowedTabs ||
+      (empSystemRole in DEFAULT_ROLE_PERMISSIONS
+        ? DEFAULT_ROLE_PERMISSIONS[empSystemRole as UserRole].allowedTabs
+        : ['home', 'table_orders', 'categories']);
 
     setIsSubmitting(true);
     try {
@@ -1478,7 +1585,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
         roleOrPosition:
           empRole.trim() ||
           (finalHasLogin
-            ? ASSIGNABLE_ROLES.find((r) => r.role === empSystemRole)
+            ? dynamicAssignableRoles.find((r) => r.role === empSystemRole)
                 ?.defaultPosition || 'Nhân viên phục vụ'
             : 'Nhân viên phục vụ'),
         phone: empPhone.trim(),
@@ -1503,7 +1610,10 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
       setStatusMsg({
         type: 'ok',
         text: finalHasLogin
-          ? `Đã thêm nhân viên "${created.fullName}" với Role "${ROLE_LABELS[empSystemRole]}" (Tài khoản: @${cleanUsername})!`
+          ? `Đã thêm nhân viên "${created.fullName}" với Role "${getRoleDisplayName(
+              empSystemRole,
+              rolePermissions
+            )}" (Tài khoản: @${cleanUsername})!`
           : `Đã thêm nhân viên "${created.fullName}" (Mặc định: ${created.roleOrPosition} — Không cần tài khoản đăng nhập)!`,
       });
     } catch (err: any) {
@@ -1525,15 +1635,17 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
     setEditEmpBaseSalary(emp.baseSalary || 0);
     setEditEmpNote(emp.note || '');
     setEditHasLogin(loginInfo.hasLogin);
-    const initialSysRole = loginInfo.sysRole || UserRole.CASHIER;
+    const initialSysRole = loginInfo.sysRole || 'cashier';
     setEditSystemRole(initialSysRole);
     setEditUsername(
       loginInfo.username || slugifyUsernameFromFullName(emp.fullName)
     );
     setEditPassword(loginInfo.password || '123456');
     const roleDefaultTabs =
-      rolePermissions[initialSysRole]?.allowedTabs ||
-      DEFAULT_ROLE_PERMISSIONS[initialSysRole].allowedTabs;
+      rolePermissions?.[initialSysRole]?.allowedTabs ||
+      (initialSysRole in DEFAULT_ROLE_PERMISSIONS
+        ? DEFAULT_ROLE_PERMISSIONS[initialSysRole as UserRole].allowedTabs
+        : ['home', 'table_orders', 'categories']);
     setEditUseCustomTabs(
       Boolean(emp.useCustomTabs || loginInfo.linkedAcc?.useCustomTabs)
     );
@@ -1544,22 +1656,18 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
     );
   };
 
-  const handleChangeEditSystemRole = (newRole: UserRole) => {
+  const handleChangeEditSystemRole = (newRole: string) => {
     setEditSystemRole(newRole);
-    const roleMeta = ASSIGNABLE_ROLES.find((r) => r.role === newRole);
-    if (
-      roleMeta &&
-      (!editEmpRole.trim() ||
-        editEmpRole === 'Nhân viên phục vụ' ||
-        editEmpRole === 'Phục vụ' ||
-        ASSIGNABLE_ROLES.some((r) => r.defaultPosition === editEmpRole))
-    ) {
-      setEditEmpRole(roleMeta.defaultPosition);
+    const roleMeta = dynamicAssignableRoles.find((r) => r.role === newRole);
+    if (roleMeta) {
+      setEditEmpRole(roleMeta.defaultPosition || roleMeta.label);
     }
     if (!editUseCustomTabs) {
       setEditAllowedTabs(
-        rolePermissions[newRole]?.allowedTabs ||
-          DEFAULT_ROLE_PERMISSIONS[newRole].allowedTabs
+        rolePermissions?.[newRole]?.allowedTabs ||
+          (newRole in DEFAULT_ROLE_PERMISSIONS
+            ? DEFAULT_ROLE_PERMISSIONS[newRole as UserRole].allowedTabs
+            : ['home', 'table_orders', 'categories'])
       );
     }
   };
@@ -3514,15 +3622,24 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                   type="text"
                   list="emp-positions-list"
                   value={empRole}
-                  onChange={(e) => setEmpRole(e.target.value)}
+                  onChange={(e) => handleEmpRoleChange(e.target.value)}
                   placeholder="Mặc định: Nhân viên phục vụ"
                   className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
                 />
                 <datalist id="emp-positions-list">
-                  {POSITION_SUGGESTIONS.map((p) => (
+                  {dynamicPositionSuggestions.map((p) => (
                     <option key={p} value={p} />
                   ))}
                 </datalist>
+                {empRole && (
+                  <div className="mt-1 flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/40 px-2 py-0.5 rounded-lg border border-emerald-200/80 dark:border-emerald-800">
+                    <Shield className="w-3 h-3 text-emerald-600 shrink-0" />
+                    <span>
+                      Role liên kết: <strong>{getRoleDisplayName(empSystemRole, rolePermissions)}</strong>
+                      {empHasLogin ? ' (Đã đồng bộ tự động)' : ' (Tích "Cấp Role & TK đăng nhập" để cấp quyền)'}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -3598,10 +3715,10 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                               empRole === 'Nhân viên phục vụ' ||
                               empRole === 'Phục vụ'
                             ) {
-                              const rMeta = ASSIGNABLE_ROLES.find(
+                              const rMeta = dynamicAssignableRoles.find(
                                 (r) => r.role === empSystemRole
                               );
-                              if (rMeta) setEmpRole(rMeta.defaultPosition);
+                              if (rMeta) setEmpRole(rMeta.defaultPosition || rMeta.label);
                             }
                           } else {
                             setEmpRole('Nhân viên phục vụ');
@@ -3622,27 +3739,29 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                   ) : (
                     <div className="space-y-2 pt-1 border-t border-slate-200/70 dark:border-slate-800">
                       <div>
-                        <label className="block text-[11px] font-semibold mb-1">
-                          Chọn Role hệ thống:
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[11px] font-semibold text-slate-800 dark:text-slate-200">
+                            Chọn Role hệ thống:
+                          </label>
+                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                            🔗 Liên kết trực tiếp với Chức vụ
+                          </span>
+                        </div>
                         <select
                           value={empSystemRole}
-                          onChange={(e) => {
-                            const r = e.target.value as UserRole;
-                            setEmpSystemRole(r);
-                            const rMeta = ASSIGNABLE_ROLES.find(
-                              (item) => item.role === r
-                            );
-                            if (rMeta) setEmpRole(rMeta.defaultPosition);
-                          }}
+                          onChange={(e) => handleEmpSystemRoleChange(e.target.value)}
                           className="w-full h-9 px-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-bold"
                         >
-                          {ASSIGNABLE_ROLES.map((r) => (
+                          {dynamicAssignableRoles.map((r) => (
                             <option key={r.role} value={r.role}>
-                              {r.label}
+                              {r.label} (Chức vụ: {r.defaultPosition})
                             </option>
                           ))}
                         </select>
+                        <div className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
+                          <span>🔗 Đã đồng bộ với Chức vụ:</span>
+                          <strong>{empRole || 'Nhân viên phục vụ'}</strong>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
@@ -3765,7 +3884,10 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                                   <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
                                     <Shield className="w-3 h-3" />
                                     <span>
-                                      {ROLE_LABELS[loginInfo.sysRole]}
+                                      {getRoleDisplayName(
+                                        loginInfo.sysRole,
+                                        rolePermissions
+                                      )}
                                     </span>
                                   </div>
                                   <div className="text-[11px] font-mono text-slate-600 dark:text-slate-300 flex items-center gap-1">
@@ -3916,15 +4038,24 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                     type="text"
                     list="edit-emp-positions"
                     value={editEmpRole}
-                    onChange={(e) => setEditEmpRole(e.target.value)}
+                    onChange={(e) => handleEditEmpRoleChange(e.target.value)}
                     placeholder="Mặc định: Nhân viên phục vụ"
                     className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
                   />
                   <datalist id="edit-emp-positions">
-                    {POSITION_SUGGESTIONS.map((p) => (
+                    {dynamicPositionSuggestions.map((p) => (
                       <option key={p} value={p} />
                     ))}
                   </datalist>
+                  {editEmpRole && (
+                    <div className="mt-1 flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/40 px-2 py-0.5 rounded-lg border border-emerald-200/80 dark:border-emerald-800">
+                      <Shield className="w-3 h-3 text-emerald-600 shrink-0" />
+                      <span>
+                        Role liên kết: <strong>{getRoleDisplayName(editSystemRole, rolePermissions)}</strong>
+                        {editHasLogin ? ' (Đã đồng bộ tự động)' : ' (Bấm "Admin Phân Role & Cấp TK" để cấp quyền)'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -3991,7 +4122,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                     onClick={() => {
                       setEditHasLogin(false);
                       if (
-                        ASSIGNABLE_ROLES.some(
+                        dynamicAssignableRoles.some(
                           (r) => r.defaultPosition === editEmpRole
                         )
                       ) {
@@ -4024,7 +4155,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                           slugifyUsernameFromFullName(editEmpName)
                         );
                       }
-                      const rMeta = ASSIGNABLE_ROLES.find(
+                      const rMeta = dynamicAssignableRoles.find(
                         (r) => r.role === editSystemRole
                       );
                       if (
@@ -4033,7 +4164,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                           editEmpRole === 'Nhân viên phục vụ' ||
                           editEmpRole === 'Phục vụ')
                       ) {
-                        setEditEmpRole(rMeta.defaultPosition);
+                        setEditEmpRole(rMeta.defaultPosition || rMeta.label);
                       }
                     }}
                     className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
@@ -4058,11 +4189,16 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                   <div className="space-y-3 pt-2 border-t border-emerald-200/60 dark:border-emerald-800/60">
                     {/* Role selection */}
                     <div>
-                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                        Chọn Role cho nhân viên:
-                      </label>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="font-semibold text-slate-700 dark:text-slate-300">
+                          Chọn Role cho nhân viên:
+                        </label>
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                          🔗 Chọn Role sẽ tự động đồng bộ Chức vụ
+                        </span>
+                      </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {ASSIGNABLE_ROLES.map((item) => {
+                        {dynamicAssignableRoles.map((item) => {
                           const active = editSystemRole === item.role;
                           return (
                             <button
@@ -4073,7 +4209,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                               }
                               className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                                 active
-                                  ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-200'
+                                  ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20'
                                   : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-300'
                               }`}
                             >
@@ -4084,7 +4220,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                                 )}
                               </div>
                               <div className="text-[10px] text-slate-500 mt-0.5">
-                                {item.desc}
+                                Chức vụ liên kết: <strong>{item.defaultPosition}</strong> • {item.desc}
                               </div>
                             </button>
                           );
@@ -4155,7 +4291,7 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                     <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-slate-800 dark:text-slate-200">
-                          Quyền truy cập các mục quản lý theo Role ({ROLE_LABELS[editSystemRole]}):
+                          Quyền truy cập các mục quản lý theo Role ({getRoleDisplayName(editSystemRole, rolePermissions)}):
                         </span>
                         <label className="inline-flex items-center gap-1.5 cursor-pointer text-[11px]">
                           <input
