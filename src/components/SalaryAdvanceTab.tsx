@@ -51,6 +51,11 @@ import {
   getYesterdayBusinessDate,
   shiftDateByDays,
 } from '../utils/parser';
+import { ExportButtons } from './ExportButtons';
+import {
+  exportSalaryAdvancesExcel,
+  exportSalaryAdvancesPdf,
+} from '../utils/exportHelpers';
 
 export interface EmployeeUpsertInput {
   fullName: string;
@@ -2545,6 +2550,31 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
+                  <ExportButtons
+                    onExportExcel={() =>
+                      exportSalaryAdvancesExcel({
+                        advances: filteredAdvances,
+                        employees,
+                        periodLabel,
+                        totals: {
+                          totalAmount: totalAdvanceInPeriod,
+                          count: filteredAdvances.length,
+                        },
+                      })
+                    }
+                    onExportPdf={() =>
+                      exportSalaryAdvancesPdf({
+                        advances: filteredAdvances,
+                        employees,
+                        periodLabel,
+                        totals: {
+                          totalAmount: totalAdvanceInPeriod,
+                          count: filteredAdvances.length,
+                        },
+                      })
+                    }
+                  />
+
                   <button
                     type="button"
                     onClick={() => {
@@ -3212,6 +3242,31 @@ export const SalaryAdvanceTab: React.FC<SalaryAdvanceTabProps> = ({
                     Tháng sau →
                   </button>
                 </div>
+
+                <ExportButtons
+                  onExportExcel={() =>
+                    exportSalaryAdvancesExcel({
+                      advances: filteredAdvances,
+                      employees,
+                      periodLabel: `Tháng ${selectedMonth}`,
+                      totals: {
+                        totalAmount: totalAdvanceInPeriod,
+                        count: filteredAdvances.length,
+                      },
+                    })
+                  }
+                  onExportPdf={() =>
+                    exportSalaryAdvancesPdf({
+                      advances: filteredAdvances,
+                      employees,
+                      periodLabel: `Tháng ${selectedMonth}`,
+                      totals: {
+                        totalAmount: totalAdvanceInPeriod,
+                        count: filteredAdvances.length,
+                      },
+                    })
+                  }
+                />
 
                 <button
                   type="button"

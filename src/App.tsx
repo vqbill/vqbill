@@ -222,6 +222,11 @@ import { GamificationTab } from './components/GamificationTab';
 import { TableOrdersTab } from './components/TableOrdersTab';
 import { ArchiveManagerTab } from './components/ArchiveManagerTab';
 import { CustomerDiscountTab } from './components/CustomerDiscountTab';
+import { ExportButtons } from './components/ExportButtons';
+import {
+  exportDashboardExcel,
+  exportDashboardPdf,
+} from './utils/exportHelpers';
 import {
   playKachingSound,
   playChimeSound,
@@ -7526,6 +7531,60 @@ export default function App() {
           {/* TAB 1: DASHBOARD & FINANCIAL LEDGER */}
           {activeTab === 'dashboard' && allowedTabs.includes('dashboard') && (
             <div className="space-y-4 sm:space-y-6">
+              {/* Export & Overview Title Bar for Dashboard */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center shrink-0">
+                    <LayoutDashboard className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                      Báo Cáo Tổng Quan & Doanh Thu
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Kỳ báo cáo: <strong className="text-emerald-600 dark:text-emerald-400">{periodLabel}</strong> • {periodBills.length} hóa đơn trong kỳ
+                    </p>
+                  </div>
+                </div>
+
+                <ExportButtons
+                  labelExcel="Xuất Báo Cáo Excel"
+                  labelPdf="Xuất Báo Cáo PDF"
+                  onExportExcel={() =>
+                    exportDashboardExcel({
+                      bills: periodBills,
+                      billItems: effectiveBillItems,
+                      periodLabel,
+                      summary: {
+                        grossCash: financialSummary.grossCash,
+                        netTransferRevenue: financialSummary.netTransferRevenue,
+                        totalDeductions: financialSummary.totalDeductions,
+                        netRevenue: financialSummary.netDayTotal,
+                        debtCreated: financialSummary.totalDebt,
+                        totalDiscounts: periodBills.reduce((s, b) => s + (Number(b.discountAmount) || 0), 0),
+                        totalBills: periodBills.length,
+                      },
+                    })
+                  }
+                  onExportPdf={() =>
+                    exportDashboardPdf({
+                      bills: periodBills,
+                      billItems: effectiveBillItems,
+                      periodLabel,
+                      summary: {
+                        grossCash: financialSummary.grossCash,
+                        netTransferRevenue: financialSummary.netTransferRevenue,
+                        totalDeductions: financialSummary.totalDeductions,
+                        netRevenue: financialSummary.netDayTotal,
+                        debtCreated: financialSummary.totalDebt,
+                        totalDiscounts: periodBills.reduce((s, b) => s + (Number(b.discountAmount) || 0), 0),
+                        totalBills: periodBills.length,
+                      },
+                    })
+                  }
+                />
+              </div>
+
               {/* Row 1: 4 Primary Gross Metrics (2x2 on mobile, 4 cols on desktop) */}
               <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
                 <div className="p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 shadow-xs">

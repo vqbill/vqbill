@@ -38,6 +38,13 @@ import {
   formatReturnDeductionTitle,
   buildDefaultReturnNote,
 } from '../utils/parser';
+import { ExportButtons } from './ExportButtons';
+import {
+  exportDeductionsExcel,
+  exportDeductionsPdf,
+  exportReturnsExcel,
+  exportReturnsPdf,
+} from '../utils/exportHelpers';
 
 interface ReturnsDeductionsTabProps {
   mode: 'deductions' | 'returns';
@@ -552,6 +559,26 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     };
   }, [filteredDeductions]);
 
+  // Category breakdown for deductions report
+  const categoryBreakdown = useMemo(() => {
+    const map = new Map<string, { count: number; amount: number }>();
+    filteredDeductions.forEach((d) => {
+      const cat = d.category || 'Khác';
+      const amt = Number(d.amount) || 0;
+      const cur = map.get(cat) || { count: 0, amount: 0 };
+      cur.count += 1;
+      cur.amount += amt;
+      map.set(cat, cur);
+    });
+    const total = deductionBreakdown.totalAmount || 1;
+    return Array.from(map.entries()).map(([category, val]) => ({
+      category,
+      count: val.count,
+      amount: val.amount,
+      percentage: (val.amount / total) * 100,
+    }));
+  }, [filteredDeductions, deductionBreakdown.totalAmount]);
+
   // Handlers for Khoản Trừ (Daily Expenses)
   const handleAddExpenseSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -999,6 +1026,19 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
     () => filteredReturns.reduce((s, r) => s + r.amount, 0),
     [filteredReturns]
   );
+
+  const retPeriodLabel = useMemo(() => {
+    if (retPeriodMode === 'today') return 'Hôm nay';
+    if (retPeriodMode === 'yesterday') return 'Hôm qua';
+    if (retPeriodMode === 'week') return 'Tuần (7 ngày)';
+    if (retPeriodMode === 'month') return 'Tháng';
+    if (retPeriodMode === 'single_day') return formatDateDMY(retSingleDate);
+    return 'Toàn bộ thời gian';
+  }, [retPeriodMode, retSingleDate]);
+
+  const totalReturnsQty = useMemo(() => {
+    return filteredReturns.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+  }, [filteredReturns]);
 
   const handleDeleteOneReturn = (ret: ReturnRecord) => {
     if (!canDelete) return;
@@ -1621,6 +1661,35 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <ExportButtons
+                onExportExcel={() =>
+                  exportDeductionsExcel({
+                    deductions: filteredDeductions,
+                    periodLabel: dedPeriodLabel,
+                    totals: {
+                      totalAmount: deductionBreakdown.totalAmount,
+                      directAmount: deductionBreakdown.directAmount,
+                      returnLinkedAmount: deductionBreakdown.returnLinkedAmount,
+                      count: filteredDeductions.length,
+                    },
+                    categoryBreakdown,
+                  })
+                }
+                onExportPdf={() =>
+                  exportDeductionsPdf({
+                    deductions: filteredDeductions,
+                    periodLabel: dedPeriodLabel,
+                    totals: {
+                      totalAmount: deductionBreakdown.totalAmount,
+                      directAmount: deductionBreakdown.directAmount,
+                      returnLinkedAmount: deductionBreakdown.returnLinkedAmount,
+                      count: filteredDeductions.length,
+                    },
+                    categoryBreakdown,
+                  })
+                }
+              />
+
               <div className="relative flex-1 sm:w-64">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -2484,6 +2553,31 @@ export const ReturnsDeductionsTab: React.FC<ReturnsDeductionsTabProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <ExportButtons
+              onExportExcel={() =>
+                exportReturnsExcel({
+                  returns: filteredReturns,
+                  periodLabel: retPeriodLabel,
+                  totals: {
+                    totalAmount: totalReturnsAmount,
+                    totalQty: totalReturnsQty,
+                    count: filteredReturns.length,
+                  },
+                })
+              }
+              onExportPdf={() =>
+                exportReturnsPdf({
+                  returns: filteredReturns,
+                  periodLabel: retPeriodLabel,
+                  totals: {
+                    totalAmount: totalReturnsAmount,
+                    totalQty: totalReturnsQty,
+                    count: filteredReturns.length,
+                  },
+                })
+              }
+            />
+
             <div className="flex flex-wrap items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
               <button
                 type="button"
